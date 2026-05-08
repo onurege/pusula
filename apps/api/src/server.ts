@@ -1,6 +1,14 @@
-import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { config as loadDotenv } from "dotenv";
+
+// Always look for .env at the repo root, regardless of cwd. `dotenv/config`
+// resolves relative to cwd, which broke `npm run -w apps/api dev` (cwd became
+// apps/api) and `tsx watch` invocations from other directories.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(__dirname, "../../..");
+loadDotenv({ path: path.join(REPO_ROOT, ".env") });
+
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
@@ -25,9 +33,6 @@ import {
   saveReport,
   syncMapData,
 } from "@enroute/core";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 const app = new Hono();
 app.use("/api/*", cors({ origin: ["http://localhost:3000", "http://127.0.0.1:3000"] }));
