@@ -256,28 +256,55 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   return status;
 }
 
-export type CustomerSales = {
+export type CustomerDetail = {
+  // Sales
   ciro30: number;
   fatura30: number;
   sonFaturaTarihi: string | null;
+
+  // Visits (from TBLPMPZIYARETBASLIK)
   ziyaret30: number;
+  rutIciZiyaret: number;
+  rutDisiZiyaret: number;
   sonZiyaretTarihi: string | null;
+
+  // Payments collected during visits (TBLMSDTAHSILAT joined through ZIYARETDETAY)
+  // BYTISLEMKODU codes from SP 5190: 100=Nakit, 104=Çek, 108=Senet, 112=KK
+  // (paired with iptal codes 102/106/110/114 — only count entries without iptal pair)
+  tahsilatNakit: number;
+  tahsilatCek: number;
+  tahsilatSenet: number;
+  tahsilatKK: number;
+
+  // Document counts inside visits (TBLPMPZIYARETDETAY)
+  // BYTISLEMKODU 4=Fatura kesildi, 30=İrsaliye, 60=Sipariş
+  ziyaretFaturaSayisi: number;
+  ziyaretIrsaliyeSayisi: number;
+  ziyaretSiparisSayisi: number;
 };
 
+// Backwards-compat alias — older code paths used CustomerSales.
+export type CustomerSales = CustomerDetail;
+
 /**
- * Single-customer activity lookup — sales + visits from the last N days.
- * Two parallel queries against MSSQL, both sub-second on indexed columns.
+ * Single-customer activity lookup — sales, visits, payments, and document
+ * counts from the last N days. Four parallel queries against MSSQL; the
+ * popup latency is max(four queries) not sum.
  *
- * Visit counting follows Pernod's report 5190 (SSP_RPT_5190_ZIYARET_ANALIZI):
- * each row in TBLPMPZIYARETBASLIK with TRHGIRIS NOT NULL counts as a
- * customer visit. The full SP layers more (rut içi/dışı, ozet kapanışı,
- * payment splits) — for the popup we only need the count + last date.
+ * The visit / payment / document logic mirrors Pernod's report 5190
+ * (SSP_RPT_5190_ZIYARET_ANALIZI). Specifically:
+ * - A visit is a TBLPMPZIYARETBASLIK row with TRHGIRIS NOT NULL.
+ * - Payments live on TBLMSDTAHSILAT, joined into the visit through
+ *   TBLPMPZIYARETDETAY.LNGBELGEKOD with BYTISLEMKODU IN (100,104,108,112).
+ *   Each transaction code has a paired "iptal" code (+2); we exclude
+ *   payments that have an iptal pair on the same belge.
+ * - Document codes: 4=Fatura, 30=İrsaliye, 60=Sipariş — same pattern,
+ *   each has an iptal counterpart (+2) we exclude.
  */
-export async function getCustomerSales(
+export async function getCustomerDetail(
   musteriKod: number,
-  _distKod: number | null,
   days = 30,
-): Promise<CustomerSales> {
+): Promise<CustomerDetail> {
   const id = Math.floor(musteriKod);
   const d = Math.floor(days);
 
@@ -295,30 +322,98 @@ export async function getCustomerSales(
 
   const visitSql = `
     SELECT
-      COUNT(*)        AS ziyaret,
-      MAX(z.TRHGIRIS) AS sonZiyaret
+      COUNT(*)                                            AS ziyaret,
+      SUM(CASE WHEN z.BYTRUTKODU = 0 THEN 1 ELSE 0 END)   AS rutIci,
+      SUM(CASE WHEN z.BYTRUTKODU = 1 THEN 1 ELSE 0 END)   AS rutDisi,
+      MAX(z.TRHGIRIS)                                     AS sonZiyaret
     FROM dbo.TBLPMPZIYARETBASLIK AS z
     WHERE z.LNGMUSTERIKOD = ${id}
       AND z.TRHGIRIS IS NOT NULL
       AND z.TRHGIRIS >= DATEADD(day, -${d}, GETDATE())
   `;
 
-  const [salesRes, visitRes] = await Promise.all([
+  const tahsilatSql = `
+    SELECT
+      ISNULL(SUM(CASE WHEN d.BYTISLEMKODU = 100 THEN t.DBLTUTAR ELSE 0 END), 0) AS nakit,
+      ISNULL(SUM(CASE WHEN d.BYTISLEMKODU = 104 THEN t.DBLTUTAR ELSE 0 END), 0) AS cek,
+      ISNULL(SUM(CASE WHEN d.BYTISLEMKODU = 108 THEN t.DBLTUTAR ELSE 0 END), 0) AS senet,
+      ISNULL(SUM(CASE WHEN d.BYTISLEMKODU = 112 THEN t.DBLTUTAR ELSE 0 END), 0) AS kk
+    FROM dbo.TBLPMPZIYARETDETAY    AS d
+    INNER JOIN dbo.TBLPMPZIYARETBASLIK AS z ON z.LNGKOD = d.LNGBASLIKKOD
+    INNER JOIN dbo.TBLMSDTAHSILAT  AS t ON t.LNGKOD = d.LNGBELGEKOD
+    WHERE z.LNGMUSTERIKOD = ${id}
+      AND z.TRHGIRIS IS NOT NULL
+      AND z.TRHGIRIS >= DATEADD(day, -${d}, GETDATE())
+      AND d.BYTISLEMKODU IN (100, 104, 108, 112)
+      AND NOT EXISTS (
+        SELECT 1 FROM dbo.TBLPMPZIYARETDETAY x
+        WHERE x.LNGBELGEKOD = d.LNGBELGEKOD
+          AND x.BYTISLEMKODU IN (102, 106, 110, 114)
+      )
+  `;
+
+  const belgeSql = `
+    SELECT
+      SUM(CASE WHEN d.BYTISLEMKODU = 4 THEN 1 ELSE 0 END)  AS faturaSayi,
+      SUM(CASE WHEN d.BYTISLEMKODU = 30 THEN 1 ELSE 0 END) AS irsaliyeSayi,
+      SUM(CASE WHEN d.BYTISLEMKODU = 60 THEN 1 ELSE 0 END) AS siparisSayi
+    FROM dbo.TBLPMPZIYARETDETAY    AS d
+    INNER JOIN dbo.TBLPMPZIYARETBASLIK AS z ON z.LNGKOD = d.LNGBASLIKKOD
+    WHERE z.LNGMUSTERIKOD = ${id}
+      AND z.TRHGIRIS IS NOT NULL
+      AND z.TRHGIRIS >= DATEADD(day, -${d}, GETDATE())
+      AND d.BYTISLEMKODU IN (4, 30, 60)
+      AND NOT EXISTS (
+        SELECT 1 FROM dbo.TBLPMPZIYARETDETAY x
+        WHERE x.LNGBELGEKOD = d.LNGBELGEKOD
+          AND x.BYTISLEMKODU = d.BYTISLEMKODU + 2
+      )
+  `;
+
+  const [sales, visits, tahsilat, belge] = await Promise.all([
     runReadOnly(salesSql, { limit: 1, timeoutMs: 20_000 }),
     runReadOnly(visitSql, { limit: 1, timeoutMs: 20_000 }),
+    runReadOnly(tahsilatSql, { limit: 1, timeoutMs: 30_000 }),
+    runReadOnly(belgeSql, { limit: 1, timeoutMs: 20_000 }),
   ]);
 
-  const sRow = salesRes.rows[0] ?? {};
-  const vRow = visitRes.rows[0] ?? {};
+  const s = sales.rows[0] ?? {};
+  const v = visits.rows[0] ?? {};
+  const t = tahsilat.rows[0] ?? {};
+  const b = belge.rows[0] ?? {};
+
   return {
-    ciro30: Number(sRow.ciro ?? 0),
-    fatura30: Number(sRow.fatura ?? 0),
-    sonFaturaTarihi: sRow.sonTarih
-      ? new Date(sRow.sonTarih as string).toISOString()
+    ciro30: Number(s.ciro ?? 0),
+    fatura30: Number(s.fatura ?? 0),
+    sonFaturaTarihi: s.sonTarih
+      ? new Date(s.sonTarih as string).toISOString()
       : null,
-    ziyaret30: Number(vRow.ziyaret ?? 0),
-    sonZiyaretTarihi: vRow.sonZiyaret
-      ? new Date(vRow.sonZiyaret as string).toISOString()
+
+    ziyaret30: Number(v.ziyaret ?? 0),
+    rutIciZiyaret: Number(v.rutIci ?? 0),
+    rutDisiZiyaret: Number(v.rutDisi ?? 0),
+    sonZiyaretTarihi: v.sonZiyaret
+      ? new Date(v.sonZiyaret as string).toISOString()
       : null,
+
+    tahsilatNakit: Number(t.nakit ?? 0),
+    tahsilatCek: Number(t.cek ?? 0),
+    tahsilatSenet: Number(t.senet ?? 0),
+    tahsilatKK: Number(t.kk ?? 0),
+
+    ziyaretFaturaSayisi: Number(b.faturaSayi ?? 0),
+    ziyaretIrsaliyeSayisi: Number(b.irsaliyeSayi ?? 0),
+    ziyaretSiparisSayisi: Number(b.siparisSayi ?? 0),
   };
+}
+
+// Old name kept so existing callers (api server route, mcp tools) continue
+// to work without a breaking change in this PR. Original signature was
+// (musteriKod, distKod, days) — distKod argument is now ignored.
+export async function getCustomerSales(
+  musteriKod: number,
+  _distKod: number | null,
+  days = 30,
+): Promise<CustomerDetail> {
+  return getCustomerDetail(musteriKod, days);
 }

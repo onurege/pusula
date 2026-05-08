@@ -2,8 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
-import type { CustomerSales, MapCustomer } from "@/lib/api";
-import { explainOnRadar, getCustomerSales } from "@/lib/api";
+import type { MapCustomer } from "@/lib/api";
+import { CustomerModal } from "./customer-modal";
 
 // CARTO Positron — vector style with proper Turkish labels and a clean
 // gray base that doesn't fight the indigo markers. Same style map-check
@@ -29,24 +29,10 @@ type Props = {
   customers: MapCustomer[];
 };
 
-type SalesState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ok"; data: CustomerSales }
-  | { kind: "err"; message: string };
-
-type ExplainState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ok"; brief?: string; sql?: string }
-  | { kind: "err"; message: string };
-
 export default function SalesMap({ customers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [selected, setSelected] = useState<MapCustomer | null>(null);
-  const [sales, setSales] = useState<SalesState>({ kind: "idle" });
-  const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
 
   // Listen for fly-to events dispatched from the filters panel search.
   useEffect(() => {
@@ -56,11 +42,6 @@ export default function SalesMap({ customers }: Props) {
       if (!c) return;
       mapRef.current?.flyTo({ center: [c.lng, c.lat], zoom: 14, essential: true });
       setSelected(c);
-      setExplain({ kind: "idle" });
-      setSales({ kind: "loading" });
-      getCustomerSales(c.id, c.distKod)
-        .then((data) => setSales({ kind: "ok", data }))
-        .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
     };
     window.addEventListener("enroute:fly-to", handler);
     return () => window.removeEventListener("enroute:fly-to", handler);
@@ -260,12 +241,6 @@ export default function SalesMap({ customers }: Props) {
         hasSales: Number(p.hasSales) === 1,
       };
       setSelected(c);
-      setExplain({ kind: "idle" });
-      // Lazy-load this customer's 30d revenue.
-      setSales({ kind: "loading" });
-      getCustomerSales(c.id, c.distKod)
-        .then((data) => setSales({ kind: "ok", data }))
-        .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
     });
 
       const setCursor = (cursor: string) => {
@@ -284,19 +259,6 @@ export default function SalesMap({ customers }: Props) {
     }
   }, [geojson]);
 
-  async function runExplain(c: MapCustomer, s: CustomerSales) {
-    setExplain({ kind: "loading" });
-    try {
-      const res = await explainOnRadar(
-        "sales",
-        `Univera ERP'de "${c.unvan}" adlı müşteri (TBLMUSTERI.LNGKOD = ${c.id}, distribütör: ${c.distributor ?? "—"}, şehir: ${c.sehir ?? "—"}). Son 30 gün satış cirosu ${s.ciro30.toLocaleString("tr-TR")} ₺ ve ${s.fatura30} satış faturası kaydı var. Bu müşterinin son 30 gündeki **ürün grubu / marka kırılımını** TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUN üzerinden çıkar (TBLMSDFATURA.LNGMUSTERIKOD = ${c.id} AND BYTTUR=0 AND BYTDURUM=0). En çok ciro getiren 2-3 marka veya ürün grubunu somut adlarıyla, miktarlarıyla ver. 2-3 cümlelik Türkçe yönetici özeti yaz.`,
-      );
-      setExplain({ kind: "ok", brief: res.brief, sql: res.sql });
-    } catch (err) {
-      setExplain({ kind: "err", message: (err as Error).message });
-    }
-  }
-
   return (
     <>
       {/* The container is the only thing that fills the parent box. No
@@ -304,142 +266,8 @@ export default function SalesMap({ customers }: Props) {
       <div ref={containerRef} className="w-full h-full" />
 
       {selected && (
-        <div className="absolute right-3 top-3 w-[360px] max-h-[calc(100%-24px)] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl z-50">
-          <div className="p-5 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="font-semibold text-base truncate">{selected.unvan}</div>
-                {selected.distributor && (
-                  <div className="text-xs text-accent mt-0.5">{selected.distributor}</div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setSelected(null)}
-                className="text-muted hover:text-fg text-lg leading-none -mt-1"
-                aria-label="Kapat"
-              >
-                ×
-              </button>
-            </div>
-
-            {(selected.adres || selected.ilce || selected.sehir) && (
-              <div className="text-sm text-fg/85">
-                {selected.adres && <div>{selected.adres}</div>}
-                <div className="text-muted text-xs mt-0.5">
-                  {[selected.ilce, selected.sehir].filter(Boolean).join(" / ")}
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-3 gap-2">
-              <div className="rounded-lg border border-border bg-bg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-muted">
-                  30 Gün Ciro
-                </div>
-                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
-                  {sales.kind === "loading"
-                    ? "…"
-                    : sales.kind === "ok"
-                    ? `${formatCompact(Number(sales.data.ciro30 ?? 0))} ₺`
-                    : "—"}
-                </div>
-              </div>
-              <div className="rounded-lg border border-border bg-bg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-muted">
-                  Fatura
-                </div>
-                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
-                  {sales.kind === "loading"
-                    ? "…"
-                    : sales.kind === "ok"
-                    ? Number(sales.data.fatura30 ?? 0).toLocaleString("tr-TR")
-                    : "—"}
-                </div>
-              </div>
-              <div className="rounded-lg border border-border bg-bg p-3">
-                <div className="text-[10px] uppercase tracking-wider text-muted">
-                  Ziyaret
-                </div>
-                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
-                  {sales.kind === "loading"
-                    ? "…"
-                    : sales.kind === "ok"
-                    ? Number(sales.data.ziyaret30 ?? 0).toLocaleString("tr-TR")
-                    : "—"}
-                </div>
-              </div>
-            </div>
-
-            {sales.kind === "ok" && (sales.data.sonFaturaTarihi || sales.data.sonZiyaretTarihi) && (
-              <div className="text-xs text-muted space-y-0.5">
-                {sales.data.sonFaturaTarihi && (
-                  <div>
-                    Son fatura:{" "}
-                    {new Date(sales.data.sonFaturaTarihi).toLocaleDateString("tr-TR")}
-                  </div>
-                )}
-                {sales.data.sonZiyaretTarihi && (
-                  <div>
-                    Son ziyaret:{" "}
-                    {new Date(sales.data.sonZiyaretTarihi).toLocaleDateString("tr-TR")}
-                  </div>
-                )}
-              </div>
-            )}
-            {sales.kind === "err" && (
-              <div className="text-xs text-bad">
-                Ciro alınamadı: <code className="text-[10px]">{sales.message}</code>
-              </div>
-            )}
-
-            {sales.kind === "ok" && (
-              <button
-                type="button"
-                onClick={() => runExplain(selected, sales.data)}
-                disabled={explain.kind === "loading"}
-                className="w-full inline-flex items-center justify-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
-              >
-                {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
-              </button>
-            )}
-
-            {explain.kind === "err" && (
-              <div className="text-sm text-bad">
-                <code className="text-xs">{explain.message}</code>
-              </div>
-            )}
-            {explain.kind === "ok" && explain.brief && (
-              <div className="rounded-lg border border-accent/40 bg-accent/8 p-4">
-                <div className="text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
-                  AI Analizi
-                </div>
-                <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                  {explain.brief}
-                </div>
-                {explain.sql && (
-                  <details className="mt-3">
-                    <summary className="text-xs text-muted cursor-pointer hover:text-fg">
-                      Kullanılan SQL
-                    </summary>
-                    <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface p-3 rounded">
-                      {explain.sql}
-                    </pre>
-                  </details>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <CustomerModal customer={selected} onClose={() => setSelected(null)} />
       )}
     </>
   );
-}
-
-function formatCompact(n: number): string {
-  if (Math.abs(n) >= 1_000_000_000)
-    return (n / 1_000_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mr";
-  if (Math.abs(n) >= 1_000_000)
-    return (n / 1_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mn";
-  return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
 }
