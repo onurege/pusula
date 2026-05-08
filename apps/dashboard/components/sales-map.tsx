@@ -66,26 +66,24 @@ export default function SalesMap({ customers }: Props) {
   const [selected, setSelected] = useState<MapCustomer | null>(null);
   const [sales, setSales] = useState<SalesState>({ kind: "idle" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
-  const [searchQ, setSearchQ] = useState("");
 
-  const searchHits = useMemo(() => {
-    const q = searchQ.trim().toLocaleLowerCase("tr");
-    if (q.length < 2) return [];
-    return customers
-      .filter((c) => c.unvan.toLocaleLowerCase("tr").includes(q))
-      .slice(0, 8);
-  }, [searchQ, customers]);
-
-  function selectCustomerFromSearch(c: MapCustomer) {
-    setSelected(c);
-    setExplain({ kind: "idle" });
-    setSales({ kind: "loading" });
-    setSearchQ("");
-    mapRef.current?.flyTo({ center: [c.lng, c.lat], zoom: 14, essential: true });
-    getCustomerSales(c.id, c.distKod)
-      .then((data) => setSales({ kind: "ok", data }))
-      .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
-  }
+  // Listen for fly-to events dispatched from the filters panel search.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent<{ customer: MapCustomer }>;
+      const c = ce.detail?.customer;
+      if (!c) return;
+      mapRef.current?.flyTo({ center: [c.lng, c.lat], zoom: 14, essential: true });
+      setSelected(c);
+      setExplain({ kind: "idle" });
+      setSales({ kind: "loading" });
+      getCustomerSales(c.id, c.distKod)
+        .then((data) => setSales({ kind: "ok", data }))
+        .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
+    };
+    window.addEventListener("enroute:fly-to", handler);
+    return () => window.removeEventListener("enroute:fly-to", handler);
+  }, []);
 
   const geojson = useMemo(
     () => ({
@@ -298,45 +296,6 @@ export default function SalesMap({ customers }: Props) {
       {/* The container is the only thing that fills the parent box. No
           wrappers, no absolute children of its parent. Map-check style. */}
       <div ref={containerRef} className="w-full h-full" />
-
-      {/* Search overlay — absolute against the map container's parent box.
-          Doesn't take part in canvas sizing because absolute children are
-          out of flow. */}
-      <div className="absolute left-3 top-3 w-[300px] z-40">
-        <div className="rounded-lg border border-border bg-surface/95 backdrop-blur shadow-lg">
-          <input
-            type="text"
-            value={searchQ}
-            onChange={(e) => setSearchQ(e.target.value)}
-            placeholder="Müşteri ara…"
-            className="w-full bg-transparent px-3 h-9 text-sm focus:outline-none placeholder:text-muted"
-          />
-          {searchHits.length > 0 && (
-            <ul className="border-t border-border max-h-72 overflow-y-auto">
-              {searchHits.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => selectCustomerFromSearch(c)}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2"
-                  >
-                    <div className="truncate">{c.unvan}</div>
-                    <div className="text-[11px] text-muted truncate">
-                      {[c.ilce, c.sehir].filter(Boolean).join(" / ")}
-                      {c.distributor ? ` · ${c.distributor}` : ""}
-                    </div>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {searchQ.trim().length >= 2 && searchHits.length === 0 && (
-            <div className="border-t border-border px-3 py-2 text-xs text-muted">
-              Eşleşme yok.
-            </div>
-          )}
-        </div>
-      </div>
 
       {selected && (
         <div className="absolute right-3 top-3 w-[360px] max-h-[calc(100%-24px)] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl z-50">

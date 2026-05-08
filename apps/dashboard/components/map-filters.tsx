@@ -1,20 +1,37 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useTransition } from "react";
-import type { MapFacets } from "@/lib/api";
+import { useMemo, useState, useTransition } from "react";
+import type { MapCustomer, MapFacets } from "@/lib/api";
 
 type Props = {
   facets: MapFacets;
+  customers: MapCustomer[];
+  count: number;
 };
 
-export function MapFilters({ facets }: Props) {
+export const FLY_TO_EVENT = "enroute:fly-to";
+
+export type FlyToDetail = {
+  customer: MapCustomer;
+};
+
+export function MapFilters({ facets, customers, count }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
 
   const sehir = params.get("sehir") ?? "";
   const distKod = params.get("distKod") ?? "";
+
+  const [q, setQ] = useState("");
+  const hits = useMemo(() => {
+    const t = q.trim().toLocaleLowerCase("tr");
+    if (t.length < 2) return [];
+    return customers
+      .filter((c) => c.unvan.toLocaleLowerCase("tr").includes(t))
+      .slice(0, 10);
+  }, [q, customers]);
 
   function update(next: Record<string, string>) {
     const sp = new URLSearchParams(params.toString());
@@ -28,15 +45,23 @@ export function MapFilters({ facets }: Props) {
   }
 
   function reset() {
+    setQ("");
     startTransition(() => {
       router.push("/map");
     });
   }
 
-  const hasFilter = !!sehir || !!distKod;
+  function pick(c: MapCustomer) {
+    setQ("");
+    window.dispatchEvent(
+      new CustomEvent<FlyToDetail>(FLY_TO_EVENT, { detail: { customer: c } }),
+    );
+  }
+
+  const hasFilter = !!sehir || !!distKod || !!q;
 
   return (
-    <aside className="w-[260px] shrink-0 rounded-xl border border-border bg-surface p-4 space-y-4 self-start">
+    <aside className="w-72 shrink-0 rounded-xl border border-border bg-surface p-4 self-start space-y-4 max-h-full overflow-y-auto">
       <div className="flex items-center justify-between">
         <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
           Filtreler
@@ -52,8 +77,41 @@ export function MapFilters({ facets }: Props) {
         )}
       </div>
 
-      <label className="block space-y-1.5">
-        <span className="text-xs text-muted">Şehir</span>
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted">Arama</label>
+        <input
+          type="text"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Müşteri ünvanı…"
+          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent"
+        />
+        {hits.length > 0 && (
+          <ul className="rounded-md border border-border bg-bg overflow-hidden">
+            {hits.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  onClick={() => pick(c)}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 border-b border-border/60 last:border-b-0"
+                >
+                  <div className="truncate">{c.unvan}</div>
+                  <div className="text-[11px] text-muted truncate">
+                    {[c.ilce, c.sehir].filter(Boolean).join(" / ")}
+                    {c.distributor ? ` · ${c.distributor}` : ""}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {q.trim().length >= 2 && hits.length === 0 && (
+          <div className="text-[11px] text-muted">Eşleşme yok.</div>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted">Şehir</label>
         <select
           value={sehir}
           onChange={(e) => update({ sehir: e.target.value })}
@@ -65,10 +123,10 @@ export function MapFilters({ facets }: Props) {
             <option key={c} value={c}>{c}</option>
           ))}
         </select>
-      </label>
+      </div>
 
-      <label className="block space-y-1.5">
-        <span className="text-xs text-muted">Distribütör</span>
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted">Distribütör</label>
         <select
           value={distKod}
           onChange={(e) => update({ distKod: e.target.value })}
@@ -82,14 +140,24 @@ export function MapFilters({ facets }: Props) {
             </option>
           ))}
         </select>
-      </label>
+      </div>
 
-      {isPending && (
-        <div className="text-[11px] text-muted flex items-center gap-2">
-          <span className="size-1.5 rounded-full bg-accent animate-pulse" />
-          Yükleniyor…
-        </div>
-      )}
+      <div className="pt-3 border-t border-border text-xs text-muted">
+        {isPending ? (
+          <span className="flex items-center gap-2">
+            <span className="size-1.5 rounded-full bg-accent animate-pulse" />
+            Yükleniyor…
+          </span>
+        ) : (
+          <span>
+            Görüntülenen:{" "}
+            <span className="text-fg font-medium tabular-nums">
+              {count.toLocaleString("tr-TR")}
+            </span>{" "}
+            müşteri
+          </span>
+        )}
+      </div>
     </aside>
   );
 }

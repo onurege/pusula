@@ -53,7 +53,7 @@ export default async function MapPage({
       </header>
 
       <div className="flex gap-3" style={{ height: MAP_HEIGHT, minHeight: 480 }}>
-        <MapFilters facets={facets} />
+        <MapFilters facets={facets} customers={data.customers} count={data.count} />
 
         <div className="flex-1 rounded-xl overflow-hidden border border-border bg-surface relative">
           {apiError ? (
