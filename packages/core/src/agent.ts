@@ -148,7 +148,7 @@ const TOOLS: Tool[] = [
       {
         name: "retrieve_schema",
         description:
-          "Univera şemasından bir Türkçe iş sorusuna uygun tabloları getirir. Tablo açıklamaları, kolonlar (tipleriyle), birincil anahtarlar ve 1-hop FK komşuları döner.",
+          "Univera şemasından tablo bilgisi getirir. Tablo açıklamaları, kolonlar (tipleriyle), birincil anahtarlar ve 1-hop FK komşuları döner. İki kullanım: (a) `query` ile semantik arama, (b) `tables` parametresine tam isim listesi (örn. ['TBLMSDFATURA','TBLURUN']) verirsen o tabloları doğrudan getirir — kullanıcı promptu zaten tablo adlarını söylediyse bu yolu tercih et.",
         parameters: {
           type: SchemaType.OBJECT,
           properties: {
@@ -156,12 +156,17 @@ const TOOLS: Tool[] = [
               type: SchemaType.STRING,
               description: "Türkçe veya İngilizce bir iş sorusu / anahtar sözcükler",
             },
+            tables: {
+              type: SchemaType.ARRAY,
+              items: { type: SchemaType.STRING },
+              description:
+                "Tam tablo adları. Verilirse query yok sayılır ve liste birebir getirilir (case-insensitive eşleşme).",
+            },
             topK: {
               type: SchemaType.NUMBER,
-              description: "Döndürülecek tablo sayısı (default 8, en fazla 20)",
+              description: "Semantik arama için döndürülecek tablo sayısı (default 8, en fazla 20)",
             },
           },
-          required: ["query"],
         },
       },
       {
@@ -272,7 +277,30 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           const query = String(args.query ?? "");
           const topK = Math.min(Number(args.topK ?? 8), RETRIEVE_TOPK_CAP);
           const snap = await loadSnapshot();
-          const results = retrieve(query, snap, { topK, expandFkNeighbors: true });
+          const exactNames = Array.isArray(args.tables)
+            ? (args.tables as unknown[])
+                .map((x) => String(x ?? "").trim())
+                .filter(Boolean)
+            : [];
+          let results;
+          if (exactNames.length > 0) {
+            // Direct table-name lookup. Case-insensitive match against either
+            // bare name (TBLMSDFATURA) or full name (dbo.TBLMSDFATURA).
+            const wanted = new Set(exactNames.map((n) => n.toUpperCase()));
+            const found = snap.tables.filter((t) => {
+              const u = t.fullName.toUpperCase();
+              const bare = t.name.toUpperCase();
+              return wanted.has(u) || wanted.has(bare);
+            });
+            results = found.map((t) => ({
+              table: t,
+              score: 100,
+              reasons: ["exact-name lookup"],
+              fkNeighbors: [],
+            }));
+          } else {
+            results = retrieve(query, snap, { topK, expandFkNeighbors: true });
+          }
           for (const r of results) {
             retrievedTables.add(r.table.fullName);
             allowedUpper.add(r.table.fullName.toUpperCase());
