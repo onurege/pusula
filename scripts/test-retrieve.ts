@@ -31,6 +31,9 @@ async function main() {
 
   const topK = process.env.TOPK ? parseInt(process.env.TOPK, 10) : 10;
   const snapshot = await loadSnapshot();
+  // Old text-to-sql seed has no foreignKeys; tolerate it.
+  if (!snapshot.foreignKeys) snapshot.foreignKeys = [];
+  if (!snapshot.tables) snapshot.tables = [];
   console.log(`[test-retrieve] snapshot tables=${snapshot.tables.length} fks=${snapshot.foreignKeys.length}`);
   console.log(`[test-retrieve] query: ${query}`);
   console.log("");

@@ -56,7 +56,7 @@ type RawIndex = {
 type RawRowCount = {
   schemaName: string;
   tableName: string;
-  rowCount: number;
+  rowsEstimate: number;
 };
 
 const COLUMN_QUERY = `
@@ -160,7 +160,7 @@ const ROW_COUNT_QUERY = `
 SELECT
   s.name AS schemaName,
   t.name AS tableName,
-  SUM(p.rows) AS rowCount
+  SUM(p.rows) AS rowsEstimate
 FROM sys.tables t
 JOIN sys.schemas s    ON t.schema_id = s.schema_id
 JOIN sys.partitions p ON t.object_id = p.object_id
@@ -222,7 +222,7 @@ export async function introspect(
   const pkSet = new Set(pks.map((p) => `${p.schemaName}.${p.tableName}.${p.columnName}`));
   const descMap = new Map(descs.map((d) => [keyOf(d.schemaName, d.tableName), d.description]));
   const rowCountMap = new Map(
-    rowCounts.map((r) => [keyOf(r.schemaName, r.tableName), r.rowCount]),
+    rowCounts.map((r) => [keyOf(r.schemaName, r.tableName), r.rowsEstimate]),
   );
 
   for (const c of columns) {
