@@ -4,6 +4,7 @@ import type { RadarBlockResult } from "@/lib/api";
 import { runRadarApi } from "@/lib/api";
 import { AnomalyCallouts } from "@/components/anomaly-callouts";
 import { KpiCard } from "@/components/kpi-card";
+import { ManagerBrief } from "@/components/manager-brief";
 import { RadarChart } from "@/components/radar-chart-client";
 import { ResultTable } from "@/components/result-table";
 
@@ -62,11 +63,25 @@ export default async function RadarPage({
         </div>
       </header>
 
-      {/* Above-the-fold bento — KPI grid + Brief + Anomalies tek viewport'ta */}
-      <div className="grid grid-cols-12 gap-4">
-        {/* KPI cards — 8 of 12, 3 yatay */}
+      {/* Above-the-fold — Brief 8/12 sol (büyük, okunaklı), KPI 4/12 sağ (3 satır yatay) */}
+      <div className="grid grid-cols-12 gap-4 items-stretch">
+        {/* Brief — dominant, 8 of 12 */}
+        {run.brief && (
+          <div className="col-span-12 lg:col-span-8">
+            <ManagerBrief
+              brief={run.brief}
+              date={new Date(run.generatedAt).toLocaleDateString("tr-TR", {
+                weekday: "long",
+                day: "2-digit",
+                month: "long",
+              })}
+            />
+          </div>
+        )}
+
+        {/* KPI sidebar — 4 of 12, yatay kartlar dikey alt alta 3 satır */}
         {kpiBlock?.kpis && kpiBlock.kpis.length > 0 && (
-          <section className="col-span-12 lg:col-span-8 grid grid-cols-3 gap-3">
+          <section className="col-span-12 lg:col-span-4 flex flex-col gap-3">
             {kpiBlock.kpis.map((k) => (
               <KpiCard
                 key={k.id}
@@ -76,24 +91,13 @@ export default async function RadarPage({
                 delta={k.delta}
                 tone={k.tone}
                 hint={k.hint}
+                orientation="horizontal"
               />
             ))}
           </section>
         )}
 
-        {/* Brief — 4 of 12, sağda, tüm yüksekliği KPI grid'iyle eşler */}
-        {run.brief && (
-          <section className="col-span-12 lg:col-span-4 rounded-xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 flex flex-col">
-            <div className="text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
-              Yönetici Brifingi · {new Date(run.generatedAt).toLocaleDateString("tr-TR", { day: "2-digit", month: "long" })}
-            </div>
-            <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-fg/95 overflow-y-auto max-h-[260px] pr-1">
-              {run.brief}
-            </div>
-          </section>
-        )}
-
-        {/* Anomalies — full width, kompakt liste */}
+        {/* Anomalies — full width altta, kompakt liste */}
         {anomalyBlock && (
           <section className="col-span-12">
             <div className="flex items-baseline justify-between mb-2">
