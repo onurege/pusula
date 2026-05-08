@@ -300,7 +300,19 @@ app.post("/api/map/sync", async (c) => {
     const status = await syncMapData(REPO_ROOT);
     return c.json(status);
   } catch (err) {
-    return c.json({ error: (err as Error).message }, 500);
+    // Log the full stack server-side so we can inspect it in the API log,
+    // and bubble both the message AND the first stack frame back to the
+    // dashboard so the inline error panel actually points somewhere useful.
+    console.error("[/api/map/sync] failed:", err);
+    const e = err as Error;
+    const firstFrame = e.stack?.split("\n").slice(0, 3).join("\n") ?? "";
+    return c.json(
+      {
+        error: e.message,
+        stack: firstFrame,
+      },
+      500,
+    );
   }
 });
 

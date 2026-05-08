@@ -42,18 +42,13 @@ export function SyncButton({ initial }: Props) {
   const relative = status.lastSyncAt ? formatRelative(status.lastSyncAt, tick) : null;
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="relative flex items-center gap-3">
       {relative && (
         <span className="text-xs text-muted whitespace-nowrap" title={status.lastSyncAt ?? undefined}>
           Son güncelleme: <span className="text-fg font-medium">{relative}</span>
           {status.customerCount > 0 && (
             <> · <span className="tabular-nums">{status.customerCount.toLocaleString("tr-TR")}</span> kayıt</>
           )}
-        </span>
-      )}
-      {err && (
-        <span className="text-xs text-bad" title={err}>
-          Senkron hatası
         </span>
       )}
       <button
@@ -65,6 +60,25 @@ export function SyncButton({ initial }: Props) {
         <RefreshIcon spinning={busy} />
         {busy ? "Senkronlanıyor…" : "Verileri yenile"}
       </button>
+
+      {err && (
+        <div className="absolute right-0 top-full mt-2 w-[420px] rounded-lg border border-bad/50 bg-bad/10 p-3 text-[11px] text-fg z-50 shadow-lg">
+          <div className="flex items-start justify-between gap-2 mb-1">
+            <span className="font-semibold text-bad">Senkronizasyon hatası</span>
+            <button
+              type="button"
+              onClick={() => setErr(null)}
+              className="text-muted hover:text-fg leading-none"
+              aria-label="Kapat"
+            >
+              ×
+            </button>
+          </div>
+          <code className="block whitespace-pre-wrap break-words text-[10px] text-muted leading-relaxed max-h-48 overflow-y-auto">
+            {err}
+          </code>
+        </div>
+      )}
     </div>
   );
 }

@@ -67,7 +67,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`API ${res.status}: ${text}`);
+    // If the body is JSON with an error/stack pair, surface them readably;
+    // otherwise just include the raw text.
+    let detail = text;
+    try {
+      const j = JSON.parse(text) as { error?: string; stack?: string };
+      detail = [j.error, j.stack].filter(Boolean).join("\n");
+    } catch {
+      /* leave as-is */
+    }
+    throw new Error(`API ${res.status}: ${detail}`);
   }
   return res.json() as Promise<T>;
 }
