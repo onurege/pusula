@@ -11,6 +11,9 @@ import { explainOnRadar, getCustomerSales } from "@/lib/api";
 // (free, no key) for a dark theme that matches the dashboard.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
+  // Required for symbol/text layers — without this maplibre rejects any
+  // text-field paint property at addLayer time.
+  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
     "carto-dark": {
       type: "raster",
@@ -192,7 +195,10 @@ export default function SalesMap({ customers }: Props) {
       layout: {
         "text-field": "{point_count_abbreviated}",
         "text-size": 12,
-        "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
+        // demotiles.maplibre.org/font only ships "Open Sans Regular",
+        // "Open Sans Semibold" and "Noto Sans Regular". Anything else
+        // would 404 and the cluster count would silently disappear.
+        "text-font": ["Open Sans Semibold"],
       },
       paint: { "text-color": COLOR_LABEL },
     });
