@@ -486,38 +486,46 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           const sql = String(args.sql ?? "");
           let brief = String(args.brief ?? "");
 
-          // Brief quality guard: if the model returned generic prose without
-          // any concrete value from the result set, rewrite it deterministically
-          // from the actual rows. The model frequently produces filler like
-          // "en yüksek katkıyı sağlayan ürün grupları belirlenmiştir" instead
-          // of citing real names + amounts — this catches that.
+          // The model's brief is just a signal that work is done — we don't
+          // trust the prose. When the SQL returned rows, ALWAYS rewrite the
+          // brief deterministically from those rows so it cites real names
+          // and numbers instead of generic filler.
           if (lastRunRowCount > 0 && lastRunRows.length > 0) {
-            const stringValues = lastRunRows
-              .slice(0, 5)
-              .flatMap((r) => Object.values(r))
-              .filter((v): v is string => typeof v === "string" && v.length > 3);
-            const briefRefsRow = stringValues.some((v) =>
-              brief.toLocaleLowerCase("tr").includes(v.toLocaleLowerCase("tr")),
-            );
-            if (!briefRefsRow) {
-              try {
-                const sample = lastRunRows
-                  .slice(0, 5)
-                  .map((r) =>
-                    Object.entries(r)
-                      .map(([k, v]) => `${k}=${formatVal(v)}`)
-                      .join(", "),
-                  )
-                  .join("\n");
-                const rewritten = await generate(
-                  "Sen Türkçe bir analiz asistanısın. Sana kullanıcı talebi ve sorgu sonuç satırları verilecek. 3-4 cümle Türkçe yönetici özeti yaz. Satırlardaki SOMUT adları ve sayıları aynen kullan; jenerik ifade yasak. Para birimi ₺ ise Türkçe okunaklı format (örn. 89.500 ₺). Yüzdelik kıyas yapabilirsen yap.",
-                  `Talep:\n${userPrompt}\n\nSorgu sonucu (toplam ${lastRunRowCount} satır):\n${sample}\n\nBrief:`,
-                  { temperature: 0.3, maxOutputTokens: 512 },
-                );
-                if (rewritten.trim()) brief = rewritten.trim();
-              } catch (err) {
-                console.error("[runAgent] brief rewrite failed:", err);
+            try {
+              const sample = lastRunRows
+                .slice(0, 8)
+                .map((r) =>
+                  Object.entries(r)
+                    .map(([k, v]) => `${k}=${formatVal(v)}`)
+                    .join(", "),
+                )
+                .join("\n");
+              const rewritten = await generate(
+                [
+                  "Sen Türkçe bir kıdemli satış analisti asistanısın.",
+                  "Sana KULLANICI TALEBİ ve SORGU SONUÇ SATIRLARI verilecek.",
+                  "Görev: 3-4 cümlelik somut Türkçe yönetici özeti yaz.",
+                  "",
+                  "ZORUNLU:",
+                  "- Satırlardaki adları (ürün grubu, marka, müşteri, vs.) BİREBİR yaz.",
+                  "- Sayıları Türkçe formatta zikret (89.500 ₺, 1.234 adet).",
+                  "- Mümkünse en üstteki satırın toplam içindeki yüzdesini hesapla.",
+                  "",
+                  "YASAK:",
+                  "- 'Belirlenmiştir', 'önemlidir', 'değerlendirilmiştir' gibi içi boş ifadeler.",
+                  "- 'En yüksek katkıyı sağlayan ürün grupları' gibi adsız genellemeler.",
+                  "- SQL/teknik jargon, 'rapor', 'sorgu', 'tablo' gibi sözcükler.",
+                ].join("\n"),
+                `KULLANICI TALEBİ:\n${userPrompt}\n\nSORGU SONUCU (toplam ${lastRunRowCount} satır):\n${sample}\n\nBrief:`,
+                { temperature: 0.2, maxOutputTokens: 512 },
+              );
+              const trimmed = rewritten.trim();
+              if (trimmed) {
+                console.log("[runAgent] brief rewritten from rows");
+                brief = trimmed;
               }
+            } catch (err) {
+              console.error("[runAgent] brief rewrite failed, keeping model's brief:", err);
             }
           }
 
