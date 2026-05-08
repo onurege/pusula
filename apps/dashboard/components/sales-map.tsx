@@ -70,8 +70,9 @@ export default function SalesMap({ customers }: Props) {
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
+    const container = containerRef.current;
     const map = new maplibregl.Map({
-      container: containerRef.current,
+      container,
       style: MAP_STYLE,
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
@@ -79,8 +80,20 @@ export default function SalesMap({ customers }: Props) {
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
-    map.on("load", () => setStyleReady(true));
+    map.on("load", () => {
+      setStyleReady(true);
+      // ssr:false dynamic import + flexbox layout often gives the map a 0×0
+      // canvas on first paint. Force a resize once we're loaded and again
+      // whenever the container box changes size (sidebar opens/closes etc.).
+      map.resize();
+    });
+
+    const resize = () => map.resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(container);
+
     return () => {
+      observer.disconnect();
       map.remove();
       mapRef.current = null;
     };
