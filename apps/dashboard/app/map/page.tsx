@@ -14,9 +14,14 @@ export default async function MapPage({
   const sehir = typeof sp.sehir === "string" ? sp.sehir : undefined;
   const distKodRaw = typeof sp.distKod === "string" ? sp.distKod : undefined;
   const distKod = distKodRaw && !isNaN(Number(distKodRaw)) ? Number(distKodRaw) : undefined;
+  const salesFilterRaw = typeof sp.salesFilter === "string" ? sp.salesFilter : undefined;
+  const salesFilter: "with" | "without" | undefined =
+    salesFilterRaw === "with" || salesFilterRaw === "without"
+      ? salesFilterRaw
+      : undefined;
 
   const [customersResult, facetsResult] = await Promise.allSettled([
-    listMapCustomers({ sehir, distKod, limit: 5000 }),
+    listMapCustomers({ sehir, distKod, salesFilter, limit: 5000 }),
     getMapFacets(),
   ]);
 

@@ -10,11 +10,17 @@ export type MapCustomer = {
   distributor: string | null;
   lat: number;
   lng: number;
+  /** True if this customer has at least one approved sales invoice in the
+   *  last 30 days. Used both for the activity filter and for marker tone. */
+  hasSales: boolean;
 };
 
 export type MapCustomerFilters = {
   sehir?: string;
   distKod?: number;
+  /** "with" → only customers with recent sales, "without" → only silent
+   *  customers, undefined → no filter. */
+  salesFilter?: "with" | "without";
   limit?: number;
 };
 
@@ -41,8 +47,23 @@ export async function listMapCustomers(
   if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
     where.push(`m.LNGDISTKOD = ${Math.floor(filters.distKod)}`);
   }
+  if (filters.salesFilter === "with") {
+    where.push("s.LNGMUSTERIKOD IS NOT NULL");
+  } else if (filters.salesFilter === "without") {
+    where.push("s.LNGMUSTERIKOD IS NULL");
+  }
 
+  // satisli is a one-pass DISTINCT lookup over the date-indexed window —
+  // much cheaper than SUM/aggregate and gives us the "recent sales? y/n"
+  // signal we need for both the filter and the marker tone.
   const sql = `
+    WITH satisli AS (
+      SELECT DISTINCT f.LNGMUSTERIKOD
+      FROM dbo.TBLMSDFATURA AS f
+      WHERE f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.BYTTUR  = 0
+        AND f.BYTDURUM = 0
+    )
     SELECT TOP ${limit}
       m.LNGKOD       AS id,
       m.LNGDISTKOD   AS distKod,
@@ -52,14 +73,16 @@ export async function listMapCustomers(
       m.TXTILCE      AS ilce,
       d.TXTAD        AS distributor,
       CAST(m.DBLKOORDINATX AS FLOAT) AS lat,
-      CAST(m.DBLKOORDINATY AS FLOAT) AS lng
+      CAST(m.DBLKOORDINATY AS FLOAT) AS lng,
+      CASE WHEN s.LNGMUSTERIKOD IS NULL THEN 0 ELSE 1 END AS hasSales
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST AS d ON d.LNGKOD = m.LNGDISTKOD
+    LEFT JOIN satisli   AS s ON s.LNGMUSTERIKOD = m.LNGKOD
     WHERE ${where.join(" AND ")}
-    ORDER BY m.LNGKOD
+    ORDER BY hasSales DESC, m.LNGKOD
   `;
 
-  const result = await runReadOnly(sql, { limit, timeoutMs: 30_000 });
+  const result = await runReadOnly(sql, { limit, timeoutMs: 60_000 });
   return result.rows.map((r) => ({
     id: Number(r.id),
     distKod: r.distKod == null ? null : Number(r.distKod),
@@ -70,6 +93,7 @@ export async function listMapCustomers(
     distributor: (r.distributor as string | null) ?? null,
     lat: Number(r.lat),
     lng: Number(r.lng),
+    hasSales: Number(r.hasSales) === 1,
   }));
 }
 

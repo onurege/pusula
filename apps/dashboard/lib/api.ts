@@ -180,16 +180,19 @@ export type MapCustomer = {
   distributor: string | null;
   lat: number;
   lng: number;
+  hasSales: boolean;
 };
 
 export async function listMapCustomers(params: {
   sehir?: string;
   distKod?: number;
+  salesFilter?: "with" | "without";
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
   if (params.sehir) qp.set("sehir", params.sehir);
   if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
+  if (params.salesFilter) qp.set("salesFilter", params.salesFilter);
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
 }

@@ -41,6 +41,7 @@ const COLOR_ACCENT = "#e8993f";
 const COLOR_ACCENT_MID = "#dc7d2a";
 const COLOR_ACCENT_HIGH = "#c46118";
 const COLOR_ACCENT_DEEP = "#a44a0d";
+const COLOR_MUTED = "#5a5a5a"; // silent (no recent sales) marker
 const COLOR_STROKE = "#1a1a1a";
 const COLOR_LABEL = "#0a0a0a";
 
@@ -98,6 +99,7 @@ export default function SalesMap({ customers }: Props) {
           sehir: c.sehir ?? "",
           ilce: c.ilce ?? "",
           distributor: c.distributor ?? "",
+          hasSales: c.hasSales ? 1 : 0,
         },
         geometry: {
           type: "Point" as const,
@@ -162,6 +164,11 @@ export default function SalesMap({ customers }: Props) {
         cluster: true,
         clusterMaxZoom: 13,
         clusterRadius: 50,
+        clusterProperties: {
+          // Sum of hasSales (0/1) per cluster — used to tone clusters by
+          // how active their constituent customers are.
+          activeCount: ["+", ["get", "hasSales"]],
+        },
       });
 
     map.addLayer({
@@ -170,16 +177,24 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["has", "point_count"],
       paint: {
+        // Cluster color = how alive the customers inside it are. Any cluster
+        // with zero recent-sales customers reads gray; mostly-sales clusters
+        // get the accent ramp (deeper for bigger clusters).
         "circle-color": [
-          "step",
-          ["get", "point_count"],
-          COLOR_ACCENT,
-          50,
-          COLOR_ACCENT_MID,
-          200,
-          COLOR_ACCENT_HIGH,
-          1000,
-          COLOR_ACCENT_DEEP,
+          "case",
+          ["==", ["get", "activeCount"], 0],
+          COLOR_MUTED,
+          [
+            "step",
+            ["get", "point_count"],
+            COLOR_ACCENT,
+            50,
+            COLOR_ACCENT_MID,
+            200,
+            COLOR_ACCENT_HIGH,
+            1000,
+            COLOR_ACCENT_DEEP,
+          ],
         ],
         "circle-radius": [
           "step",
@@ -220,8 +235,18 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-color": COLOR_ACCENT,
-        "circle-radius": 6,
+        "circle-color": [
+          "case",
+          ["==", ["get", "hasSales"], 1],
+          COLOR_ACCENT,
+          COLOR_MUTED,
+        ],
+        "circle-radius": [
+          "case",
+          ["==", ["get", "hasSales"], 1],
+          7,
+          5,
+        ],
         "circle-stroke-width": 1.5,
         "circle-stroke-color": COLOR_STROKE,
       },
@@ -252,6 +277,7 @@ export default function SalesMap({ customers }: Props) {
         distributor: (p.distributor as string) || null,
         lat: (f.geometry as GeoJSON.Point).coordinates[1] as number,
         lng: (f.geometry as GeoJSON.Point).coordinates[0] as number,
+        hasSales: Number(p.hasSales) === 1,
       };
       setSelected(c);
       setExplain({ kind: "idle" });

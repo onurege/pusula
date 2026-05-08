@@ -23,6 +23,7 @@ export function MapFilters({ facets, customers, count }: Props) {
 
   const sehir = params.get("sehir") ?? "";
   const distKod = params.get("distKod") ?? "";
+  const salesFilter = params.get("salesFilter") ?? "";
 
   const [q, setQ] = useState("");
   const hits = useMemo(() => {
@@ -58,7 +59,7 @@ export function MapFilters({ facets, customers, count }: Props) {
     );
   }
 
-  const hasFilter = !!sehir || !!distKod || !!q;
+  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q;
 
   return (
     <aside className="w-72 shrink-0 rounded-xl border border-border bg-surface p-4 self-start space-y-4 max-h-full overflow-y-auto">
@@ -139,6 +140,20 @@ export function MapFilters({ facets, customers, count }: Props) {
               {d.ad}
             </option>
           ))}
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className="text-xs text-muted">Satış aktivitesi (son 30 gün)</label>
+        <select
+          value={salesFilter}
+          onChange={(e) => update({ salesFilter: e.target.value })}
+          disabled={isPending}
+          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent disabled:opacity-50"
+        >
+          <option value="">Tümü</option>
+          <option value="with">Sadece satışı olanlar</option>
+          <option value="without">Sadece sessiz müşteriler</option>
         </select>
       </div>
 

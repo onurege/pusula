@@ -271,11 +271,16 @@ app.get("/api/map/customers", async (c) => {
     const sehir = c.req.query("sehir") ?? undefined;
     const distKodRaw = c.req.query("distKod");
     const distKod = distKodRaw ? parseInt(distKodRaw, 10) : undefined;
+    const salesFilterRaw = c.req.query("salesFilter");
+    const salesFilter: "with" | "without" | undefined =
+      salesFilterRaw === "with" || salesFilterRaw === "without"
+        ? salesFilterRaw
+        : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
     const refresh = c.req.query("refresh") === "1";
 
-    const key = JSON.stringify({ sehir, distKod, limit });
+    const key = JSON.stringify({ sehir, distKod, salesFilter, limit });
     if (!refresh) {
       const hit = customersCache.get(key);
       if (hit && Date.now() - hit.ts < CUSTOMERS_TTL_MS) {
@@ -283,7 +288,7 @@ app.get("/api/map/customers", async (c) => {
       }
     }
 
-    const customers = await listMapCustomers({ sehir, distKod, limit });
+    const customers = await listMapCustomers({ sehir, distKod, salesFilter, limit });
     customersCache.set(key, { ts: Date.now(), data: customers });
     return c.json({ count: customers.length, customers });
   } catch (err) {
