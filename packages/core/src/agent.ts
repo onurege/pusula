@@ -494,6 +494,36 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           const sql = String(args.sql ?? "");
           let brief = String(args.brief ?? "");
 
+          // Detect "I give up" briefs — model finalizing with an excuse rather
+          // than answering. If we have NO successful SQL, refuse to accept the
+          // finalize and force one more iteration. This catches "şema bilgisine
+          // erişilemedi" / "veri çekilemedi" etc. when the agent never even
+          // called run_sql.
+          const giveUpRx =
+            /(şem[ae] bilgi|şem[ae]ya eriş|veri çek|veri bulunam|tablo bulunam|sorgulanamad[ıi])/i;
+          if (lastRunRowCount === 0 && !lastSuccessfulSql && giveUpRx.test(brief)) {
+            console.warn(
+              "[runAgent] model tried to finalize with a give-up brief but never ran SQL — forcing retry",
+            );
+            steps.push({
+              kind: "tool_result",
+              tool: "finalize",
+              ok: false,
+              summary: "rejected: give-up brief without any successful run_sql",
+            });
+            responseParts.push({
+              functionResponse: {
+                name,
+                response: {
+                  error:
+                    "Henüz hiç run_sql çağırmadın. Pre-seed'de yüklenmiş şemayı kullan ve doğrudan run_sql ile ÜRÜN GRUBU kırılım sorgusunu (sistem promptu A şıkkı) çalıştır. Tablolar ALLOWED_TABLES içinde — uydurma değil.",
+                  allowedTablesCumulative: [...allowedUpper].sort(),
+                },
+              },
+            });
+            continue;
+          }
+
           // The model's brief is just a signal that work is done — we don't
           // trust the prose. When the SQL returned rows, ALWAYS rewrite the
           // brief deterministically from those rows so it cites real names
