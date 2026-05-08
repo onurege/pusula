@@ -216,6 +216,69 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
   let lastRunTruncated = false;
   let lastRunDuration = 0;
 
+  // Pre-seed schema for any TBL... names the user prompt mentions explicitly.
+  // Without this the model has to guess which retrieve_schema query word will
+  // surface them via embedding/keyword matching — and gives up if it doesn't.
+  // We feed it the schema for those exact tables in the very first user turn.
+  const mentionedTables = Array.from(
+    new Set((userPrompt.match(/\bTBL[A-Z0-9_]+/gi) ?? []).map((s) => s.toUpperCase())),
+  );
+  if (mentionedTables.length > 0) {
+    try {
+      const snap = await loadSnapshot();
+      const wanted = new Set(mentionedTables);
+      const seeded = snap.tables.filter((t) => {
+        const u = t.fullName.toUpperCase();
+        const bare = t.name.toUpperCase();
+        return wanted.has(u) || wanted.has(bare);
+      });
+      if (seeded.length > 0) {
+        for (const t of seeded) {
+          retrievedTables.add(t.fullName);
+          allowedUpper.add(t.fullName.toUpperCase());
+        }
+        const seedResults = seeded.map((t) => ({
+          table: t,
+          score: 100,
+          reasons: ["pre-seed (mentioned in prompt)"],
+          fkNeighbors: [] as Array<{ table: string; via: string }>,
+        }));
+        steps.push({
+          kind: "tool_result",
+          tool: "retrieve_schema",
+          ok: true,
+          summary: `pre-seed: ${seeded.length} table(s)`,
+        });
+        // Inject as a fake first model turn → tool result so the model has
+        // the schema in context from turn 1 without burning a tool call.
+        contents.push({
+          role: "model",
+          parts: [
+            {
+              text:
+                `Kullanıcı prompt'unda şu tabloları gördüm, şemalarını ön yükledim: ${seeded
+                  .map((t) => t.fullName)
+                  .join(", ")}. Şimdi run_sql ile sorguyu çalıştırıyorum.`,
+            },
+          ],
+        });
+        contents.push({
+          role: "user",
+          parts: [
+            {
+              text:
+                `Schema (önyüklendi):\nALLOWED_TABLES = [${[...allowedUpper]
+                  .sort()
+                  .join(", ")}]\n\n${formatRetrievalForPrompt(seedResults)}`,
+            },
+          ],
+        });
+      }
+    } catch (err) {
+      console.error("[runAgent] pre-seed failed:", err);
+    }
+  }
+
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
     // Retry / fallback inside each agent turn the same way the standalone
     // generate() helper does — Gemini 503/429 in the middle of an agent loop
