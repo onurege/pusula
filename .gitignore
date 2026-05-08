@@ -1,0 +1,19 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+
+# Schema snapshots regenerated from DB — keep seed only
+data/schema-v2.json
+data/schema-v2.enriched.json
+data/vectors/
+
+# Report run cache (large, regenerable)
+data/reports/*/runs/
+
+# OS / editor
+.DS_Store
+.vscode
+.idea
+*.log
