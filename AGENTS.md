@@ -4,64 +4,71 @@ This file provides guidance to AI agents working with code in this repository.
 
 ## What this is
 
-`enroute-rag` is the **DBA agent backend** — a knowledge layer over the Univera MSSQL database. It is consumed by:
+`enroute-rag` is a monorepo with **one knowledge core** consumed by **two transports** and rendered by **one dashboard**:
 
-1. **Claude Code (via MCP)** — for developer/DBA workflows: error diagnosis, ad-hoc SQL, report editing.
-2. **Dashboard (via HTTP API)** — for end-user reporting; the dashboard's LLM calls (Gemini) ride on top of this server's tools.
+- **packages/core** — schema RAG, read-only SQL runner, report storage, Gemini wrapper. Pure TypeScript, framework-free.
+- **apps/mcp** — stdio MCP server. Claude Code connects here for DBA-style flows (error diagnosis, ad-hoc SQL, report editing).
+- **apps/api** — HTTP REST (Hono). The dashboard and any other web client talk to this. Generation endpoints (`/api/reports/generate`) call Gemini server-side.
+- **apps/dashboard** — Next.js 16 + Tailwind 4. End-user UI: list reports, ask for a new one in Turkish, view detail and re-run.
 
-This repo is **not** a UI. There is no Next.js, no React. Phase 1 is library + scripts only. MCP server and HTTP API arrive in later phases.
+The same `retrieve_schema` and `run_sql` logic backs both transports — there is no duplication of business logic across MCP and HTTP.
 
 ## Hard rules
 
-- **READ ONLY against MSSQL.** The connection user must be `db_datareader`. `src/db.ts` enforces a second guard at the application layer — any query containing `INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|MERGE|EXEC|GRANT|REVOKE|DENY` is rejected before it reaches the driver. Do not weaken or bypass this guard.
-- **Limits are mandatory.** Every read uses a row cap (default 1000) and a timeout (default 30s). When LLMs generate SQL via this backend, the executor enforces these regardless of the SQL text.
-- **No writes anywhere yet.** Report storage and any future write paths are out of scope until explicitly enabled.
+- **READ ONLY against MSSQL.** Connection user must be `db_datareader`. `packages/core/src/db.ts` rejects any query containing `INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|MERGE|EXEC|GRANT|REVOKE|DENY` before it reaches the driver. Do not weaken or bypass this guard.
+- **Limits are mandatory.** Every read enforces a row cap (default 1000) and a timeout (default 30s) regardless of the SQL text.
+- **No writes to MSSQL anywhere yet.** Report storage uses the local filesystem (`data/reports/`). When/if write paths land, they go through a separate writable user on a separate code path, not by relaxing the guard.
 
 ## Source layout
 
 ```
-src/
+packages/core/src/
   db.ts          MSSQL pool + read-only guard + runReadOnly()
   dictionary.ts  KEYWORD_MAP, PREFIX_MAP, query → DB-key resolver
-  types.ts       SchemaSnapshot, TableInfo, ForeignKey, RetrievalResult
+  types.ts       SchemaSnapshot, TableInfo, ForeignKey, RetrievalResult, Report
   introspect.ts  sys.* queries → SchemaSnapshot (FK, indexes, ext_properties, samples)
   enrich.ts      Gemini-backed Turkish description draft for tables without MS_Description
   retrieve.ts    keyword scoring + FK 1-hop expansion + prompt formatter
+  reports.ts     filesystem-based report CRUD (meta.json + query.sql + runs/)
+  snapshot.ts    cached snapshot loader (used by all transports)
   gemini.ts      thin wrapper: embed(), embedBatch(), generate()
-scripts/
-  schema-introspect.ts   → data/schema-v2.json
-  schema-enrich.ts       → data/schema-v2.enriched.json
-  test-retrieve.ts       CLI: query → top-k tables + FK neighbors + prompt context
-data/
-  seed/schema-v1.json    Frozen baseline imported from text-to-sql
-  schema-v2.json         Generated, gitignored
-  schema-v2.enriched.json Generated, gitignored
+
+apps/mcp/src/server.ts  6 tools exposed via stdio
+apps/api/src/server.ts  Hono REST surface
+
+apps/dashboard/
+  app/page.tsx                        Reports list
+  app/reports/[id]/page.tsx           Report detail (SQL + brief + result table)
+  app/reports/new/page.tsx            Generate flow (prompt → retrieve → SQL → run → brief)
+  app/schema/page.tsx                 Schema browser (interactive retrieve)
+  components/result-table.tsx         Numeric-aware tabular renderer
+  lib/api.ts                          REST client typed against the API surface
+
+scripts/                  schema-introspect, schema-enrich, test-retrieve (tsx)
+data/seed/schema-v1.json  Frozen baseline imported from text-to-sql, committed
+data/schema-v2*.json      Generated, gitignored
+data/reports/<id>/        meta.json + query.sql + brief.md + runs/latest.json
 ```
 
-## Phase 1 scope (current)
+## Next.js 16 caveat
 
-The only goal right now is **the system learning the data**. No agent loop, no tool dispatch, no transports.
+`apps/dashboard` runs Next.js 16 + React 19 + Tailwind 4. **This is not the Next.js you know.** Before writing any dashboard code, read the relevant guide in `apps/dashboard/node_modules/next/dist/docs/`. APIs, conventions, and file structure may all differ from older training data. Heed deprecation notices.
 
-- `npm run schema:introspect` → DB-grade snapshot with FK graph
-- `npm run schema:enrich` → fill missing table descriptions via Gemini
-- `npm run test:retrieve "<query>"` → CLI smoke test for retrieval quality
+## Phases
 
-Quality bar: a Turkish business question (e.g. "ödenmemiş Pernod Ricard faturaları") must surface the right top-10 tables with their FK neighbors. Until that is reliable, do not start Phase 2.
-
-## What we deliberately do NOT use
-
-- **LangChain / LangGraph** — abstraction overhead with no payoff at this scope; agent loop lives in Claude Code.
-- **Vercel AI SDK** — same reason; the dashboard will call Gemini directly via HTTP API later.
-- **Vector DB service** — `vectra` (local) is the planned default if/when embeddings get added; we may not need them at all if keyword + FK expansion is good enough.
-- **ORM** — `sys.*` introspection is hand-written SQL; it is shorter and more transparent.
+- **Phase 1 — Knowledge core** (`schema-v2.json` + retrieve). DONE. CLI smoke tests via `npm run test:retrieve`.
+- **Phase 2 — Transports + dashboard MVP** (MCP, HTTP, Next.js list/detail/new). DONE.
+- **Phase 3 — Embedding + hybrid retrieval.** Add Gemini text-embedding-004 vectors per table description, hnswlib/vectra index, hybrid keyword + vector + FK expansion. Triggered when keyword retrieval misses semantic queries (e.g. "ödenmemiş" → vade/tahsilat tables).
+- **Phase 4 — Auth, audit, write paths.** When the pilot expands beyond a demo audience.
 
 ## Coding rules
 
 - TypeScript strict, ES modules, Node 22+.
 - No `any` without a comment justifying it.
-- Keep `src/` framework-free — pure functions and async helpers. Side-effect entrypoints live in `scripts/`.
+- Keep `packages/core` framework-free — pure functions and async helpers. Side-effect entrypoints live in `scripts/` and `apps/*`.
 - New env vars go in `.env.example` with a one-line comment.
 - Comments in code: English only, and only when the *why* is non-obvious.
+- Workspace dependencies use the `*` version specifier (e.g. `"@enroute/core": "*"`); never duplicate a dependency that already lives in `packages/core`.
 
 ## Commit rules
 
@@ -71,16 +78,8 @@ Quality bar: a Turkish business question (e.g. "ödenmemiş Pernod Ricard fatura
 ## Pre-push checks
 
 ```bash
-npm run typecheck
+npm run typecheck         # core + mcp + api
+( cd apps/dashboard && npx tsc --noEmit )   # dashboard
 ```
 
-Run a retrieval smoke test against a real snapshot before committing changes to `retrieve.ts` or `dictionary.ts`.
-
-## Future phases (not yet implemented)
-
-- **Phase 2** — add embeddings + vector search if keyword retrieval is insufficient. Local `vectra` index in `data/vectors/`.
-- **Phase 3** — MCP server (`@modelcontextprotocol/sdk`, stdio) exposing `retrieve_schema`, `run_sql`, `list_reports`, `get_report`, `save_report`.
-- **Phase 4** — HTTP API for the dashboard (Hono or Fastify), same tools surfaced as REST.
-- **Phase 5** — separate `apps/dashboard` Next.js project consuming the HTTP API.
-
-When any later phase begins, this file moves to a "single source of truth" CLAUDE.md and AGENTS.md becomes the pointer (cf. multica's pattern).
+Run a retrieval smoke test against a real snapshot before committing changes to `retrieve.ts`, `dictionary.ts`, or any prompt template in `enrich.ts` / `apps/api/src/server.ts`.

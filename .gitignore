@@ -12,6 +12,11 @@ data/vectors/
 # Report run cache (large, regenerable)
 data/reports/*/runs/
 
+# Next.js build output
+apps/dashboard/.next
+apps/dashboard/next-env.d.ts
+**/tsconfig.tsbuildinfo
+
 # OS / editor
 .DS_Store
 .vscode

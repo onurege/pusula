@@ -1,26 +1,5 @@
 import "dotenv/config";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { formatRetrievalForPrompt, retrieve } from "../src/retrieve.js";
-import type { SchemaSnapshot } from "../src/types.js";
-
-async function loadSnapshot(): Promise<SchemaSnapshot> {
-  const candidates = [
-    "data/schema-v2.enriched.json",
-    "data/schema-v2.json",
-    "data/seed/schema-v1.json",
-  ];
-  for (const c of candidates) {
-    try {
-      const raw = await readFile(path.resolve(c), "utf-8");
-      console.log(`[test-retrieve] using ${c}`);
-      return JSON.parse(raw) as SchemaSnapshot;
-    } catch {
-      continue;
-    }
-  }
-  throw new Error("No snapshot found. Run `npm run schema:introspect` first.");
-}
+import { formatRetrievalForPrompt, loadSnapshot, retrieve } from "@enroute/core";
 
 async function main() {
   const query = process.argv.slice(2).join(" ").trim();
@@ -30,10 +9,7 @@ async function main() {
   }
 
   const topK = process.env.TOPK ? parseInt(process.env.TOPK, 10) : 10;
-  const snapshot = await loadSnapshot();
-  // Old text-to-sql seed has no foreignKeys; tolerate it.
-  if (!snapshot.foreignKeys) snapshot.foreignKeys = [];
-  if (!snapshot.tables) snapshot.tables = [];
+  const snapshot = await loadSnapshot({ repoRoot: process.cwd() });
   console.log(`[test-retrieve] snapshot tables=${snapshot.tables.length} fks=${snapshot.foreignKeys.length}`);
   console.log(`[test-retrieve] query: ${query}`);
   console.log("");

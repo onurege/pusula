@@ -1,8 +1,7 @@
 import "dotenv/config";
 import { writeFile, mkdir } from "node:fs/promises";
 import path from "node:path";
-import { closePool } from "../src/db.js";
-import { introspect } from "../src/introspect.js";
+import { closePool, introspect } from "@enroute/core";
 
 const OUT_PATH = path.resolve("data/schema-v2.json");
 

@@ -1,8 +1,7 @@
 import "dotenv/config";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { enrichSnapshot } from "../src/enrich.js";
-import type { SchemaSnapshot } from "../src/types.js";
+import { enrichSnapshot, type SchemaSnapshot } from "@enroute/core";
 
 const IN_PATH = path.resolve("data/schema-v2.json");
 const OUT_PATH = path.resolve("data/schema-v2.enriched.json");

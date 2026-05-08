@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "enroute-rag": {
+      "command": "npm",
+      "args": ["run", "--silent", "mcp:start"],
+      "cwd": "/Users/egeusluer/Documents/enroute-rag",
+      "env": {
+        "MSSQL_SERVER": "SRVYAZSQL2\\DEMO",
+        "MSSQL_PORT": "1433",
+        "MSSQL_DATABASE": "DEMO_SUNUM",
+        "MSSQL_USER": "<read-only user>",
+        "MSSQL_PASSWORD": "<password>",
+        "MSSQL_ENCRYPT": "true",
+        "MSSQL_TRUST_SERVER_CERT": "true",
+        "GEMINI_API_KEY": "<your key>",
+        "GEMINI_GENERATION_MODEL": "gemini-2.5-flash-lite",
+        "GEMINI_EMBEDDING_MODEL": "text-embedding-004"
+      }
+    }
+  }
+}
