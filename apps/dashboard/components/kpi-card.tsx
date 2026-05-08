@@ -1,3 +1,5 @@
+import { smartFormat } from "@/lib/format";
+
 type Tone = "good" | "warn" | "bad" | "neutral";
 
 const TONE_RING: Record<Tone, string> = {
@@ -14,14 +16,6 @@ const TONE_DOT: Record<Tone, string> = {
   neutral: "bg-muted",
 };
 
-function formatNumber(v: number | string, unit?: string): string {
-  if (typeof v === "number") {
-    const formatted = Math.abs(v) >= 1000 ? v.toLocaleString("tr-TR") : String(v);
-    return unit ? `${formatted} ${unit}` : formatted;
-  }
-  return unit ? `${v} ${unit}` : String(v);
-}
-
 export function KpiCard({
   label,
   value,
@@ -37,17 +31,18 @@ export function KpiCard({
   tone?: Tone;
   hint?: string;
 }) {
+  const formatted = smartFormat(value, unit);
   return (
-    <div className={`rounded-lg border p-5 ${TONE_RING[tone]}`}>
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted">
+    <div className={`rounded-xl border p-6 ${TONE_RING[tone]}`}>
+      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted font-medium">
         <span className={`size-1.5 rounded-full ${TONE_DOT[tone]}`} />
         {label}
       </div>
-      <div className="text-3xl font-semibold tracking-tight mt-2 tabular-nums">
-        {formatNumber(value, unit)}
+      <div className="text-4xl md:text-5xl font-semibold tracking-tight mt-3 tabular-nums leading-none">
+        {formatted}
       </div>
       {delta !== undefined && (
-        <div className={`text-xs mt-1 ${delta >= 0 ? "text-good" : "text-bad"}`}>
+        <div className={`text-xs mt-3 tabular-nums ${delta >= 0 ? "text-good" : "text-bad"}`}>
           {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toLocaleString("tr-TR")}
         </div>
       )}

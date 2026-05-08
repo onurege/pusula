@@ -234,7 +234,14 @@ function projectAnomalies(
       deltaPct,
       unit: spec.unit,
       tone,
-      explainPrompt: `${label}: son dönem değeri ${formatTrNumber(current)}${spec.unit ? " " + spec.unit : ""}, beklenen ${formatTrNumber(baseline)}${spec.unit ? " " + spec.unit : ""} (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%). Bu değişimin arkasındaki kanal/marka/ürün/müşteri kırılımını incele ve 2-3 cümlelik Türkçe açıklama döndür.`,
+      // Targeted prompt — tells the agent exactly which entity to drill into,
+      // which dimensions to break by, and what shape the answer should take.
+      // Without this scaffolding the agent tends to produce a generic "top
+      // customers" listing and ignore the actual question.
+      explainPrompt:
+        `Univera ERP'de \"${label}\" adlı distribütörün cirosu son dönem ${formatTrNumber(current)}${spec.unit ? " " + spec.unit : ""}, geçmiş ortalamasına göre beklenen ${formatTrNumber(baseline)}${spec.unit ? " " + spec.unit : ""} olduğu hâlde gerçekleşmesi ${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%. ` +
+        `Önce TBLDIST tablosunda TXTAD = '${label.replace(/'/g, "''")}' olan distribütörün LNGKOD'unu bul, sonra son 7 gün vs önceki 30 günün haftalık ortalamasını **müşteri grubu, ürün grubu veya marka kırılımında** karşılaştır (TBLMUSTERIGRUP / TBLURUNGRUP / ilgili marka tablosu kullanarak). Düşüş veya artışın hangi 1-2 segmentte yoğunlaştığını bul. ` +
+        `Cevabını 2-3 cümlelik Türkçe yönetici diliyle ver: somut segment adlarını ve sayıları yaz (\"X kanalında %Y düşüş\"). Eğer veri segmentlere ayrılamıyorsa açıkça \"segment kırılımına ulaşılamadı\" de.`,
     });
   }
   items.sort((a, b) => Math.abs(b.deltaPct) - Math.abs(a.deltaPct));
@@ -254,15 +261,21 @@ function formatTrNumber(n: number): string {
 }
 
 const NARRATIVE_SYSTEM = `
-Sen Türkçe konuşan bir veri analisti asistanısın. Sana bir radar bloğunun başlığı,
-açıklaması ve sonuç satırları verilecek. **Tek bir** 1-2 cümlelik Türkçe paragraf
-üret. Kurallar:
-- En üstteki 1-2 satırı somut adlarıyla zikret (TXTAD/TXTUNVAN/ad sütunu).
-- Sayıları binlik ayraçla ve varsa para birimiyle yaz; çok büyükse 12,4M gibi kısalt.
-- "Listenin başında X var, ikinci sıradaki Y'nin neredeyse iki katı" gibi
-  yorumlayıcı bir bakış kat.
+Sen Türkçe konuşan kıdemli bir satış analisti asistanısın. Sana bir radar bloğunun
+başlığı, açıklaması ve sonuç satırları verilecek. **Tek bir** 1-2 cümlelik Türkçe
+paragraf üret. Yönetici hızla okuyup karar versin diye yaz.
+
+KURALLAR:
+- Liste/grafik veriyse: en üstteki 1-2 ismi (TXTAD/TXTUNVAN/ad) somut zikret ve
+  **karşılaştırmalı bir bakış** kat: "ilk 3 toplam pastanın %Y'si", "X, ikincinin
+  iki katı", "ilk üçten sonra kuyruk hızla iniyor" gibi.
+- Trend grafiğiyse: yön ne (yükseliş/düşüş/dalgalı), tepe ve dip günleri zikret.
+- Sayıları kompakt yaz: 12.456.789 yerine "12,5 Mn", 1.310.000.000 yerine "1,31 Mr".
+  Para birimi varsa sonuna ekle (₺).
+- Mümkünse mini bir aksiyon ipucu ver: "ikinci yarıdaki düşüşe odaklan", "ilk 3'e
+  yatırım, kuyrukta zaten kayıp az" gibi. Yapay olmasın, doğal kal.
 - Veri boş veya 1-2 satırsa çok kısa, dürüst bir cümle yaz.
-- SQL veya teknik jargon yok. Maksimum 280 karakter.
+- SQL veya teknik jargon yok. Tek paragraf, maks 320 karakter.
 `.trim();
 
 async function generateBlockNarrative(
@@ -337,12 +350,31 @@ export async function runRadarBlock(
 }
 
 const DEFAULT_BRIEF_SYSTEM = `
-Sen Türkçe konuşan bir analitik asistanısın. Sana bir radar raporunun KPI ve liste
-çıktıları verilecek. 3-5 cümlelik kısa, eyleme dönük bir yönetici özeti yaz:
-- En öne çıkan 1-2 sayıyı somut olarak zikret (binlik ayraçla, varsa para birimiyle).
-- Listede ilk 1-2 satırı somut adlarıyla (TXTAD/TXTUNVAN) söyle.
-- Veri boş veya çok azsa "veri yetersiz" diye dürüstçe belirt; halüsinasyon yapma.
-- SQL veya teknik jargon yazma. Yöneticiye doğrudan hitap et.
+Sen Türkçe konuşan kıdemli bir satış-analizi asistanısın. Yöneticiye sabah brifingi
+veriyorsun. Sana bir radar raporunun KPI'ları, sapmaları ve listeleri verilecek.
+
+ÇIKTI YAPISI — TAM 3 KISIM:
+
+1. **HEADLINE** (tek cümle): Dönemin ana metriğini ve yönünü ver. Örnek:
+   "Son 30 günde toplam ciro 1,31 Mr ₺; 22.350 fatura ile 43 aktif distribütör
+   sahada." Sayıları kompakt yaz (Mn/Mr), para birimi ile.
+
+2. **DİKKAT** (2-3 madde, başına \"⚠ \" koy): En kritik sapmaları somut adlarıyla
+   ver. \"X distribütörü %38 düştü\" + 1 cümle olası sebep ipucu. Sapma yoksa bu
+   kısmı atla.
+
+3. **BUGÜN** (1-2 madde, başına \"→ \" koy): Yöneticinin **bugün** atması gereken
+   somut adımı yaz. \"X'i ara\", \"Y bölge sorumlusuyla görüş\", \"Z markasının
+   önümüzdeki sevkiyatını gözden geçir\" gibi. Genel \"strateji geliştirilmeli\"
+   tavsiyesi YASAK — somut, isim/eylem içermeli.
+
+KURALLAR:
+- Sayılar her zaman kompakt: 12,5 Mn yerine 12.456.789 yazma.
+- İlk 1-2 ismi her bölümde adlarıyla (TXTAD/TXTUNVAN) zikret.
+- 0 satır → \"Veri çıkmadı, dönem aralığını genişletin\" de, halüsinasyon yapma.
+- Sade yönetici dili, jargon ve SQL yok. Markdown başlık kullanma — düz metin,
+  bölümler arasında boş satır.
+- Toplam 5-7 cümleden uzun olmasın.
 `.trim();
 
 function summarizeBlocksForBrief(blocks: RadarBlockResult[]): string {
