@@ -6,6 +6,7 @@ import {
   type Tool,
 } from "@google/generative-ai";
 import { runReadOnly } from "./db.js";
+import { generate } from "./gemini.js";
 import { formatRetrievalForPrompt, retrieve } from "./retrieve.js";
 import { loadSnapshot } from "./snapshot.js";
 
@@ -138,6 +139,10 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
   ];
   const steps: AgentStep[] = [];
   const retrievedTables = new Set<string>();
+  // Tracks every table the agent has seen across all retrieve_schema calls,
+  // upper-cased for case-insensitive comparison against generated SQL.
+  const allowedUpper = new Set<string>();
+  let lastSuccessfulSql: string | null = null;
   let lastRunRows: Record<string, unknown>[] = [];
   let lastRunRowCount = 0;
   let lastRunTruncated = false;
@@ -177,9 +182,11 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           const topK = Math.min(Number(args.topK ?? 8), RETRIEVE_TOPK_CAP);
           const snap = await loadSnapshot();
           const results = retrieve(query, snap, { topK, expandFkNeighbors: true });
-          for (const r of results) retrievedTables.add(r.table.fullName);
-          const summary = `Bulunan ${results.length} tablo:\n` +
-            results.map((r) => `- ${r.table.fullName} (score=${r.score})`).join("\n");
+          for (const r of results) {
+            retrievedTables.add(r.table.fullName);
+            allowedUpper.add(r.table.fullName.toUpperCase());
+          }
+          const allowedSoFar = [...allowedUpper].sort();
           steps.push({
             kind: "tool_result",
             tool: name,
@@ -190,17 +197,48 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
             functionResponse: {
               name,
               response: {
-                tableList: summary,
+                criticalRule:
+                  "Aşağıdaki ALLOWED_TABLES listesi dışındaki bir tabloyu run_sql'e koyma — uydurma sayılır ve reddedilir.",
+                allowedTablesThisCall: results.map((r) => r.table.fullName),
+                allowedTablesCumulative: allowedSoFar,
                 detailedContext: formatRetrievalForPrompt(results),
-                allowedTables: results.map((r) => r.table.fullName),
               },
             },
           });
         } else if (name === "run_sql") {
           const sql = String(args.sql ?? "");
+
+          // Pre-validate referenced tables against everything the agent has
+          // retrieved so far. This catches hallucinated names without paying
+          // a MSSQL round-trip (and prevents the model from trying random
+          // table names like TBLSATIS / TBLSATISFATURADETAY on every loop).
+          const referenced = extractTableRefs(sql);
+          const unknown = referenced.filter((t) => !allowedUpper.has(t.toUpperCase()));
+          if (unknown.length > 0) {
+            steps.push({
+              kind: "tool_result",
+              tool: name,
+              ok: false,
+              summary: `Pre-validation: bilinmeyen tablo(lar) ${unknown.join(", ")}`,
+            });
+            responseParts.push({
+              functionResponse: {
+                name,
+                response: {
+                  error: `Sorgu retrieve_schema'dan dönmemiş tablo(ları) içeriyor: ${unknown.join(", ")}. Bu tablolar uydurma; var olduğundan emin değilsin.`,
+                  allowedTablesCumulative: [...allowedUpper].sort(),
+                  hint:
+                    "İki yol: (1) yine de bu konuda tablo aramak istersen retrieve_schema'yı farklı bir Türkçe terimle çağır; (2) elindeki listeden uygun tabloyu seçip SQL'i yeniden yaz.",
+                },
+              },
+            });
+            continue;
+          }
+
           const startedAt = Date.now();
           try {
             const out = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+            lastSuccessfulSql = sql;
             lastRunRows = out.rows;
             lastRunRowCount = out.rowCount;
             lastRunTruncated = out.truncated;
@@ -292,6 +330,46 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
     contents.push({ role: "function", parts: responseParts });
   }
 
+  // Loop ended without an explicit finalize. If we have a successful SQL on
+  // record, treat its result as the answer and synthesize a brief — it is
+  // strictly better than throwing away a working query just because the
+  // model forgot to call finalize at the end.
+  if (lastSuccessfulSql) {
+    const sample =
+      lastRunRows.length === 0
+        ? "(SONUÇ BOŞ — 0 satır)"
+        : lastRunRows
+            .slice(0, 10)
+            .map((r) =>
+              Object.entries(r)
+                .map(([k, v]) => `${k}=${formatVal(v)}`)
+                .join(", "),
+            )
+            .join("\n");
+    let brief: string;
+    try {
+      brief = await generate(
+        `Sen Türkçe bir analiz asistanısın. Sana bir kullanıcı talebi ve sorgu sonucundan örnek satırlar verilecek. 3-5 cümle Türkçe iş özeti yaz. 0 satırsa "veri çıkmadı" de, halüsinasyon yapma. Veri varsa en üst 1-2 satırı somut adlarıyla zikret. Teknik jargon yok.`,
+        `Talep: ${userPrompt}\n\nSonuç (toplam ${lastRunRowCount} satır):\n${sample}\n\nKısa Türkçe özet:`,
+        { temperature: 0.3, maxOutputTokens: 512 },
+      );
+    } catch {
+      brief = lastRunRowCount === 0
+        ? "Sorgu çalıştı ancak 0 satır döndü. Veri yok ya da filtreler çok dar."
+        : `Sorgu çalıştı, ${lastRunRowCount} satır döndü.`;
+    }
+    steps.push({ kind: "final", sql: lastSuccessfulSql, brief });
+    return {
+      steps,
+      final: { sql: lastSuccessfulSql, brief: brief.trim() },
+      retrievedTables: [...retrievedTables],
+      rows: lastRunRows,
+      rowCount: lastRunRowCount,
+      truncated: lastRunTruncated,
+      durationMs: lastRunDuration,
+    };
+  }
+
   return {
     steps,
     retrievedTables: [...retrievedTables],
@@ -307,4 +385,24 @@ function formatVal(v: unknown): string {
   if (v instanceof Date) return v.toISOString().slice(0, 10);
   const s = String(v);
   return s.length > 30 ? s.slice(0, 30) + "…" : s;
+}
+
+/**
+ * Pull table names out of FROM / JOIN clauses. Naive but enough for our
+ * pre-validation: matches `[schema].[table]`, `schema.table`, or `table`,
+ * with optional aliases. Nested parens (subqueries) are tolerated because
+ * the regex matches occurrences anywhere in the string.
+ */
+function extractTableRefs(sql: string): string[] {
+  const out: string[] = [];
+  const stripped = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+  const re = /\b(?:FROM|JOIN)\s+\[?(\w+)\]?(?:\s*\.\s*\[?(\w+)\]?)?/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(stripped)) !== null) {
+    const a = m[1];
+    const b = m[2];
+    if (b) out.push(`${a}.${b}`);
+    else if (a) out.push(`dbo.${a}`);
+  }
+  return out;
 }
