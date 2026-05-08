@@ -9,8 +9,9 @@ data/schema-v2.json
 data/schema-v2.enriched.json
 data/vectors/
 
-# Report run cache (large, regenerable)
-data/reports/*/runs/
+# Reports are local state for now (will become committed canonical
+# reports once we promote them; until then they are user/session output).
+data/reports/
 
 # Next.js build output
 apps/dashboard/.next
