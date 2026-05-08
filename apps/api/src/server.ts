@@ -9,6 +9,7 @@ import {
   closePool,
   formatRetrievalForPrompt,
   getCustomerSales,
+  getMapFacets,
   getRadarDefinition,
   getReport,
   listMapCustomers,
@@ -262,6 +263,15 @@ app.get("/api/map/customers", async (c) => {
 
     const customers = await listMapCustomers({ sehir, distKod, limit });
     return c.json({ count: customers.length, customers });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.get("/api/map/facets", async (c) => {
+  try {
+    const facets = await getMapFacets();
+    return c.json(facets);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }

@@ -211,6 +211,15 @@ export async function getCustomerSales(
   return request(`/api/map/customers/${id}/sales?${qp.toString()}`);
 }
 
+export type MapFacets = {
+  cities: string[];
+  distributors: { lngKod: number; ad: string }[];
+};
+
+export async function getMapFacets(): Promise<MapFacets> {
+  return request("/api/map/facets");
+}
+
 export type RadarRun = {
   id: string;
   title: string;

@@ -80,6 +80,49 @@ export type CustomerSales = {
   sonFaturaTarihi: string | null;
 };
 
+export type MapFacets = {
+  cities: string[];
+  distributors: { lngKod: number; ad: string }[];
+};
+
+/**
+ * Distinct list of cities and active distributors, scoped to the same
+ * universe as the map (geocoded, approved customers / active distributors).
+ * Loaded once on the map page render and fed to the filter sidebar.
+ */
+export async function getMapFacets(): Promise<MapFacets> {
+  const citiesSql = `
+    SELECT DISTINCT TOP 200 m.TXTSEHIR
+    FROM dbo.TBLMUSTERI AS m
+    WHERE m.DBLKOORDINATX > 0
+      AND m.DBLKOORDINATY > 0
+      AND m.BYTONAY = 1
+      AND m.TXTSEHIR IS NOT NULL
+      AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
+    ORDER BY m.TXTSEHIR
+  `;
+  const distSql = `
+    SELECT TOP 200 d.LNGKOD AS lngKod, d.TXTAD AS ad
+    FROM dbo.TBLDIST AS d
+    WHERE d.BYTDURUM = 0
+      AND d.TXTAD IS NOT NULL
+    ORDER BY d.TXTAD
+  `;
+
+  const [citiesRes, distsRes] = await Promise.all([
+    runReadOnly(citiesSql, { limit: 200, timeoutMs: 15_000 }),
+    runReadOnly(distSql, { limit: 200, timeoutMs: 15_000 }),
+  ]);
+
+  return {
+    cities: citiesRes.rows.map((r) => String(r.TXTSEHIR)).filter(Boolean),
+    distributors: distsRes.rows.map((r) => ({
+      lngKod: Number(r.lngKod),
+      ad: String(r.ad),
+    })),
+  };
+}
+
 /**
  * Single-customer revenue lookup — runs only when the user clicks a
  * marker. Indexed seek on (LNGMUSTERIKOD, LNGDISTKOD), so this is a
