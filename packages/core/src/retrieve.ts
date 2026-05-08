@@ -65,25 +65,28 @@ function scoreTable(
   // Penalty for non-canonical table variants (backups, archives, dated copies,
   // merge/dedupe scratch tables). These rank artificially high on raw keyword
   // matches but are almost never the right table to query.
+  // Underscores are optional because most Univera names are one camelCase
+  // run with no separator (e.g. TBLMSDSATISTEMSILCISIBIRLESTIRMEDETAY).
   const NON_CANONICAL = [
-    /_YEDEK$/,
-    /_YEDEK\d*/,
-    /_OLD$/,
-    /_BAK$/,
-    /_BACKUP$/,
-    /_TEMP$/,
-    /_TMP$/,
-    /_TEST$/,
-    /_ARCHIVE$/,
-    /_ARSIV$/,
-    /_UPCD$/,
-    /_BIRLESTIRME(DETAY)?$/,
-    /_\d{6,}$/,    // _20230704
-    /[A-Z]\d{6,}$/, // TBLDIST250521 (no underscore between)
+    /_?YEDEK\d*$/,
+    /_?OLD$/,
+    /_?BACKUP$/,
+    /_?TEMP$/,
+    /_?TMP$/,
+    /_?TEST$/,
+    /_?ARCHIVE$/,
+    /_?ARSIV$/,
+    /_?UPCD$/,
+    /_?BIRLESTIRME(DETAY)?$/,
+    /_\d{6,}$/,        // _20230704
+    /[A-Z]\d{6,}$/,    // TBLDIST250521
   ];
   for (const pat of NON_CANONICAL) {
     if (pat.test(tableNameUpper)) {
-      score -= 6;
+      // Hard penalty — these tables (backups, merge scratch, dated copies)
+      // sit close to canonical tables in keyword matches but should never
+      // make it into the retrieved set. Drop them below the score>0 cutoff.
+      score -= 15;
       reasons.push(`non-canonical penalty: ${pat.source}`);
       break;
     }

@@ -1,4 +1,5 @@
 import {
+  FunctionCallingMode,
   GoogleGenerativeAI,
   SchemaType,
   type Content,
@@ -61,15 +62,19 @@ gelir. Tablo veya kolon adı uydurma; bağlamda yoksa o yoktur.
    bağlamı tekrar gözden geçir, gerekirse \`retrieve_schema\` ile yeni tablo ara,
    sorguyu düzelt ve \`run_sql\`'i tekrar çağır. En fazla 4 kez dene.
 5. Sonuç boş döndü mü? Tarih aralığını veya filtreleri gevşet, farklı bir
-   tablo dene. Yine de boşsa kullanıcıya boş olduğunu açıkça söyle.
+   tablo dene. Yine de boşsa finalize çağır ve brief'te "veri çıkmadı" de.
 6. SQL çalışıp anlamlı sonuç dönünce \`finalize\` çağır:
    - \`sql\`: çalıştığı son SELECT.
    - \`brief\`: 3-5 cümlelik Türkçe iş özeti. Sonuç boşsa "veri çıkmadı"
      diyerek dürüstçe belirt; doluysa en üst 1-2 satırı somut adlarıyla
      zikret. SQL veya teknik jargon yok.
 
-Kısa düşün, çok adımdan kaçın. 6 tool çağrısından sonra hâlâ bitmediyse
-\`finalize\` ile elindeki en iyi sonucu sun.
+ÇOK ÖNEMLİ — VAZGEÇME:
+- Her turda **mutlaka** bir tool çağırırsın: retrieve_schema, run_sql veya finalize.
+- Asla kullanıcıya soru sorma, asla "yardım edemiyorum" deme, asla text mesajı dönme.
+- Kolon adı yanlışsa: hata mesajını oku, retrieve_schema ile aynı tabloyu yeniden iste,
+  detayda kolon listesini gör, doğru kolonla run_sql'i tekrar dene.
+- 6 tool çağrısından sonra hâlâ bitmediyse \`finalize\` ile elindeki en iyi durumu sun.
 `.trim();
 
 const TOOLS: Tool[] = [
@@ -152,6 +157,13 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
     const result = await model.generateContent({
       contents,
       generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+      // Force the model to emit a function call every turn. Without this it
+      // tends to bail out with apologetic Turkish text after one tool error,
+      // which collapses the agent loop. With ANY it must call retrieve_schema,
+      // run_sql, or finalize — never give up by chatting back.
+      toolConfig: {
+        functionCallingConfig: { mode: FunctionCallingMode.ANY },
+      },
     });
 
     const candidate = result.response.candidates?.[0];
