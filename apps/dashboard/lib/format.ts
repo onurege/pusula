@@ -1,6 +1,8 @@
 // Turkish-locale compact number formatting for dashboard tiles. Switches
-// to Mr (milyar) / Mn (milyon) / B (bin) at the right thresholds so a 1.3
-// billion lira ciro renders as "1,31 Mr ₺" instead of "1.310.766.193,651 ₺".
+// to Mr (milyar) / Mn (milyon) at the right thresholds so a 1.3 billion lira
+// ciro renders as "1,31 Mr ₺" instead of "1.310.766.193,651 ₺". Numbers
+// below 1M stay as plain thousand-separated integers (e.g. "22.350") —
+// "22,4 B" is more confusing than helpful at a glance.
 export function formatCompact(n: number, currency?: string): string {
   if (typeof n !== "number" || isNaN(n)) return "—";
   const abs = Math.abs(n);
@@ -9,8 +11,6 @@ export function formatCompact(n: number, currency?: string): string {
     value = (n / 1_000_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mr";
   } else if (abs >= 1_000_000) {
     value = (n / 1_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mn";
-  } else if (abs >= 10_000) {
-    value = (n / 1_000).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " B";
   } else {
     value = n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
   }
@@ -37,10 +37,11 @@ export function smartFormat(value: unknown, unit?: string): string {
     return value;
   }
   if (typeof value !== "number") return String(value ?? "—");
-  // Currency or large-magnitude numbers → compact. Plain counts stay readable.
+  // Currency-typed values always use compact (Mn/Mr suffixes) so a billion-lira
+  // figure stays readable. Plain count metrics (fatura sayısı, distribütör adedi)
+  // get plain thousand-separated integers below 1M, then collapse to Mn/Mr above.
   if (unit && (unit.includes("₺") || unit.includes("$") || unit.includes("€"))) {
     return formatCompact(value, unit);
   }
-  if (Math.abs(value) >= 10_000) return formatCompact(value, unit);
-  return formatInt(value) + (unit ? ` ${unit}` : "");
+  return formatCompact(value, unit);
 }

@@ -150,6 +150,22 @@ function applyParams(
   });
 }
 
+/**
+ * Substitutes @param placeholders inside human-readable strings (titles,
+ * descriptions). Unlike applyParams, never quotes — the result is meant
+ * for prose, not SQL.
+ */
+function substituteText(
+  text: string | undefined,
+  params: Record<string, string | number>,
+): string | undefined {
+  if (!text) return text;
+  return text.replace(PARAM_RE, (m, name: string) => {
+    const v = params[name];
+    return v === undefined ? m : String(v);
+  });
+}
+
 function deriveTone(
   value: number | undefined,
   rule: NonNullable<NonNullable<RadarBlock["kpiMapping"]>[number]["tone"]>,
@@ -320,8 +336,8 @@ export async function runRadarBlock(
     const durationMs = Date.now() - startedAt;
     const out: RadarBlockResult = {
       id: block.id,
-      title: block.title,
-      description: block.description,
+      title: substituteText(block.title, params) ?? block.title,
+      description: substituteText(block.description, params),
       display,
       chart: block.chart,
       rows: result.rows,
@@ -336,8 +352,8 @@ export async function runRadarBlock(
   } catch (err) {
     return {
       id: block.id,
-      title: block.title,
-      description: block.description,
+      title: substituteText(block.title, params) ?? block.title,
+      description: substituteText(block.description, params),
       display,
       chart: block.chart,
       rows: [],
