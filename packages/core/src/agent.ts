@@ -65,6 +65,48 @@ UNIVERA KURALLARI (her sorguda uygula):
    - Detay → Ürün: \`TBLMSDBELGEDETAY.LNGURUNKOD = TBLURUN.LNGKOD\`
 5. **Ad sütunları:** Distribütör \`TBLDIST.TXTAD\`, müşteri \`TBLMUSTERI.TXTUNVAN\`
    veya \`TXTKISAAD\`, ürün \`TBLURUN.TXTAD\`. Asla sadece kod döndürme.
+6. **Ürün GRUBU adı için TBLURUN tek başına yetmez.** \`TXTURUNGRUPADI\` kolonu
+   YOKTUR. TBLURUN'da yalnızca \`TXTURUNGRUPKOD\` (varchar) var; grubun adı
+   TBLURUNGRUP'tedir:
+   \`\`\`sql
+   INNER JOIN TBLURUNGRUP g
+     ON g.TXTKOD = TBLURUN.TXTURUNGRUPKOD
+    AND g.LNGDISTKOD = TBLURUN.LNGDISTKOD
+   -- ürün grubunun adı: g.TXTAD
+   \`\`\`
+7. **TBLMSDBELGEDETAY tutar kolonları:** \`DBLFATURANETFIYAT\` YOKTUR.
+   Mevcut olanlar: \`DBLNETFIYAT\` (iskontolu birim fiyat), \`DBLBIRIMFIYAT\`
+   (ham birim fiyat), \`DBLMIKTAR\`. Ürün bazlı ciro:
+   \`SUM(TBLMSDBELGEDETAY.DBLNETFIYAT * TBLMSDBELGEDETAY.DBLMIKTAR)\`.
+
+HAZIR SORGU TARİFLERİ (kullanıcı talebine göre uyarla, kolon adlarını
+değiştirme):
+
+A) Müşterinin son N gün **ürün grubu kırılımı**:
+   \`\`\`sql
+   SELECT TOP 5
+     g.TXTAD AS UrunGrubu,
+     SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS Ciro,
+     SUM(d.DBLMIKTAR) AS Miktar
+   FROM dbo.TBLMSDFATURA f
+   INNER JOIN dbo.TBLMSDBELGEDETAY d
+     ON d.LNGYIL = f.LNGYIL
+    AND d.LNGFATURAKOD = f.LNGBELGEKOD
+    AND d.LNGDISTKOD = f.LNGDISTKOD
+   INNER JOIN dbo.TBLURUN u
+     ON u.LNGKOD = d.LNGURUNKOD
+   INNER JOIN dbo.TBLURUNGRUP g
+     ON g.TXTKOD = u.TXTURUNGRUPKOD
+    AND g.LNGDISTKOD = u.LNGDISTKOD
+   WHERE f.LNGMUSTERIKOD = <KOD>
+     AND f.BYTTUR = 0 AND f.BYTDURUM = 0
+     AND f.TRHISLEMTARIHI >= DATEADD(day, -<GUN>, GETDATE())
+   GROUP BY g.TXTAD
+   ORDER BY Ciro DESC;
+   \`\`\`
+
+B) Müşterinin son N gün **ürün** kırılımı:
+   Aynı join yolu, GROUP BY u.TXTAD ile.
 
 ÇALIŞMA YÖNTEMİN:
 
