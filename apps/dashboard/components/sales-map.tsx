@@ -1,13 +1,40 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import maplibregl from "maplibre-gl";
-import "maplibre-gl/dist/maplibre-gl.css";
+import maplibregl, { type StyleSpecification } from "maplibre-gl";
 import type { CustomerSales, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerSales } from "@/lib/api";
 
-const MAP_STYLE =
-  "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+// Inline minimal style-spec — keeps the map self-contained instead of
+// depending on a remote style.json fetch which can fail silently and
+// leave the canvas blank. Raster tiles from Carto's basemaps CDN
+// (free, no key) for a dark theme that matches the dashboard.
+const MAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    "carto-dark": {
+      type: "raster",
+      tiles: [
+        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+        "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+      ],
+      tileSize: 256,
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    },
+  },
+  layers: [
+    {
+      id: "carto-dark",
+      type: "raster",
+      source: "carto-dark",
+      minzoom: 0,
+      maxzoom: 20,
+    },
+  ],
+};
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
