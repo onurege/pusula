@@ -1,7 +1,7 @@
 {
   "id": "sales",
   "title": "Sales Radar",
-  "description": "Distribütör satış performansı, ciro trendi ve aktif distribütör hareketi. Yalnızca satış faturaları (BYTTUR=0) ve onaylı belgeler (BYTDURUM=0) dahil; alış, iade ve hizmet belgeleri hariç.",
+  "description": "Distribütör satış performansı, ciro trendi ve aktif distribütör hareketi. Yalnızca satış faturaları (BYTTUR=0) ve onaylı belgeler (BYTDURUM=0) dahil; alış, iade ve hizmet belgeleri hariç. KPI'lar yalnızca aktif distribütörler (TBLDIST.BYTDURUM=0) üzerinden.",
   "tagline": "Bölge yöneticisi için son 30 günün satış manzarası — tek bakışta.",
   "defaultParams": {
     "days": 30,
@@ -14,7 +14,7 @@
     {
       "id": "anomalies",
       "title": "Bugün dikkat çekenler",
-      "description": "Son @recent günün satış cirosu, önceki @baseline günün haftalık ortalamasıyla kıyaslanarak en sert sapan distribütörler.",
+      "description": "Son @recent günün satış cirosu, önceki @baseline günün haftalık ortalamasıyla kıyaslanarak en sert sapan distribütörler. Yalnızca aktif distribütörler.",
       "display": "anomalies",
       "anomalySpec": {
         "labelColumn": "ad",
@@ -32,7 +32,7 @@
       "id": "kpis",
       "title": "Genel KPI'lar",
       "display": "kpi-row",
-      "sql": "SELECT \n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS toplam_ciro,\n  COUNT(*)               AS fatura_sayisi,\n  COUNT(DISTINCT f.LNGDISTKOD) AS aktif_distributor\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0",
+      "sql": "SELECT \n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS toplam_ciro,\n  COUNT(*)                      AS fatura_sayisi,\n  COUNT(DISTINCT f.LNGDISTKOD)  AS aktif_distributor\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = f.LNGDISTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0\n  AND d.BYTDURUM = 0",
       "kpiMapping": [
         {
           "id": "toplam_ciro",
@@ -58,7 +58,7 @@
     {
       "id": "top_distributors",
       "title": "En çok satış yapan distribütörler",
-      "description": "Son @days günde toplam satış cirosu en yüksek ilk @topN distribütör. Onaylı satış faturaları üzerinden.",
+      "description": "Son @days günde toplam satış cirosu en yüksek ilk @topN distribütör. Yalnızca aktif distribütörler ve onaylı satış faturaları.",
       "display": "chart",
       "chart": {
         "kind": "bar",
@@ -71,14 +71,14 @@
     {
       "id": "daily_trend",
       "title": "Günlük satış cirosu trendi",
-      "description": "Son @days günün ciro eğrisi. Onaylı satış faturaları.",
+      "description": "Son @days günün ciro eğrisi. Aktif distribütörlerin onaylı satış faturaları.",
       "display": "chart",
       "chart": {
         "kind": "line",
         "xKey": "gun",
         "yKey": "ciro"
       },
-      "sql": "SELECT\n  CAST(f.TRHISLEMTARIHI AS DATE) AS gun,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0\nGROUP BY CAST(f.TRHISLEMTARIHI AS DATE)\nORDER BY gun ASC"
+      "sql": "SELECT\n  CAST(f.TRHISLEMTARIHI AS DATE) AS gun,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = f.LNGDISTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0\n  AND d.BYTDURUM = 0\nGROUP BY CAST(f.TRHISLEMTARIHI AS DATE)\nORDER BY gun ASC"
     }
   ]
 }
