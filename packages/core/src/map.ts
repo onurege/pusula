@@ -1,4 +1,5 @@
 import { runReadOnly } from "./db.js";
+import { getLocalDb } from "./local-db.js";
 
 export type MapCustomer = {
   id: number;
@@ -24,39 +25,130 @@ export type MapCustomerFilters = {
   limit?: number;
 };
 
+export type MapFacets = {
+  cities: string[];
+  distributors: { lngKod: number; ad: string }[];
+};
+
+export type MapSyncStatus = {
+  lastSyncAt: string | null;
+  durationMs: number;
+  customerCount: number;
+  cityCount: number;
+  distCount: number;
+};
+
 /**
- * Customers with geographic coordinates only — no revenue join here.
- * Joining the 5.7M-row TBLMSDFATURA per page load was overkill and was
- * timing out in production; sales numbers are now fetched lazily for
- * each customer when the user clicks a marker (getCustomerSales below).
+ * Reads the customer set from the LOCAL SQLite mirror — never touches
+ * MSSQL on the request path. The mirror is populated by syncMapData()
+ * (see below), which is the only function that reaches out to MSSQL.
+ *
+ * Filter combinations are applied in JavaScript here too — at pilot
+ * scale the cached set is at most a few thousand rows so it's fine.
  */
-export async function listMapCustomers(
+export function listMapCustomers(
+  repoRoot: string,
   filters: MapCustomerFilters = {},
-): Promise<MapCustomer[]> {
+): MapCustomer[] {
+  const db = getLocalDb(repoRoot);
   const limit = Math.min(Math.max(filters.limit ?? 5000, 1), 50_000);
 
-  const where: string[] = [
-    "m.DBLKOORDINATX > 0",
-    "m.DBLKOORDINATY > 0",
-  ];
-
+  const where: string[] = [];
+  const params: Record<string, unknown> = {};
   if (filters.sehir) {
-    const safe = filters.sehir.replace(/'/g, "''");
-    where.push(`m.TXTSEHIR = N'${safe}'`);
+    where.push("sehir = @sehir");
+    params.sehir = filters.sehir;
   }
   if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
-    where.push(`m.LNGDISTKOD = ${Math.floor(filters.distKod)}`);
+    where.push("dist_kod = @distKod");
+    params.distKod = Math.floor(filters.distKod);
   }
   if (filters.salesFilter === "with") {
-    where.push("s.LNGMUSTERIKOD IS NOT NULL");
+    where.push("has_sales = 1");
   } else if (filters.salesFilter === "without") {
-    where.push("s.LNGMUSTERIKOD IS NULL");
+    where.push("has_sales = 0");
   }
 
-  // satisli is a one-pass DISTINCT lookup over the date-indexed window —
-  // much cheaper than SUM/aggregate and gives us the "recent sales? y/n"
-  // signal we need for both the filter and the marker tone.
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
+    SELECT id, dist_kod AS distKod, unvan, adres, sehir, ilce, distributor,
+           lat, lng, has_sales AS hasSales
+    FROM map_customers
+    ${whereSql}
+    ORDER BY has_sales DESC, id
+    LIMIT @limit
+  `;
+  const rows = db.prepare(sql).all({ ...params, limit }) as Array<{
+    id: number;
+    distKod: number | null;
+    unvan: string;
+    adres: string | null;
+    sehir: string | null;
+    ilce: string | null;
+    distributor: string | null;
+    lat: number;
+    lng: number;
+    hasSales: number;
+  }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    distKod: r.distKod ?? null,
+    unvan: r.unvan,
+    adres: r.adres,
+    sehir: r.sehir,
+    ilce: r.ilce,
+    distributor: r.distributor,
+    lat: r.lat,
+    lng: r.lng,
+    hasSales: r.hasSales === 1,
+  }));
+}
+
+export function getMapFacets(repoRoot: string): MapFacets {
+  const db = getLocalDb(repoRoot);
+  const cities = (
+    db.prepare("SELECT sehir FROM map_cities ORDER BY sehir").all() as Array<{ sehir: string }>
+  ).map((r) => r.sehir);
+  const distributors = (
+    db
+      .prepare("SELECT lng_kod AS lngKod, ad FROM map_distributors ORDER BY ad")
+      .all() as Array<{ lngKod: number; ad: string }>
+  ).map((r) => ({ lngKod: r.lngKod, ad: r.ad }));
+  return { cities, distributors };
+}
+
+export function getSyncStatus(repoRoot: string): MapSyncStatus {
+  const db = getLocalDb(repoRoot);
+  const row = db
+    .prepare(
+      `SELECT last_sync_at AS lastSyncAt, duration_ms AS durationMs,
+              customer_count AS customerCount, city_count AS cityCount,
+              dist_count AS distCount
+       FROM sync_state WHERE domain = 'map'`,
+    )
+    .get() as MapSyncStatus | undefined;
+  return (
+    row ?? {
+      lastSyncAt: null,
+      durationMs: 0,
+      customerCount: 0,
+      cityCount: 0,
+      distCount: 0,
+    }
+  );
+}
+
+/**
+ * Pulls the map customer set + facet lists from MSSQL in a single trip
+ * each, then replaces the SQLite mirror inside one transaction. This is
+ * the ONLY function that talks to MSSQL on the map data path; the
+ * dashboard reads from SQLite afterwards.
+ */
+export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
+  const startedAt = Date.now();
+
+  const customerSql = `
     WITH satisli AS (
       SELECT DISTINCT f.LNGMUSTERIKOD
       FROM dbo.TBLMSDFATURA AS f
@@ -64,7 +156,7 @@ export async function listMapCustomers(
         AND f.BYTTUR  = 0
         AND f.BYTDURUM = 0
     )
-    SELECT TOP ${limit}
+    SELECT
       m.LNGKOD       AS id,
       m.LNGDISTKOD   AS distKod,
       m.TXTUNVAN     AS unvan,
@@ -78,23 +170,90 @@ export async function listMapCustomers(
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST AS d ON d.LNGKOD = m.LNGDISTKOD
     LEFT JOIN satisli   AS s ON s.LNGMUSTERIKOD = m.LNGKOD
-    WHERE ${where.join(" AND ")}
+    WHERE m.DBLKOORDINATX > 0 AND m.DBLKOORDINATY > 0
     ORDER BY hasSales DESC, m.LNGKOD
   `;
+  const cityFacetSql = `
+    SELECT DISTINCT TOP 500 LTRIM(RTRIM(m.TXTSEHIR)) AS sehir
+    FROM dbo.TBLMUSTERI AS m
+    WHERE m.TXTSEHIR IS NOT NULL
+      AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
+    ORDER BY sehir
+  `;
+  const distFacetSql = `
+    SELECT TOP 500 d.LNGKOD AS lngKod, d.TXTAD AS ad
+    FROM dbo.TBLDIST AS d
+    WHERE d.BYTDURUM = 0 AND d.TXTAD IS NOT NULL
+      AND LTRIM(RTRIM(d.TXTAD)) <> ''
+    ORDER BY ad
+  `;
 
-  const result = await runReadOnly(sql, { limit, timeoutMs: 60_000 });
-  return result.rows.map((r) => ({
-    id: Number(r.id),
-    distKod: r.distKod == null ? null : Number(r.distKod),
-    unvan: String(r.unvan ?? ""),
-    adres: (r.adres as string | null) ?? null,
-    sehir: (r.sehir as string | null) ?? null,
-    ilce: (r.ilce as string | null) ?? null,
-    distributor: (r.distributor as string | null) ?? null,
-    lat: Number(r.lat),
-    lng: Number(r.lng),
-    hasSales: Number(r.hasSales) === 1,
-  }));
+  const [customersRes, citiesRes, distsRes] = await Promise.all([
+    runReadOnly(customerSql, { limit: 200_000, timeoutMs: 120_000 }),
+    runReadOnly(cityFacetSql, { limit: 1000, timeoutMs: 30_000 }),
+    runReadOnly(distFacetSql, { limit: 1000, timeoutMs: 30_000 }),
+  ]);
+
+  const db = getLocalDb(repoRoot);
+  const insCustomer = db.prepare(`
+    INSERT INTO map_customers
+      (id, dist_kod, unvan, adres, sehir, ilce, distributor, lat, lng, has_sales)
+    VALUES
+      (@id, @distKod, @unvan, @adres, @sehir, @ilce, @distributor, @lat, @lng, @hasSales)
+  `);
+  const insCity = db.prepare("INSERT OR IGNORE INTO map_cities (sehir) VALUES (?)");
+  const insDist = db.prepare(
+    "INSERT OR IGNORE INTO map_distributors (lng_kod, ad) VALUES (?, ?)",
+  );
+
+  const replaceAll = db.transaction(() => {
+    db.exec("DELETE FROM map_customers; DELETE FROM map_cities; DELETE FROM map_distributors;");
+    for (const r of customersRes.rows) {
+      insCustomer.run({
+        id: Number(r.id),
+        distKod: r.distKod == null ? null : Number(r.distKod),
+        unvan: String(r.unvan ?? ""),
+        adres: (r.adres as string | null) ?? null,
+        sehir: (r.sehir as string | null) ?? null,
+        ilce: (r.ilce as string | null) ?? null,
+        distributor: (r.distributor as string | null) ?? null,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        hasSales: Number(r.hasSales) === 1 ? 1 : 0,
+      });
+    }
+    for (const r of citiesRes.rows) {
+      const v = String(r.sehir ?? "").trim();
+      if (v) insCity.run(v);
+    }
+    for (const r of distsRes.rows) {
+      const k = Number(r.lngKod);
+      const a = String(r.ad ?? "").trim();
+      if (Number.isFinite(k) && a) insDist.run(k, a);
+    }
+  });
+  replaceAll();
+
+  const durationMs = Date.now() - startedAt;
+  const status: MapSyncStatus = {
+    lastSyncAt: new Date().toISOString(),
+    durationMs,
+    customerCount: customersRes.rows.length,
+    cityCount: citiesRes.rows.length,
+    distCount: distsRes.rows.length,
+  };
+  db.prepare(
+    `INSERT INTO sync_state (domain, last_sync_at, duration_ms, customer_count, city_count, dist_count)
+     VALUES ('map', @lastSyncAt, @durationMs, @customerCount, @cityCount, @distCount)
+     ON CONFLICT(domain) DO UPDATE SET
+       last_sync_at = excluded.last_sync_at,
+       duration_ms  = excluded.duration_ms,
+       customer_count = excluded.customer_count,
+       city_count = excluded.city_count,
+       dist_count = excluded.dist_count`,
+  ).run(status);
+
+  return status;
 }
 
 export type CustomerSales = {
@@ -103,58 +262,10 @@ export type CustomerSales = {
   sonFaturaTarihi: string | null;
 };
 
-export type MapFacets = {
-  cities: string[];
-  distributors: { lngKod: number; ad: string }[];
-};
-
 /**
- * Distinct list of cities (any TBLMUSTERI row with a non-empty TXTSEHIR)
- * and active distributors. Cities are deliberately NOT filtered by
- * coordinates / BYTONAY — the map applies those when it actually pulls
- * customers, but the picker should show every city the user might
- * eventually scope to. Aliased so the recordset key is predictable.
- */
-export async function getMapFacets(): Promise<MapFacets> {
-  const citiesSql = `
-    SELECT DISTINCT TOP 200 LTRIM(RTRIM(m.TXTSEHIR)) AS sehir
-    FROM dbo.TBLMUSTERI AS m
-    WHERE m.TXTSEHIR IS NOT NULL
-      AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
-    ORDER BY sehir
-  `;
-  const distSql = `
-    SELECT TOP 200 d.LNGKOD AS lngKod, d.TXTAD AS ad
-    FROM dbo.TBLDIST AS d
-    WHERE d.BYTDURUM = 0
-      AND d.TXTAD IS NOT NULL
-      AND LTRIM(RTRIM(d.TXTAD)) <> ''
-    ORDER BY ad
-  `;
-
-  const [citiesRes, distsRes] = await Promise.all([
-    runReadOnly(citiesSql, { limit: 200, timeoutMs: 15_000 }),
-    runReadOnly(distSql, { limit: 200, timeoutMs: 15_000 }),
-  ]);
-
-  return {
-    cities: citiesRes.rows
-      .map((r) => String(r.sehir ?? ""))
-      .filter((s) => s.length > 0),
-    distributors: distsRes.rows.map((r) => ({
-      lngKod: Number(r.lngKod),
-      ad: String(r.ad),
-    })),
-  };
-}
-
-/**
- * Single-customer revenue lookup — runs only when the user clicks a
- * marker. Filters by LNGMUSTERIKOD only; the distributor field on
- * TBLMUSTERI doesn't always match the LNGDISTKOD on each invoice
- * (a customer can transact across distributors), so locking on it
- * was hiding real activity. The /* distKod arg stays in the API for
- * back-compat but is ignored in the SQL.
+ * Single-customer revenue lookup — the one function on the map path
+ * that still goes to MSSQL, because per-click sales numbers are too
+ * dynamic to mirror cheaply. Indexed seek on LNGMUSTERIKOD; sub-second.
  */
 export async function getCustomerSales(
   musteriKod: number,

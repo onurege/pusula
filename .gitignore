@@ -9,6 +9,11 @@ data/schema-v2.json
 data/schema-v2.enriched.json
 data/vectors/
 
+# Local SQLite mirror — populated by /api/map/sync, regenerable from MSSQL
+data/local.sqlite
+data/local.sqlite-shm
+data/local.sqlite-wal
+
 # Reports are local state for now (will become committed canonical
 # reports once we promote them; until then they are user/session output).
 data/reports/

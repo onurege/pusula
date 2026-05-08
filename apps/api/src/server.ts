@@ -12,6 +12,7 @@ import {
   getMapFacets,
   getRadarDefinition,
   getReport,
+  getSyncStatus,
   listMapCustomers,
   listRadarDefinitions,
   listReports,
@@ -22,6 +23,7 @@ import {
   runReadOnly,
   runReport,
   saveReport,
+  syncMapData,
 } from "@enroute/core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -253,18 +255,9 @@ app.post("/api/radars/:id/explain", async (c) => {
   }
 });
 
-// In-memory cache for the two read-mostly map endpoints. Facets change
-// rarely (cities + distributors) so 30 minutes is generous; customer
-// lists drift faster with new approvals so 5 minutes. Both honor
-// ?refresh=1 to bypass the cache for manual reloads.
-type MapCustomersResp = Awaited<ReturnType<typeof listMapCustomers>>;
-type MapFacetsResp = Awaited<ReturnType<typeof getMapFacets>>;
-
-const CUSTOMERS_TTL_MS = 5 * 60 * 1000;
-const FACETS_TTL_MS = 30 * 60 * 1000;
-
-const customersCache = new Map<string, { ts: number; data: MapCustomersResp }>();
-let facetsCache: { ts: number; data: MapFacetsResp } | null = null;
+// All map reads go through the SQLite mirror — no in-memory cache layer
+// needed, because the mirror IS the cache. The mirror only refreshes
+// when /api/map/sync is called (via the "Verileri yenile" button).
 
 app.get("/api/map/customers", async (c) => {
   try {
@@ -278,35 +271,36 @@ app.get("/api/map/customers", async (c) => {
         : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
-    const refresh = c.req.query("refresh") === "1";
 
-    const key = JSON.stringify({ sehir, distKod, salesFilter, limit });
-    if (!refresh) {
-      const hit = customersCache.get(key);
-      if (hit && Date.now() - hit.ts < CUSTOMERS_TTL_MS) {
-        return c.json({ count: hit.data.length, customers: hit.data, cached: true });
-      }
-    }
-
-    const customers = await listMapCustomers({ sehir, distKod, salesFilter, limit });
-    customersCache.set(key, { ts: Date.now(), data: customers });
+    const customers = listMapCustomers(REPO_ROOT, { sehir, distKod, salesFilter, limit });
     return c.json({ count: customers.length, customers });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
 });
 
-app.get("/api/map/facets", async (c) => {
+app.get("/api/map/facets", (c) => {
   try {
-    const refresh = c.req.query("refresh") === "1";
-    if (!refresh && facetsCache && Date.now() - facetsCache.ts < FACETS_TTL_MS) {
-      return c.json({ ...facetsCache.data, cached: true });
-    }
-    const facets = await getMapFacets();
-    facetsCache = { ts: Date.now(), data: facets };
-    return c.json(facets);
+    return c.json(getMapFacets(REPO_ROOT));
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.get("/api/map/sync-status", (c) => {
+  try {
+    return c.json(getSyncStatus(REPO_ROOT));
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.post("/api/map/sync", async (c) => {
+  try {
+    const status = await syncMapData(REPO_ROOT);
+    return c.json(status);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
   }
 });
 

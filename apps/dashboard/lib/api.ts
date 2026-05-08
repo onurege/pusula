@@ -223,6 +223,22 @@ export async function getMapFacets(): Promise<MapFacets> {
   return request("/api/map/facets");
 }
 
+export type MapSyncStatus = {
+  lastSyncAt: string | null;
+  durationMs: number;
+  customerCount: number;
+  cityCount: number;
+  distCount: number;
+};
+
+export async function getMapSyncStatus(): Promise<MapSyncStatus> {
+  return request("/api/map/sync-status");
+}
+
+export async function triggerMapSync(): Promise<MapSyncStatus> {
+  return request("/api/map/sync", { method: "POST" });
+}
+
 export type RadarRun = {
   id: string;
   title: string;

@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { getMapFacets, listMapCustomers } from "@/lib/api";
+import { getMapFacets, getMapSyncStatus, listMapCustomers } from "@/lib/api";
 import { MapFilters } from "@/components/map-filters";
 import { SalesMap } from "@/components/sales-map-client";
+import { SyncButton } from "@/components/sync-button";
 
 export const dynamic = "force-dynamic";
 
@@ -20,9 +21,10 @@ export default async function MapPage({
       ? salesFilterRaw
       : undefined;
 
-  const [customersResult, facetsResult] = await Promise.allSettled([
+  const [customersResult, facetsResult, syncResult] = await Promise.allSettled([
     listMapCustomers({ sehir, distKod, salesFilter, limit: 5000 }),
     getMapFacets(),
+    getMapSyncStatus(),
   ]);
 
   const data =
@@ -37,12 +39,14 @@ export default async function MapPage({
     facetsResult.status === "fulfilled"
       ? facetsResult.value
       : { cities: [], distributors: [] };
+  const sync =
+    syncResult.status === "fulfilled"
+      ? syncResult.value
+      : { lastSyncAt: null, durationMs: 0, customerCount: 0, cityCount: 0, distCount: 0 };
+
+  const neverSynced = sync.lastSyncAt === null && data.customers.length === 0;
 
   return (
-    // Break out of the global <main> container's max-width + padding so
-    // the map fills everything below the navbar — map-check's full-bleed
-    // layout. fixed inset-0 top-12 starts right under the 48px sticky
-    // header.
     <div className="fixed inset-0 top-12 flex flex-col bg-bg">
       <header className="bg-surface border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
         <div className="flex items-baseline gap-3 flex-wrap">
@@ -52,10 +56,7 @@ export default async function MapPage({
             Onaylı müşteriler · noktaya tıkla → son 30 gün ciro + AI analizi
           </span>
         </div>
-        <div className="text-xs text-muted tabular-nums">
-          {data.count.toLocaleString("tr-TR")} müşteri
-          {sehir && <span className="ml-2">· {sehir}</span>}
-        </div>
+        <SyncButton initial={sync} />
       </header>
 
       <div className="flex-1 min-h-0 flex">
@@ -67,6 +68,17 @@ export default async function MapPage({
               <div className="rounded-lg border border-bad/40 bg-bad/10 px-5 py-4 text-sm max-w-lg">
                 <div className="font-medium text-bad mb-1">Harita verisi alınamadı</div>
                 <code className="text-xs text-muted">{apiError}</code>
+              </div>
+            </div>
+          ) : neverSynced ? (
+            <div className="absolute inset-0 flex items-center justify-center p-8">
+              <div className="rounded-lg border border-border bg-surface-2 px-5 py-4 text-sm max-w-md text-center">
+                <div className="font-medium text-fg mb-1">Yerel veritabanı boş</div>
+                <div className="text-muted text-xs">
+                  Henüz hiç senkronizasyon yapılmamış. Sağ üstteki{" "}
+                  <span className="text-fg">Verileri yenile</span> butonuna tıklayarak
+                  PERNOD'dan müşteri listesini SQLite'a kopyalayın.
+                </div>
               </div>
             </div>
           ) : data.customers.length === 0 ? (
