@@ -124,19 +124,51 @@ export type RadarChartSpec =
   | { kind: "line"; xKey: string; yKey: string }
   | { kind: "pie"; nameKey: string; valueKey: string };
 
+export type AnomalyItem = {
+  id: string;
+  label: string;
+  current: number;
+  baseline: number;
+  deltaPct: number;
+  unit?: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+  explainPrompt: string;
+};
+
 export type RadarBlockResult = {
   id: string;
   title: string;
   description?: string;
-  display: "table" | "chart" | "kpi-row";
+  display: "table" | "chart" | "kpi-row" | "anomalies";
   chart?: RadarChartSpec;
   rows: Record<string, unknown>[];
   rowCount: number;
   truncated: boolean;
   durationMs: number;
   kpis?: RadarKpi[];
+  anomalies?: AnomalyItem[];
+  narrative?: string;
   error?: string;
 };
+
+export type ExplainResponse = {
+  question: string;
+  brief?: string;
+  sql?: string;
+  rowCount: number;
+  sampleRows: Record<string, unknown>[];
+  steps: unknown[];
+};
+
+export async function explainOnRadar(
+  radarId: string,
+  question: string,
+): Promise<ExplainResponse> {
+  return request<ExplainResponse>(`/api/radars/${encodeURIComponent(radarId)}/explain`, {
+    method: "POST",
+    body: JSON.stringify({ question }),
+  });
+}
 
 export type RadarRun = {
   id: string;

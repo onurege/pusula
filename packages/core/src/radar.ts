@@ -35,6 +35,25 @@ export type ChartSpec =
       valueKey: string;
     };
 
+export type AnomalySpec = {
+  /** Column with the entity name (e.g. distribütör adı). */
+  labelColumn: string;
+  /** Column with the current-period numeric value. */
+  currentColumn: string;
+  /** Column with the baseline / expected value. */
+  baselineColumn: string;
+  /** Column with the % change vs baseline (signed). */
+  deltaPctColumn: string;
+  /** Unit for current/baseline (e.g. "₺"). */
+  unit?: string;
+  /** Drop rows with absolute %change below this. */
+  minAbsDeltaPct?: number;
+  /** Cap how many anomalies the UI shows. */
+  topN?: number;
+  /** Threshold in absolute %change for tone classification. */
+  thresholds?: { warn?: number; bad?: number };
+};
+
 export type RadarBlock = {
   id: string;
   title: string;
@@ -43,7 +62,7 @@ export type RadarBlock = {
   /** Parameterized SQL — use @from, @to, etc. */
   sql: string;
   /** How the dashboard should render the result (table is the default). */
-  display?: "table" | "chart" | "kpi-row";
+  display?: "table" | "chart" | "kpi-row" | "anomalies";
   chart?: ChartSpec;
   /** For kpi-row: how to project rows into Kpi[]. */
   kpiMapping?: Array<{
@@ -55,6 +74,12 @@ export type RadarBlock = {
     /** Tone rule: thresholds in target units. */
     tone?: { good?: number; warn?: number; bad?: number; direction?: "asc" | "desc" };
   }>;
+  /** For display=anomalies: how to interpret rows. */
+  anomalySpec?: AnomalySpec;
+  /** When true, generate a 1-2 sentence Turkish "Smart Narrative" paragraph
+   *  for this block from its rows. Defaults to true for chart and table
+   *  blocks; KPI rows and anomaly blocks already speak for themselves.  */
+  narrative?: boolean;
 };
 
 export type RadarDefinition = {
@@ -69,17 +94,32 @@ export type RadarDefinition = {
   briefPrompt?: string;
 };
 
+export type AnomalyItem = {
+  id: string;
+  label: string;
+  current: number;
+  baseline: number;
+  deltaPct: number;
+  unit?: string;
+  tone: RadarTone;
+  /** Self-contained question seed for click-to-explain drill-down. */
+  explainPrompt: string;
+};
+
 export type RadarBlockResult = {
   id: string;
   title: string;
   description?: string;
-  display: "table" | "chart" | "kpi-row";
+  display: "table" | "chart" | "kpi-row" | "anomalies";
   chart?: ChartSpec;
   rows: Record<string, unknown>[];
   rowCount: number;
   truncated: boolean;
   durationMs: number;
   kpis?: Kpi[];
+  anomalies?: AnomalyItem[];
+  /** 1-2 sentence Turkish smart-narrative paragraph for chart/table blocks. */
+  narrative?: string;
   error?: string;
 };
 
@@ -162,6 +202,99 @@ function projectKpis(
   });
 }
 
+function projectAnomalies(
+  block: RadarBlock,
+  rows: Record<string, unknown>[],
+): AnomalyItem[] {
+  if (!block.anomalySpec) return [];
+  const spec = block.anomalySpec;
+  const minAbs = spec.minAbsDeltaPct ?? 0;
+  const topN = spec.topN ?? 5;
+  const thresholdWarn = spec.thresholds?.warn ?? 10;
+  const thresholdBad = spec.thresholds?.bad ?? 25;
+
+  const items: AnomalyItem[] = [];
+  for (const r of rows) {
+    const label = String(r[spec.labelColumn] ?? "—");
+    const current = numericOr(r[spec.currentColumn], 0);
+    const baseline = numericOr(r[spec.baselineColumn], 0);
+    const deltaPct = numericOr(r[spec.deltaPctColumn], 0);
+    if (Math.abs(deltaPct) < minAbs) continue;
+
+    let tone: RadarTone = "neutral";
+    if (Math.abs(deltaPct) >= thresholdBad) tone = deltaPct < 0 ? "bad" : "good";
+    else if (Math.abs(deltaPct) >= thresholdWarn)
+      tone = deltaPct < 0 ? "warn" : "good";
+
+    items.push({
+      id: `${block.id}:${label}`,
+      label,
+      current,
+      baseline,
+      deltaPct,
+      unit: spec.unit,
+      tone,
+      explainPrompt: `${label}: son dönem değeri ${formatTrNumber(current)}${spec.unit ? " " + spec.unit : ""}, beklenen ${formatTrNumber(baseline)}${spec.unit ? " " + spec.unit : ""} (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%). Bu değişimin arkasındaki kanal/marka/ürün/müşteri kırılımını incele ve 2-3 cümlelik Türkçe açıklama döndür.`,
+    });
+  }
+  items.sort((a, b) => Math.abs(b.deltaPct) - Math.abs(a.deltaPct));
+  return items.slice(0, topN);
+}
+
+function numericOr(v: unknown, fallback: number): number {
+  if (typeof v === "number" && !isNaN(v)) return v;
+  if (typeof v === "string" && v !== "" && !isNaN(Number(v))) return Number(v);
+  return fallback;
+}
+
+function formatTrNumber(n: number): string {
+  if (Math.abs(n) >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (Math.abs(n) >= 10_000) return (n / 1_000).toFixed(0) + "k";
+  return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
+}
+
+const NARRATIVE_SYSTEM = `
+Sen Türkçe konuşan bir veri analisti asistanısın. Sana bir radar bloğunun başlığı,
+açıklaması ve sonuç satırları verilecek. **Tek bir** 1-2 cümlelik Türkçe paragraf
+üret. Kurallar:
+- En üstteki 1-2 satırı somut adlarıyla zikret (TXTAD/TXTUNVAN/ad sütunu).
+- Sayıları binlik ayraçla ve varsa para birimiyle yaz; çok büyükse 12,4M gibi kısalt.
+- "Listenin başında X var, ikinci sıradaki Y'nin neredeyse iki katı" gibi
+  yorumlayıcı bir bakış kat.
+- Veri boş veya 1-2 satırsa çok kısa, dürüst bir cümle yaz.
+- SQL veya teknik jargon yok. Maksimum 280 karakter.
+`.trim();
+
+async function generateBlockNarrative(
+  block: RadarBlock,
+  result: { rows: Record<string, unknown>[]; rowCount: number },
+): Promise<string | undefined> {
+  if (block.narrative === false) return undefined;
+  if (block.display === "kpi-row" || block.display === "anomalies") return undefined;
+  if (result.rows.length === 0) return undefined;
+  const rowsText = result.rows
+    .slice(0, 8)
+    .map((r) => Object.entries(r).map(([k, v]) => `${k}=${formatVal(v)}`).join(", "))
+    .join("\n");
+  try {
+    const text = await generate(
+      NARRATIVE_SYSTEM,
+      `Blok: ${block.title}\n${block.description ? `Açıklama: ${block.description}\n` : ""}Toplam satır: ${result.rowCount}\n\nSatırlar:\n${rowsText}\n\nKısa Türkçe paragraf:`,
+      { temperature: 0.25, maxOutputTokens: 220 },
+    );
+    return text.trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function formatVal(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "number") return v.toLocaleString("tr-TR");
+  return String(v);
+}
+
 export async function runRadarBlock(
   block: RadarBlock,
   params: Record<string, string | number>,
@@ -184,6 +317,8 @@ export async function runRadarBlock(
       durationMs,
     };
     if (display === "kpi-row") out.kpis = projectKpis(block, result.rows);
+    if (display === "anomalies") out.anomalies = projectAnomalies(block, result.rows);
+    out.narrative = await generateBlockNarrative(block, result);
     return out;
   } catch (err) {
     return {

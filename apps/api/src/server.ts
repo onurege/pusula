@@ -226,6 +226,30 @@ app.post("/api/radars/:id/run", async (c) => {
   }
 });
 
+// Click-to-explain: a radar anomaly (or any chart cell) hands its self-contained
+// "explainPrompt" to the same agent loop that powers /reports/generate. The
+// agent retrieves schema, runs SQL, and returns a Turkish 2-3 sentence cause.
+app.post("/api/radars/:id/explain", async (c) => {
+  try {
+    const body = (await c.req.json()) as { question?: string };
+    const question = body.question?.trim();
+    if (!question) {
+      return c.json({ error: "question required" }, 400);
+    }
+    const agentRun = await runAgent(question);
+    return c.json({
+      question,
+      brief: agentRun.final?.brief,
+      sql: agentRun.final?.sql,
+      rowCount: agentRun.rowCount,
+      sampleRows: agentRun.rows.slice(0, 8),
+      steps: agentRun.steps,
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
 const PORT = parseInt(process.env.API_PORT ?? "8080", 10);
 serve({ fetch: app.fetch, port: PORT });
 console.log(`[enroute-api] listening on http://localhost:${PORT}`);

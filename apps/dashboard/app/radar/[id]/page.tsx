@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { runRadarApi } from "@/lib/api";
+import { AnomalyCallouts } from "@/components/anomaly-callouts";
 import { KpiCard } from "@/components/kpi-card";
 import { RadarChart } from "@/components/radar-chart-client";
 import { ResultTable } from "@/components/result-table";
@@ -17,7 +18,6 @@ export default async function RadarPage({
   const { id } = await params;
   const sp = await searchParams;
 
-  // Pull simple scalar params from the URL — days, topN, region etc.
   const userParams: Record<string, string | number> = {};
   for (const [k, v] of Object.entries(sp ?? {})) {
     if (typeof v === "string" && v !== "") {
@@ -35,6 +35,7 @@ export default async function RadarPage({
 
   if (!run) notFound();
 
+  const anomalyBlock = run.blocks.find((b) => b.display === "anomalies");
   const kpiBlock = run.blocks.find((b) => b.display === "kpi-row");
   const chartBlocks = run.blocks.filter((b) => b.display === "chart");
   const tableBlocks = run.blocks.filter((b) => b.display === "table");
@@ -43,7 +44,7 @@ export default async function RadarPage({
     <div className="space-y-8">
       <header className="flex items-end justify-between">
         <div>
-          <Link href="/" className="text-sm text-muted hover:text-fg">← Tüm raporlar</Link>
+          <Link href="/" className="text-sm text-muted hover:text-fg">← Tüm radarlar</Link>
           <h1 className="text-2xl font-semibold tracking-tight mt-2">{run.title}</h1>
           <p className="text-muted text-sm mt-1 max-w-2xl">{run.description}</p>
         </div>
@@ -52,6 +53,32 @@ export default async function RadarPage({
           <div>parametreler: {Object.entries(run.params).map(([k, v]) => `${k}=${v}`).join(", ")}</div>
         </div>
       </header>
+
+      {anomalyBlock && (
+        <section>
+          <div className="flex items-baseline justify-between mb-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-bad font-semibold">
+                Bugün dikkat çekenler
+              </div>
+              <h2 className="text-lg font-medium tracking-tight mt-1">{anomalyBlock.title}</h2>
+              {anomalyBlock.description && (
+                <p className="text-muted text-sm mt-0.5">{anomalyBlock.description}</p>
+              )}
+            </div>
+            <span className="text-xs text-muted">
+              {anomalyBlock.anomalies?.length ?? 0} sapma · {anomalyBlock.durationMs}ms
+            </span>
+          </div>
+          {anomalyBlock.error ? (
+            <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
+              <code className="text-xs">{anomalyBlock.error}</code>
+            </div>
+          ) : (
+            <AnomalyCallouts radarId={run.id} items={anomalyBlock.anomalies ?? []} />
+          )}
+        </section>
+      )}
 
       {kpiBlock?.kpis && kpiBlock.kpis.length > 0 && (
         <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -98,6 +125,11 @@ export default async function RadarPage({
               <RadarChart spec={b.chart} rows={b.rows} />
             </div>
           ) : null}
+          {b.narrative && (
+            <p className="mt-3 text-sm leading-relaxed text-fg/90 max-w-3xl">
+              {b.narrative}
+            </p>
+          )}
           {b.rows.length > 0 && (
             <details className="mt-3">
               <summary className="text-xs text-muted cursor-pointer hover:text-fg">
@@ -126,6 +158,11 @@ export default async function RadarPage({
             </div>
           ) : (
             <ResultTable rows={b.rows} max={50} />
+          )}
+          {b.narrative && (
+            <p className="mt-3 text-sm leading-relaxed text-fg/90 max-w-3xl">
+              {b.narrative}
+            </p>
           )}
         </section>
       ))}
