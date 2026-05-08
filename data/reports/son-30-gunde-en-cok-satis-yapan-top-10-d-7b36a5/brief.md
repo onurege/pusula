@@ -1,0 +1,1 @@
+Son 30 günde en çok satış yapan ilk 10 distribütörü belirledik. Bu veriler, hangi distribütörlerin performansının en yüksek olduğunu gösteriyor. Bu bilgiyi kullanarak, başarılı distribütörlerle işbirliğinizi güçlendirebilir veya daha az performans gösterenlerle ilgili stratejiler geliştirebilirsiniz.

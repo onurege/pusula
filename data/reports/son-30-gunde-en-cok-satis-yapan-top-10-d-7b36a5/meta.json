@@ -1,0 +1,19 @@
+{
+  "id": "son-30-gunde-en-cok-satis-yapan-top-10-d-7b36a5",
+  "name": "Son 30 günde en çok satış yapan top 10 distribütör",
+  "userPrompt": "Son 30 günde en çok satış yapan top 10 distribütör",
+  "createdAt": "2026-05-08T06:40:50.939Z",
+  "updatedAt": "2026-05-08T06:40:50.939Z",
+  "retrievedTables": [
+    "dbo.TBLMSDSATISTEMSILCISIBIRLESTIRMEDETAY",
+    "dbo.TBLSATISONERISITANIMLAMADETAY",
+    "dbo.TBLSATISONERISITANIMLAMAKRITERLER",
+    "dbo.TBLCDGECMISSATISKAYITBASLIK",
+    "dbo.TBLCDGECMISSATISKAYITDETAY",
+    "dbo.TBLGECENDONEMEAITSATISHESAPLARBASLIK",
+    "dbo.TBLGECENDONEMEAITSATISHESAPLARDETAY",
+    "dbo.TBLMSDSATISTEMSILCISIBIRLESTIRME",
+    "dbo.TBLORTALAMASATISGUNDETAY",
+    "dbo.TBLSATISONERISITANIMLAMABASLIK"
+  ]
+}
