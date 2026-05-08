@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { RadarBlockResult } from "@/lib/api";
 import { runRadarApi } from "@/lib/api";
 import { AnomalyCallouts } from "@/components/anomaly-callouts";
 import { KpiCard } from "@/components/kpi-card";
@@ -39,127 +40,108 @@ export default async function RadarPage({
   const chartBlocks = run.blocks.filter((b) => b.display === "chart");
   const tableBlocks = run.blocks.filter((b) => b.display === "table");
 
+  // Chart pairing — first two side-by-side, rest stacked.
+  const [chartA, chartB, ...chartRest] = chartBlocks;
+
   return (
-    <div className="space-y-10">
-      {/* Header — kompakt, scanable */}
-      <header className="flex items-end justify-between flex-wrap gap-3">
-        <div>
+    <div className="space-y-4">
+      {/* Header — single row, kompakt, scanable */}
+      <header className="flex items-baseline justify-between flex-wrap gap-3">
+        <div className="flex items-baseline gap-3 flex-wrap">
           <Link href="/" className="text-xs text-muted hover:text-fg">← Tüm radarlar</Link>
-          <h1 className="text-3xl font-semibold tracking-tight mt-1">{run.title}</h1>
+          <h1 className="text-xl font-semibold tracking-tight">{run.title}</h1>
           {run.description && (
-            <p className="text-muted text-sm mt-1 max-w-2xl">{run.description}</p>
+            <span className="text-muted text-xs hidden lg:inline">· {run.description}</span>
           )}
         </div>
-        <div className="text-[11px] text-muted text-right tabular-nums">
-          <div>{new Date(run.generatedAt).toLocaleString("tr-TR")}</div>
-          <div className="opacity-70">
+        <div className="text-[11px] text-muted tabular-nums flex items-center gap-3">
+          <span>{new Date(run.generatedAt).toLocaleString("tr-TR")}</span>
+          <span className="opacity-70">
             {Object.entries(run.params).map(([k, v]) => `${k}=${v}`).join(" · ")}
-          </div>
+          </span>
         </div>
       </header>
 
-      {/* Yönetici Brifingi — sayfanın en üstü, en görünür yer.
-          Her şeyden önce yönetici bunu okusun. */}
-      {run.brief && (
-        <section className="rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-7">
-          <div className="text-[11px] uppercase tracking-wider text-accent font-semibold mb-3">
-            Yönetici Brifingi · {new Date(run.generatedAt).toLocaleDateString("tr-TR", { weekday: "long", day: "2-digit", month: "long" })}
-          </div>
-          <div className="text-[15px] leading-relaxed whitespace-pre-wrap text-fg/95 max-w-4xl">
-            {run.brief}
-          </div>
-        </section>
+      {/* Above-the-fold bento — KPI grid + Brief + Anomalies tek viewport'ta */}
+      <div className="grid grid-cols-12 gap-4">
+        {/* KPI cards — 8 of 12, 3 yatay */}
+        {kpiBlock?.kpis && kpiBlock.kpis.length > 0 && (
+          <section className="col-span-12 lg:col-span-8 grid grid-cols-3 gap-3">
+            {kpiBlock.kpis.map((k) => (
+              <KpiCard
+                key={k.id}
+                label={k.label}
+                value={k.value}
+                unit={k.unit}
+                delta={k.delta}
+                tone={k.tone}
+                hint={k.hint}
+              />
+            ))}
+          </section>
+        )}
+
+        {/* Brief — 4 of 12, sağda, tüm yüksekliği KPI grid'iyle eşler */}
+        {run.brief && (
+          <section className="col-span-12 lg:col-span-4 rounded-xl border border-accent/40 bg-gradient-to-br from-accent/15 via-accent/5 to-transparent p-5 flex flex-col">
+            <div className="text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
+              Yönetici Brifingi · {new Date(run.generatedAt).toLocaleDateString("tr-TR", { day: "2-digit", month: "long" })}
+            </div>
+            <div className="text-[13px] leading-relaxed whitespace-pre-wrap text-fg/95 overflow-y-auto max-h-[260px] pr-1">
+              {run.brief}
+            </div>
+          </section>
+        )}
+
+        {/* Anomalies — full width, kompakt liste */}
+        {anomalyBlock && (
+          <section className="col-span-12">
+            <div className="flex items-baseline justify-between mb-2">
+              <div className="flex items-baseline gap-3">
+                <div className="text-[10px] uppercase tracking-wider text-bad font-semibold">
+                  Bugün dikkat çekenler
+                </div>
+                <span className="text-xs text-muted">
+                  {anomalyBlock.anomalies?.length ?? 0} sapma
+                </span>
+              </div>
+              <span className="text-[11px] text-muted tabular-nums">{anomalyBlock.durationMs}ms</span>
+            </div>
+            {anomalyBlock.error ? (
+              <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
+                <code className="text-xs">{anomalyBlock.error}</code>
+              </div>
+            ) : (
+              <AnomalyCallouts radarId={run.id} items={anomalyBlock.anomalies ?? []} />
+            )}
+          </section>
+        )}
+      </div>
+
+      {/* Charts — 2 col yan yana */}
+      {(chartA || chartB) && (
+        <div className="grid grid-cols-12 gap-4">
+          {chartA && <ChartSection block={chartA} colSpan="lg:col-span-7" />}
+          {chartB && <ChartSection block={chartB} colSpan="lg:col-span-5" />}
+        </div>
       )}
 
-      {/* KPI grid — büyük, dominant, kompakt formatlı */}
-      {kpiBlock?.kpis && kpiBlock.kpis.length > 0 && (
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {kpiBlock.kpis.map((k) => (
-            <KpiCard
-              key={k.id}
-              label={k.label}
-              value={k.value}
-              unit={k.unit}
-              delta={k.delta}
-              tone={k.tone}
-              hint={k.hint}
-            />
+      {/* Geri kalan chart'lar — stacked */}
+      {chartRest.length > 0 && (
+        <div className="grid grid-cols-12 gap-4">
+          {chartRest.map((b) => (
+            <ChartSection key={b.id} block={b} colSpan="lg:col-span-12" />
           ))}
-        </section>
+        </div>
       )}
 
-      {/* Anomaly section — tone-driven, drama edinen tipografi */}
-      {anomalyBlock && (
-        <section>
-          <div className="flex items-baseline justify-between mb-4">
-            <div>
-              <div className="text-[11px] uppercase tracking-wider text-bad font-semibold">
-                Bugün dikkat çekenler
-              </div>
-              <h2 className="text-xl font-semibold tracking-tight mt-1">{anomalyBlock.title}</h2>
-              {anomalyBlock.description && (
-                <p className="text-muted text-sm mt-0.5 max-w-2xl">{anomalyBlock.description}</p>
-              )}
-            </div>
-            <span className="text-xs text-muted tabular-nums">
-              {anomalyBlock.anomalies?.length ?? 0} sapma · {anomalyBlock.durationMs}ms
-            </span>
-          </div>
-          {anomalyBlock.error ? (
-            <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
-              <code className="text-xs">{anomalyBlock.error}</code>
-            </div>
-          ) : (
-            <AnomalyCallouts radarId={run.id} items={anomalyBlock.anomalies ?? []} />
-          )}
-        </section>
-      )}
-
-      {/* Charts — narrative açıkça çağrı yapan sub-paragraf */}
-      {chartBlocks.map((b) => (
-        <section key={b.id} className="space-y-3">
-          <div className="flex items-baseline justify-between flex-wrap gap-2">
-            <div>
-              <h2 className="text-lg font-medium tracking-tight">{b.title}</h2>
-              {b.description && <p className="text-muted text-sm mt-0.5">{b.description}</p>}
-            </div>
-            <span className="text-[11px] text-muted tabular-nums">
-              {b.rowCount} satır · {b.durationMs}ms
-            </span>
-          </div>
-          {b.error ? (
-            <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
-              <code className="text-xs">{b.error}</code>
-            </div>
-          ) : b.chart ? (
-            <div className="rounded-xl border border-border bg-surface p-4">
-              <RadarChart spec={b.chart} rows={b.rows} />
-            </div>
-          ) : null}
-          {b.narrative && (
-            <p className="text-sm leading-relaxed text-fg/85 max-w-3xl border-l-2 border-accent/40 pl-4">
-              {b.narrative}
-            </p>
-          )}
-          {b.rows.length > 0 && (
-            <details>
-              <summary className="text-xs text-muted cursor-pointer hover:text-fg">
-                Ham veri
-              </summary>
-              <div className="mt-2">
-                <ResultTable rows={b.rows} max={20} />
-              </div>
-            </details>
-          )}
-        </section>
-      ))}
-
+      {/* Table'lar — alt bölüm */}
       {tableBlocks.map((b) => (
-        <section key={b.id} className="space-y-3">
+        <section key={b.id} className="space-y-2">
           <div className="flex items-baseline justify-between flex-wrap gap-2">
             <div>
-              <h2 className="text-lg font-medium tracking-tight">{b.title}</h2>
-              {b.description && <p className="text-muted text-sm mt-0.5">{b.description}</p>}
+              <h2 className="text-sm font-medium tracking-tight">{b.title}</h2>
+              {b.description && <p className="text-muted text-xs mt-0.5">{b.description}</p>}
             </div>
             <span className="text-[11px] text-muted tabular-nums">{b.rowCount} satır · {b.durationMs}ms</span>
           </div>
@@ -171,12 +153,50 @@ export default async function RadarPage({
             <ResultTable rows={b.rows} max={50} />
           )}
           {b.narrative && (
-            <p className="text-sm leading-relaxed text-fg/85 max-w-3xl border-l-2 border-accent/40 pl-4">
+            <p className="text-xs leading-relaxed text-fg/85 max-w-3xl border-l-2 border-accent/40 pl-3 py-1">
               {b.narrative}
             </p>
           )}
         </section>
       ))}
     </div>
+  );
+}
+
+function ChartSection({
+  block,
+  colSpan,
+}: {
+  block: RadarBlockResult;
+  colSpan: string;
+}) {
+  return (
+    <section className={`col-span-12 ${colSpan} space-y-2`}>
+      <div className="flex items-baseline justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-sm font-medium tracking-tight">{block.title}</h2>
+          {block.description && (
+            <p className="text-muted text-xs mt-0.5 line-clamp-1">{block.description}</p>
+          )}
+        </div>
+        <span className="text-[11px] text-muted tabular-nums">
+          {block.rowCount} satır · {block.durationMs}ms
+        </span>
+      </div>
+      {block.error ? (
+        <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
+          <code className="text-xs">{block.error}</code>
+        </div>
+      ) : block.chart ? (
+        <div className="rounded-xl border border-border bg-surface p-3">
+          <RadarChart spec={block.chart} rows={block.rows} />
+        </div>
+      ) : null}
+      {block.narrative && (
+        <p className="text-xs leading-relaxed text-fg/85 border-l-2 border-accent/40 pl-3 py-1">
+          {block.narrative}
+        </p>
+      )}
+    </section>
   );
 }

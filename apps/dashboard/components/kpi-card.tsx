@@ -33,20 +33,22 @@ export function KpiCard({
 }) {
   const formatted = smartFormat(value, unit);
   return (
-    <div className={`rounded-xl border p-6 ${TONE_RING[tone]}`}>
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted font-medium">
+    <div className={`rounded-xl border p-4 ${TONE_RING[tone]} flex flex-col justify-between min-h-[110px]`}>
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted font-medium">
         <span className={`size-1.5 rounded-full ${TONE_DOT[tone]}`} />
         {label}
       </div>
-      <div className="text-4xl md:text-5xl font-semibold tracking-tight mt-3 tabular-nums leading-none">
+      <div className="text-[28px] xl:text-[32px] font-semibold tracking-tight tabular-nums leading-none mt-2">
         {formatted}
       </div>
-      {delta !== undefined && (
-        <div className={`text-xs mt-3 tabular-nums ${delta >= 0 ? "text-good" : "text-bad"}`}>
-          {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toLocaleString("tr-TR")}
-        </div>
-      )}
-      {hint && <div className="text-xs text-muted mt-2">{hint}</div>}
+      <div className="mt-1.5 flex items-center gap-2 text-[11px] tabular-nums">
+        {delta !== undefined && (
+          <span className={delta >= 0 ? "text-good" : "text-bad"}>
+            {delta >= 0 ? "▲" : "▼"} {Math.abs(delta).toLocaleString("tr-TR")}
+          </span>
+        )}
+        {hint && <span className="text-muted">{hint}</span>}
+      </div>
     </div>
   );
 }

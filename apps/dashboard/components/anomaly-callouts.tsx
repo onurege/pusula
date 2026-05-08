@@ -7,11 +7,11 @@ import { formatCompact, formatPct } from "@/lib/format";
 
 type Tone = AnomalyItem["tone"];
 
-const TONE_BORDER: Record<Tone, string> = {
-  good: "border-good/40 bg-good/5",
-  warn: "border-accent/40 bg-accent/8",
-  bad: "border-bad/50 bg-bad/8",
-  neutral: "border-border bg-surface",
+const TONE_BAR: Record<Tone, string> = {
+  good: "bg-good",
+  warn: "bg-accent",
+  bad: "bg-bad",
+  neutral: "bg-muted",
 };
 
 const TONE_TEXT: Record<Tone, string> = {
@@ -21,11 +21,11 @@ const TONE_TEXT: Record<Tone, string> = {
   neutral: "text-muted",
 };
 
-const TONE_BAR: Record<Tone, string> = {
-  good: "bg-good",
-  warn: "bg-accent",
-  bad: "bg-bad",
-  neutral: "bg-muted",
+const TONE_BG_HOVER: Record<Tone, string> = {
+  good: "hover:bg-good/8",
+  warn: "hover:bg-accent/8",
+  bad: "hover:bg-bad/8",
+  neutral: "hover:bg-surface-2",
 };
 
 type ExplainState =
@@ -46,10 +46,10 @@ export function AnomalyCallouts({
 
   if (!items || items.length === 0) {
     return (
-      <div className="rounded-xl border border-good/30 bg-good/5 p-5 text-sm">
+      <div className="rounded-lg border border-good/30 bg-good/5 px-4 py-3 text-sm">
         <span className="font-medium text-good">Sapma yok.</span>{" "}
         <span className="text-muted">
-          Son dönem önceki haftalık ortalamayla uyumlu — temiz tablo.
+          Son dönem önceki haftalık ortalamayla uyumlu.
         </span>
       </div>
     );
@@ -73,84 +73,78 @@ export function AnomalyCallouts({
   }
 
   return (
-    <div className="space-y-3">
-      {items.map((it) => {
-        const isOpen = openId === it.id;
-        const state = explainState[it.id];
-        const arrow = it.deltaPct >= 0 ? "▲" : "▼";
-        return (
-          <div
-            key={it.id}
-            className={`relative rounded-xl border ${TONE_BORDER[it.tone]} overflow-hidden`}
-          >
-            <div className={`absolute left-0 top-0 bottom-0 w-1 ${TONE_BAR[it.tone]}`} />
-            <div className="pl-6 pr-5 py-5">
-              <div className="flex items-baseline justify-between gap-4 flex-wrap">
-                <div className="font-semibold text-base truncate">{it.label}</div>
-                <div className={`text-2xl md:text-3xl font-semibold tabular-nums leading-none ${TONE_TEXT[it.tone]}`}>
+    <div className="rounded-xl border border-border bg-surface overflow-hidden">
+      <ul className="divide-y divide-border">
+        {items.map((it) => {
+          const isOpen = openId === it.id;
+          const state = explainState[it.id];
+          const arrow = it.deltaPct >= 0 ? "▲" : "▼";
+          return (
+            <li key={it.id}>
+              <button
+                type="button"
+                onClick={() => (isOpen ? setOpenId(null) : explain(it))}
+                className={`w-full grid grid-cols-[4px_1fr_auto_auto] items-center gap-4 text-left transition ${TONE_BG_HOVER[it.tone]}`}
+              >
+                <div className={`${TONE_BAR[it.tone]} h-full min-h-[52px]`} />
+                <div className="py-3 min-w-0">
+                  <div className="font-medium truncate">{it.label}</div>
+                  <div className="text-xs text-muted mt-0.5 tabular-nums">
+                    Son dönem{" "}
+                    <span className="text-fg">{formatCompact(it.current, it.unit)}</span>
+                    <span className="mx-1.5 text-muted/50">·</span>
+                    beklenen{" "}
+                    <span className="text-fg">{formatCompact(it.baseline, it.unit)}</span>
+                  </div>
+                </div>
+                <div className={`text-xl font-semibold tabular-nums ${TONE_TEXT[it.tone]} pr-1`}>
                   {arrow} {formatPct(it.deltaPct, { signed: false })}
                 </div>
-              </div>
-              <div className="text-sm text-muted mt-2 tabular-nums">
-                Son dönem{" "}
-                <span className="text-fg font-medium">
-                  {formatCompact(it.current, it.unit)}
+                <span className="text-[11px] text-muted pr-4 whitespace-nowrap">
+                  {isOpen ? "Kapat ▴" : "Neden? ▾"}
                 </span>
-                <span className="mx-2 text-muted/50">·</span>
-                beklenen{" "}
-                <span className="text-fg font-medium">
-                  {formatCompact(it.baseline, it.unit)}
-                </span>
-              </div>
-
-              <div className="mt-4 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => (isOpen ? setOpenId(null) : explain(it))}
-                  className={`text-xs px-3 py-1.5 rounded-md border border-border bg-surface-2 hover:bg-border text-fg font-medium`}
-                >
-                  {isOpen ? "Kapat" : "Neden? →"}
-                </button>
-              </div>
+              </button>
 
               {isOpen && (
-                <div className="mt-4 rounded-lg border border-border bg-bg/60 p-4">
-                  {state?.kind === "loading" && (
-                    <div className="text-sm text-muted flex items-center gap-2">
-                      <span className="size-2 rounded-full bg-accent animate-pulse" />
-                      Ajan müşteri / marka / ürün kırılımına bakıyor…
-                    </div>
-                  )}
-                  {state?.kind === "err" && (
-                    <div className="text-sm text-bad">
-                      Açıklama üretilemedi: <code className="text-xs">{state.message}</code>
-                    </div>
-                  )}
-                  {state?.kind === "ok" && (
-                    <>
-                      {state.brief && (
-                        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                          {state.brief}
-                        </div>
-                      )}
-                      {state.sql && (
-                        <details className="mt-3">
-                          <summary className="text-xs text-muted cursor-pointer hover:text-fg">
-                            Kullanılan SQL ({state.rowCount} satır)
-                          </summary>
-                          <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface p-3 rounded">
-                            {state.sql}
-                          </pre>
-                        </details>
-                      )}
-                    </>
-                  )}
+                <div className="px-5 pb-4 -mt-1">
+                  <div className="rounded-lg border border-border bg-bg/60 p-4">
+                    {state?.kind === "loading" && (
+                      <div className="text-sm text-muted flex items-center gap-2">
+                        <span className="size-2 rounded-full bg-accent animate-pulse" />
+                        Ajan müşteri / marka / ürün kırılımına bakıyor…
+                      </div>
+                    )}
+                    {state?.kind === "err" && (
+                      <div className="text-sm text-bad">
+                        Açıklama üretilemedi: <code className="text-xs">{state.message}</code>
+                      </div>
+                    )}
+                    {state?.kind === "ok" && (
+                      <>
+                        {state.brief && (
+                          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                            {state.brief}
+                          </div>
+                        )}
+                        {state.sql && (
+                          <details className="mt-3">
+                            <summary className="text-xs text-muted cursor-pointer hover:text-fg">
+                              Kullanılan SQL ({state.rowCount} satır)
+                            </summary>
+                            <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface p-3 rounded">
+                              {state.sql}
+                            </pre>
+                          </details>
+                        )}
+                      </>
+                    )}
+                  </div>
                 </div>
               )}
-            </div>
-          </div>
-        );
-      })}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

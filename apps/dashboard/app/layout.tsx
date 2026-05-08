@@ -12,12 +12,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="tr">
       <body suppressHydrationWarning>
         <div className="min-h-dvh">
-          <header className="border-b border-border bg-surface/60 backdrop-blur">
-            <div className="mx-auto max-w-6xl px-6 h-14 flex items-center justify-between">
+          <header className="border-b border-border bg-surface/60 backdrop-blur sticky top-0 z-40">
+            <div className="mx-auto max-w-[1600px] px-5 h-12 flex items-center justify-between">
               <Link href="/" className="flex items-center gap-2">
-                <div className="size-7 rounded-md bg-accent text-accent-fg font-bold flex items-center justify-center">E</div>
+                <div className="size-6 rounded-md bg-accent text-accent-fg font-bold flex items-center justify-center text-sm">E</div>
                 <div className="font-semibold tracking-tight">Enroute</div>
-                <span className="text-muted text-sm">— DBA Agent</span>
+                <span className="text-muted text-xs">— DBA Agent</span>
               </Link>
               <nav className="flex items-center gap-5 text-sm text-muted">
                 <Link href="/" className="hover:text-fg">Radar</Link>
@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </nav>
             </div>
           </header>
-          <main className="mx-auto max-w-6xl px-6 py-10">{children}</main>
+          <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
         </div>
       </body>
     </html>
