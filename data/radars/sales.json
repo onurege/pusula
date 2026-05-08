@@ -1,0 +1,64 @@
+{
+  "id": "sales",
+  "title": "Sales Radar",
+  "description": "Distribütör satış performansı, ciro trendi ve aktif distribütör hareketi.",
+  "tagline": "Bölge yöneticisi için son 30 günün satış manzarası — tek bakışta.",
+  "defaultParams": {
+    "days": 30,
+    "topN": 10
+  },
+  "blocks": [
+    {
+      "id": "kpis",
+      "title": "Genel KPI'lar",
+      "display": "kpi-row",
+      "sql": "SELECT \n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS toplam_ciro,\n  COUNT(*)               AS fatura_sayisi,\n  COUNT(DISTINCT f.LNGDISTKOD) AS aktif_distributor\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())",
+      "kpiMapping": [
+        {
+          "id": "toplam_ciro",
+          "label": "Toplam Ciro",
+          "valueColumn": "toplam_ciro",
+          "unit": "₺",
+          "tone": { "good": 1000000, "warn": 100000, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "fatura_sayisi",
+          "label": "Fatura Sayısı",
+          "valueColumn": "fatura_sayisi",
+          "tone": { "good": 100, "warn": 10, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "aktif_distributor",
+          "label": "Aktif Distribütör",
+          "valueColumn": "aktif_distributor",
+          "tone": { "good": 20, "warn": 5, "bad": 0, "direction": "asc" }
+        }
+      ]
+    },
+    {
+      "id": "top_distributors",
+      "title": "En çok ciro yapan distribütörler",
+      "description": "Son @days günde toplam net cirosu en yüksek ilk @topN distribütör.",
+      "display": "chart",
+      "chart": {
+        "kind": "bar",
+        "xKey": "ad",
+        "yKey": "ciro",
+        "orientation": "horizontal"
+      },
+      "sql": "SELECT TOP (@topN)\n  d.TXTAD AS ad,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura_sayisi\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = f.LNGDISTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND d.BYTDURUM = 0\nGROUP BY d.TXTAD\nORDER BY ciro DESC"
+    },
+    {
+      "id": "daily_trend",
+      "title": "Günlük ciro trendi",
+      "description": "Son @days günün ciro eğrisi.",
+      "display": "chart",
+      "chart": {
+        "kind": "line",
+        "xKey": "gun",
+        "yKey": "ciro"
+      },
+      "sql": "SELECT\n  CAST(f.TRHISLEMTARIHI AS DATE) AS gun,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\nGROUP BY CAST(f.TRHISLEMTARIHI AS DATE)\nORDER BY gun ASC"
+    }
+  ]
+}

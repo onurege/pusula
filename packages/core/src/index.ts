@@ -8,3 +8,4 @@ export * from "./retrieve.js";
 export * from "./reports.js";
 export * from "./snapshot.js";
 export * from "./agent.js";
+export * from "./radar.js";

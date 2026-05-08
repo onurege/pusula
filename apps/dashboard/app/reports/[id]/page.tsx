@@ -25,7 +25,7 @@ export default async function ReportPage({
     <div className="space-y-8">
       <div className="flex items-start justify-between gap-6">
         <div>
-          <Link href="/" className="text-sm text-muted hover:text-fg">← Tüm raporlar</Link>
+          <Link href="/reports" className="text-sm text-muted hover:text-fg">← Kayıtlı raporlar</Link>
           <h1 className="text-2xl font-semibold tracking-tight mt-2">{report.name}</h1>
           {report.description && (
             <p className="text-muted text-sm mt-1 max-w-2xl">{report.description}</p>

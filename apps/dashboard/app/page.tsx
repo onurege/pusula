@@ -1,32 +1,37 @@
 import Link from "next/link";
-import { listReports } from "@/lib/api";
+import { listRadars } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
 
+const RADAR_GRADIENTS: Record<string, string> = {
+  sales:
+    "from-accent/30 via-accent/10 to-transparent",
+  stock:
+    "from-good/25 via-good/10 to-transparent",
+  finance:
+    "from-bad/25 via-bad/10 to-transparent",
+  executive:
+    "from-fg/15 via-fg/5 to-transparent",
+};
+
 export default async function HomePage() {
-  let reports: Awaited<ReturnType<typeof listReports>> = [];
+  let radars: Awaited<ReturnType<typeof listRadars>> = [];
   let apiError: string | null = null;
   try {
-    reports = await listReports();
+    radars = await listRadars();
   } catch (err) {
     apiError = (err as Error).message;
   }
 
   return (
-    <div className="space-y-8">
-      <section className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Raporlar</h1>
-          <p className="text-muted text-sm mt-1">
-            Univera'dan üretilen, kaydedilen ve tekrar çalıştırılan raporlar.
-          </p>
-        </div>
-        <Link
-          href="/reports/new"
-          className="inline-flex items-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md font-medium hover:opacity-90"
-        >
-          + Yeni rapor
-        </Link>
+    <div className="space-y-10">
+      <section>
+        <div className="text-xs uppercase tracking-wide text-muted">Radar</div>
+        <h1 className="text-3xl font-semibold tracking-tight mt-2">Bugün ne oluyor?</h1>
+        <p className="text-muted text-sm mt-2 max-w-2xl">
+          Bölge yöneticisi ve satış operasyon ekipleri için tek-bakışta KPI'lar,
+          trend grafikleri ve Türkçe yönetici brifingi. Excel'i açıp süzmek yerine bir radar seç, gerisini sistem anlatsın.
+        </p>
       </section>
 
       {apiError && (
@@ -38,43 +43,56 @@ export default async function HomePage() {
         </div>
       )}
 
-      {!apiError && reports.length === 0 && (
+      {!apiError && radars.length === 0 && (
         <div className="rounded-lg border border-border bg-surface p-10 text-center">
-          <div className="text-fg font-medium">Henüz rapor yok</div>
+          <div className="text-fg font-medium">Henüz radar tanımı yok</div>
           <div className="text-muted text-sm mt-2">
-            "Yeni rapor"a tıklayıp doğal Türkçe ile bir talep yazın.
+            <code>data/radars/</code> altına bir JSON ekleyin (örnek: <code>sales.json</code>).
           </div>
         </div>
       )}
 
-      {reports.length > 0 && (
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {reports.map((r) => (
-            <li key={r.id}>
+      {radars.length > 0 && (
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {radars.map((r) => {
+            const gradient = RADAR_GRADIENTS[r.id] ?? RADAR_GRADIENTS.executive!;
+            return (
               <Link
-                href={`/reports/${r.id}`}
-                className="block rounded-lg border border-border bg-surface hover:bg-surface-2 p-5 transition"
+                key={r.id}
+                href={`/radar/${r.id}`}
+                className={`group relative overflow-hidden rounded-xl border border-border bg-surface hover:bg-surface-2 transition p-6 min-h-44`}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="font-medium truncate">{r.name}</div>
-                    {r.description && (
-                      <div className="text-muted text-sm mt-1 line-clamp-2">{r.description}</div>
-                    )}
-                  </div>
-                  <code className="text-[10px] text-muted shrink-0 mt-1">{r.id.slice(0, 8)}</code>
-                </div>
-                <div className="text-xs text-muted mt-3 flex items-center gap-3">
-                  <span>{new Date(r.updatedAt).toLocaleString("tr-TR")}</span>
-                  {r.retrievedTables && (
-                    <span>· {r.retrievedTables.length} tablo</span>
+                <div
+                  className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${gradient} opacity-70 group-hover:opacity-100 transition`}
+                />
+                <div className="relative">
+                  <div className="text-xs uppercase tracking-wide text-muted">Radar</div>
+                  <div className="text-xl font-semibold tracking-tight mt-2">{r.title}</div>
+                  {r.tagline && (
+                    <div className="text-fg/80 text-sm mt-2 max-w-md">{r.tagline}</div>
                   )}
+                  <div className="text-muted text-xs mt-4 flex items-center gap-2">
+                    Tek tık → KPI · grafik · yönetici özeti
+                    <span className="text-accent">→</span>
+                  </div>
                 </div>
               </Link>
-            </li>
-          ))}
-        </ul>
+            );
+          })}
+        </section>
       )}
+
+      <section className="border-t border-border pt-6 flex items-center justify-between text-sm text-muted">
+        <div>
+          Hazır radar dışında bir şey mi lazım?
+        </div>
+        <div className="flex items-center gap-4">
+          <Link href="/reports" className="hover:text-fg">Kayıtlı raporlar →</Link>
+          <Link href="/reports/new" className="bg-accent text-accent-fg px-4 h-9 rounded-md font-medium flex items-center hover:opacity-90">
+            Yeni rapor üret
+          </Link>
+        </div>
+      </section>
     </div>
   );
 }

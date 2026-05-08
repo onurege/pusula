@@ -66,7 +66,7 @@ export default function NewReportPage() {
   return (
     <div className="space-y-8">
       <div>
-        <Link href="/" className="text-sm text-muted hover:text-fg">← Tüm raporlar</Link>
+        <Link href="/reports" className="text-sm text-muted hover:text-fg">← Kayıtlı raporlar</Link>
         <h1 className="text-2xl font-semibold tracking-tight mt-2">Yeni rapor</h1>
         <p className="text-muted text-sm mt-1 max-w-2xl">
           Türkçe doğal dilde ne istediğini yaz. Sistem ilgili tabloları çıkartır, SQL yazar, çalıştırır ve kısa bir brifing üretir. Beğendiğin sonucu kaydedebilirsin.

@@ -20,7 +20,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="text-muted text-sm">— DBA Agent</span>
               </Link>
               <nav className="flex items-center gap-5 text-sm text-muted">
-                <Link href="/" className="hover:text-fg">Raporlar</Link>
+                <Link href="/" className="hover:text-fg">Radar</Link>
+                <Link href="/reports" className="hover:text-fg">Raporlar</Link>
                 <Link href="/reports/new" className="hover:text-fg">Yeni rapor</Link>
                 <Link href="/schema" className="hover:text-fg">Şema</Link>
               </nav>

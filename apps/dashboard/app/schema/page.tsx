@@ -41,7 +41,7 @@ export default function SchemaPage() {
   return (
     <div className="space-y-8">
       <div>
-        <Link href="/" className="text-sm text-muted hover:text-fg">← Tüm raporlar</Link>
+        <Link href="/" className="text-sm text-muted hover:text-fg">← Radar</Link>
         <h1 className="text-2xl font-semibold tracking-tight mt-2">Şema</h1>
         <p className="text-muted text-sm mt-1 max-w-2xl">
           Univera'daki 2400+ tablonun keşif arayüzü. Türkçe iş terimi yaz, ilgili tablolar + iş açıklaması + FK ilişkileri görüntülensin.

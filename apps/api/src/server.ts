@@ -8,11 +8,14 @@ import { z } from "zod";
 import {
   closePool,
   formatRetrievalForPrompt,
+  getRadarDefinition,
   getReport,
+  listRadarDefinitions,
   listReports,
   loadSnapshot,
   retrieve,
   runAgent,
+  runRadar,
   runReadOnly,
   runReport,
   saveReport,
@@ -183,6 +186,41 @@ app.post("/api/reports/generate", async (c) => {
       steps: agentRun.steps,
       savedId,
     });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.get("/api/radars", async (c) => {
+  const defs = await listRadarDefinitions(REPO_ROOT);
+  return c.json({
+    radars: defs.map((d) => ({
+      id: d.id,
+      title: d.title,
+      description: d.description,
+      tagline: d.tagline,
+      defaultParams: d.defaultParams,
+    })),
+  });
+});
+
+app.get("/api/radars/:id", async (c) => {
+  const def = await getRadarDefinition(REPO_ROOT, c.req.param("id"));
+  if (!def) return c.json({ error: "not found" }, 404);
+  return c.json(def);
+});
+
+app.post("/api/radars/:id/run", async (c) => {
+  try {
+    const def = await getRadarDefinition(REPO_ROOT, c.req.param("id"));
+    if (!def) return c.json({ error: "not found" }, 404);
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+    const params: Record<string, string | number> = {};
+    for (const [k, v] of Object.entries(body ?? {})) {
+      if (typeof v === "string" || typeof v === "number") params[k] = v;
+    }
+    const run = await runRadar(def, params);
+    return c.json(run);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
