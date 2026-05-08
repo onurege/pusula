@@ -62,7 +62,7 @@ export function MapFilters({ facets, customers, count }: Props) {
   const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q;
 
   return (
-    <aside className="w-72 shrink-0 rounded-xl border border-border bg-surface p-4 self-start space-y-4 max-h-full overflow-y-auto">
+    <aside className="w-72 shrink-0 border-r border-border bg-surface p-4 space-y-4 overflow-y-auto">
       <div className="flex items-center justify-between">
         <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
           Filtreler

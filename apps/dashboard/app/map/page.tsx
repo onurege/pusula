@@ -38,29 +38,30 @@ export default async function MapPage({
       ? facetsResult.value
       : { cities: [], distributors: [] };
 
-  const MAP_HEIGHT = "min(calc(100vh - 140px), 900px)";
-
   return (
-    <div className="space-y-3">
-      <header className="flex items-baseline justify-between flex-wrap gap-3">
+    // Break out of the global <main> container's max-width + padding so
+    // the map fills everything below the navbar — map-check's full-bleed
+    // layout. fixed inset-0 top-12 starts right under the 48px sticky
+    // header.
+    <div className="fixed inset-0 top-12 flex flex-col bg-bg">
+      <header className="bg-surface border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
         <div className="flex items-baseline gap-3 flex-wrap">
           <Link href="/" className="text-xs text-muted hover:text-fg">← Radar</Link>
-          <h1 className="text-lg font-semibold tracking-tight">Satış Haritası</h1>
-          <span className="text-xs text-muted">
-            Onaylı müşteriler. Bir noktaya tıkla veya yukarıda ara → son 30 gün ciro + AI analizi.
+          <h1 className="text-base font-semibold tracking-tight">Satış Haritası</h1>
+          <span className="text-xs text-muted hidden lg:inline">
+            Onaylı müşteriler · noktaya tıkla → son 30 gün ciro + AI analizi
           </span>
         </div>
-        <div className="text-[11px] text-muted tabular-nums">
+        <div className="text-xs text-muted tabular-nums">
           {data.count.toLocaleString("tr-TR")} müşteri
           {sehir && <span className="ml-2">· {sehir}</span>}
-          {distKod && <span className="ml-2">· dist #{distKod}</span>}
         </div>
       </header>
 
-      <div className="flex gap-3" style={{ height: MAP_HEIGHT, minHeight: 480 }}>
+      <div className="flex-1 min-h-0 flex">
         <MapFilters facets={facets} customers={data.customers} count={data.count} />
 
-        <div className="flex-1 rounded-xl overflow-hidden border border-border bg-surface relative">
+        <main className="flex-1 relative bg-surface">
           {apiError ? (
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="rounded-lg border border-bad/40 bg-bad/10 px-5 py-4 text-sm max-w-lg">
@@ -75,7 +76,7 @@ export default async function MapPage({
           ) : (
             <SalesMap customers={data.customers} />
           )}
-        </div>
+        </main>
       </div>
     </div>
   );

@@ -1,36 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import maplibregl, { type StyleSpecification } from "maplibre-gl";
+import maplibregl from "maplibre-gl";
 import type { CustomerSales, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerSales } from "@/lib/api";
 
-// Inline minimal style-spec — keeps the map self-contained instead of
-// depending on a remote style.json fetch which can fail silently and
-// leave the canvas blank. Raster tiles from Carto's basemaps CDN
-// (free, no key) for a dark theme that matches the dashboard.
-const MAP_STYLE: StyleSpecification = {
-  version: 8,
-  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
-  sources: {
-    osm: {
-      type: "raster",
-      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-    },
-  },
-  layers: [
-    {
-      id: "osm",
-      type: "raster",
-      source: "osm",
-      minzoom: 0,
-      maxzoom: 19,
-    },
-  ],
-};
+// CARTO Positron — vector style with proper Turkish labels and a clean
+// gray base that doesn't fight the indigo markers. Same style map-check
+// uses. Free, no key, includes its own glyphs URL inside the JSON so we
+// don't have to declare one inline.
+const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
