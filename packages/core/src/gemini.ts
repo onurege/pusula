@@ -35,22 +35,62 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
   return out;
 }
 
+/**
+ * "Try again later" / "high demand" / 429 / 503 — anything that screams
+ * Google capacity issue rather than a real prompt problem. Used to gate
+ * automatic retries inside generate().
+ */
+function isTransientGeminiError(err: unknown): boolean {
+  const msg = (err as Error | undefined)?.message ?? "";
+  return /\b(503|429)\b|high demand|service unavailable|temporarily|rate.?limit|overloaded/i.test(
+    msg,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 export async function generate(
   systemInstruction: string,
   userPrompt: string,
   options: { temperature?: number; maxOutputTokens?: number } = {},
 ): Promise<string> {
-  const modelName = process.env.GEMINI_GENERATION_MODEL ?? "gemini-2.5-flash";
-  const model = getClient().getGenerativeModel({
-    model: modelName,
-    systemInstruction,
-  });
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: userPrompt }] }],
-    generationConfig: {
-      temperature: options.temperature ?? 0.2,
-      maxOutputTokens: options.maxOutputTokens ?? 2048,
-    },
-  });
-  return result.response.text();
+  const primary = process.env.GEMINI_GENERATION_MODEL ?? "gemini-2.5-flash-lite";
+  // gemini-2.5-flash is the thinking-capable bigger sibling — used as a
+  // fallback because when lite is over-quota the regular model often isn't.
+  const fallback =
+    process.env.GEMINI_GENERATION_FALLBACK_MODEL ?? "gemini-2.5-flash";
+
+  const attempts: { model: string; delayMs: number; label: string }[] = [
+    { model: primary, delayMs: 0, label: "primary" },
+    { model: primary, delayMs: 800, label: "primary-retry" },
+    { model: fallback, delayMs: 1600, label: "fallback" },
+  ];
+
+  let lastErr: unknown = null;
+  for (const a of attempts) {
+    if (a.delayMs > 0) await sleep(a.delayMs);
+    try {
+      const model = getClient().getGenerativeModel({
+        model: a.model,
+        systemInstruction,
+      });
+      const result = await model.generateContent({
+        contents: [{ role: "user", parts: [{ text: userPrompt }] }],
+        generationConfig: {
+          temperature: options.temperature ?? 0.2,
+          maxOutputTokens: options.maxOutputTokens ?? 2048,
+        },
+      });
+      return result.response.text();
+    } catch (err) {
+      lastErr = err;
+      // Anything that's not a capacity / rate-limit issue won't get better
+      // by retrying on the same model. Bail out immediately so the user
+      // sees the real error (bad prompt, bad credentials, malformed schema).
+      if (!isTransientGeminiError(err)) throw err;
+    }
+  }
+  throw lastErr ?? new Error("Gemini generate failed without an error");
 }
