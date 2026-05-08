@@ -18,6 +18,11 @@ export async function getPool(): Promise<sql.ConnectionPool> {
     database: readEnv("MSSQL_DATABASE"),
     user: readEnv("MSSQL_USER"),
     password: readEnv("MSSQL_PASSWORD"),
+    // mssql defaults requestTimeout to 15s, which is too short for
+    // schema introspection or large radar/map aggregations. Per-query
+    // overrides via request.timeout still apply on top of this.
+    requestTimeout: 120_000,
+    connectionTimeout: 30_000,
     options: {
       encrypt: readEnv("MSSQL_ENCRYPT", "true") === "true",
       trustServerCertificate:
