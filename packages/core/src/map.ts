@@ -32,7 +32,6 @@ export async function listMapCustomers(
   const where: string[] = [
     "m.DBLKOORDINATX > 0",
     "m.DBLKOORDINATY > 0",
-    "m.BYTONAY = 1",
   ];
 
   if (filters.sehir) {
@@ -86,27 +85,27 @@ export type MapFacets = {
 };
 
 /**
- * Distinct list of cities and active distributors, scoped to the same
- * universe as the map (geocoded, approved customers / active distributors).
- * Loaded once on the map page render and fed to the filter sidebar.
+ * Distinct list of cities (any TBLMUSTERI row with a non-empty TXTSEHIR)
+ * and active distributors. Cities are deliberately NOT filtered by
+ * coordinates / BYTONAY — the map applies those when it actually pulls
+ * customers, but the picker should show every city the user might
+ * eventually scope to. Aliased so the recordset key is predictable.
  */
 export async function getMapFacets(): Promise<MapFacets> {
   const citiesSql = `
-    SELECT DISTINCT TOP 200 m.TXTSEHIR
+    SELECT DISTINCT TOP 200 LTRIM(RTRIM(m.TXTSEHIR)) AS sehir
     FROM dbo.TBLMUSTERI AS m
-    WHERE m.DBLKOORDINATX > 0
-      AND m.DBLKOORDINATY > 0
-      AND m.BYTONAY = 1
-      AND m.TXTSEHIR IS NOT NULL
+    WHERE m.TXTSEHIR IS NOT NULL
       AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
-    ORDER BY m.TXTSEHIR
+    ORDER BY sehir
   `;
   const distSql = `
     SELECT TOP 200 d.LNGKOD AS lngKod, d.TXTAD AS ad
     FROM dbo.TBLDIST AS d
     WHERE d.BYTDURUM = 0
       AND d.TXTAD IS NOT NULL
-    ORDER BY d.TXTAD
+      AND LTRIM(RTRIM(d.TXTAD)) <> ''
+    ORDER BY ad
   `;
 
   const [citiesRes, distsRes] = await Promise.all([
@@ -115,7 +114,9 @@ export async function getMapFacets(): Promise<MapFacets> {
   ]);
 
   return {
-    cities: citiesRes.rows.map((r) => String(r.TXTSEHIR)).filter(Boolean),
+    cities: citiesRes.rows
+      .map((r) => String(r.sehir ?? ""))
+      .filter((s) => s.length > 0),
     distributors: distsRes.rows.map((r) => ({
       lngKod: Number(r.lngKod),
       ad: String(r.ad),
