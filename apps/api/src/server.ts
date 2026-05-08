@@ -130,21 +130,27 @@ const GenerateReportBody = z.object({
 });
 
 const SQL_GEN_SYSTEM = `
-Sen kıdemli bir Türkçe-konuşan veri analistisin ve Univera ERP şemasını iyi tanırsın.
-Sana ilgili tabloların açıklamaları + kolonları + FK ilişkileri verilecek. Görevin:
+Sen kıdemli bir Türkçe-konuşan veri analistisin. Sana Univera ERP şemasından
+ilgili tabloların açıklamaları + kolonları + FK ilişkileri verilecek (\"BAĞLAM\").
 
-1. Kullanıcı talebine uyan **tek bir SELECT** sorgusu üret. Asla INSERT/UPDATE/DELETE/DDL kullanma.
-2. **Sadece "kanonik" tabloları kullan**: TBLDIST, TBLMUSTERI, TBLURUN, TBLMSDFATURA, TBLMSDSATIS gibi.
-   _YEDEK / _OLD / _BAK / _BIRLESTIRME / _<tarih> ile biten tablolardan KAÇIN —
-   bunlar yedek/arşiv/birleştirme detay tablolarıdır, gerçek kaynak değildir.
-3. **Sadece kod gösterme**. Distribütör/müşteri/ürün gibi entity'leri hem koduyla hem **adı (TXTAD/TXTUNVAN)** ile döndür.
-   Bunun için ana tabloya (TBLDIST, TBLMUSTERI, TBLURUN, ...) INNER JOIN ekle.
-4. **"Satış/ciro" sorularında COUNT yerine SUM** kullan. Tipik kolonlar: DBLNETTUTAR,
-   DBLBRUTTUTAR, DBLTUTAR, DBLMIKTAR. Sadece kayıt sayısı istenmişse COUNT olur.
-5. Aktiflik filtresi gerekirse \`BYTDURUM = 0\` aktif demektir.
-6. Sonuç sınırla: \`SELECT TOP 100\`, \`SELECT TOP 1000\` gibi. Default 100.
-7. Türkçe sütun aliasları kullan, sayısal alanlarda \`ISNULL\` ile NULL koru.
-8. Sadece bir SQL bloğu döndür: \`\`\`sql ... \`\`\`. Başka açıklama yazma.
+KURALLAR:
+
+1. **Yalnızca BAĞLAM'da gözüken tabloları kullan.** Asla başka bir tablo adı
+   uydurma, hatırından isim üretme. Tablo adı bağlamda yoksa o tablo yoktur.
+2. **Tek bir SELECT** üret. Asla INSERT/UPDATE/DELETE/DDL kullanma.
+3. Bağlamda iki tablo aynı amaca hizmet ediyorsa kanonik olanı seç:
+   - _YEDEK / _OLD / _BAK / _TEMP / _ARSIV / _BIRLESTIRME(DETAY) ile biten
+     tablolardan KAÇIN — bunlar yedek/arşiv/birleştirme tablolarıdır.
+   - Tarih son ekli kopyalar (TBLXXX_20230704, TBLXXX240315) yerine ana tabloyu kullan.
+4. **Sadece kod gösterme.** Distribütör/müşteri/ürün gibi entity'leri hem koduyla hem
+   **adı (TXTAD/TXTUNVAN)** ile döndür. Bunun için bağlamdaki ana entity tablosuna
+   INNER JOIN ekle (kolon ve FK bilgisi bağlamda var).
+5. **"Satış/ciro" sorularında COUNT yerine SUM** kullan. Tipik kolonlar:
+   DBLNETTUTAR, DBLBRUTTUTAR, DBLTUTAR, DBLMIKTAR. Sadece kayıt sayısı istenmişse COUNT olur.
+6. Aktiflik filtresi gerekirse \`BYTDURUM = 0\` aktif demektir.
+7. Sonuç sınırla: \`SELECT TOP 100\`, \`SELECT TOP 1000\` gibi. Default 100.
+8. Türkçe sütun aliasları kullan, sayısal alanlarda \`ISNULL\` ile NULL koru.
+9. Sadece bir SQL bloğu döndür: \`\`\`sql ... \`\`\`. Başka açıklama yazma.
 `.trim();
 
 const BRIEF_SYSTEM = `
@@ -171,14 +177,49 @@ app.post("/api/reports/generate", async (c) => {
     const retrieved = retrieve(body.prompt, snap, { topK: 10, expandFkNeighbors: true });
     const promptContext = formatRetrievalForPrompt(retrieved);
 
-    const sqlText = await generate(
+    const allowedTables = retrieved.map((r) => r.table.fullName);
+
+    const firstAttempt = await generate(
       SQL_GEN_SYSTEM,
-      `Şema bağlamı:\n\n${promptContext}\n\nKullanıcı talebi: ${body.prompt}\n\nSorguyu yaz:`,
+      `BAĞLAM:\n\n${promptContext}\n\nKullanıcı talebi: ${body.prompt}\n\nSorguyu yaz:`,
       { temperature: 0.1, maxOutputTokens: 1024 },
     );
-    const sql = extractSql(sqlText);
+    let sql = extractSql(firstAttempt);
+    let result;
+    try {
+      result = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+    } catch (err) {
+      // One-shot recovery: feed the SQL error back to the model along with the
+      // exact list of tables it is allowed to reference. Most "Invalid object
+      // name" / "Invalid column name" errors come from the LLM hallucinating a
+      // name that wasn't in the retrieved context.
+      const errMsg = (err as Error).message;
+      const recoveryPrompt = `Önceki sorgu MSSQL hatası verdi:
 
-    const result = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+HATA: ${errMsg}
+
+ÖNCEKİ SORGU:
+\`\`\`sql
+${sql}
+\`\`\`
+
+KURAL: Sorguda yalnızca aşağıdaki tablolar kullanılabilir, başka tablo adı uydurma:
+${allowedTables.map((t) => `- ${t}`).join("\n")}
+
+BAĞLAM (kolonlar ve FK'ler):
+
+${promptContext}
+
+Kullanıcı talebi: ${body.prompt}
+
+Düzeltilmiş sorguyu \`\`\`sql ... \`\`\` bloğunda döndür:`;
+      const retryText = await generate(SQL_GEN_SYSTEM, recoveryPrompt, {
+        temperature: 0.1,
+        maxOutputTokens: 1024,
+      });
+      sql = extractSql(retryText);
+      result = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+    }
 
     const sampleSummary =
       result.rows.length === 0
