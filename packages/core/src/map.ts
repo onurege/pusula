@@ -126,19 +126,17 @@ export async function getMapFacets(): Promise<MapFacets> {
 
 /**
  * Single-customer revenue lookup — runs only when the user clicks a
- * marker. Indexed seek on (LNGMUSTERIKOD, LNGDISTKOD), so this is a
- * sub-second query even on the 5.7M-row table.
+ * marker. Filters by LNGMUSTERIKOD only; the distributor field on
+ * TBLMUSTERI doesn't always match the LNGDISTKOD on each invoice
+ * (a customer can transact across distributors), so locking on it
+ * was hiding real activity. The /* distKod arg stays in the API for
+ * back-compat but is ignored in the SQL.
  */
 export async function getCustomerSales(
   musteriKod: number,
-  distKod: number | null,
+  _distKod: number | null,
   days = 30,
 ): Promise<CustomerSales> {
-  const distFilter =
-    typeof distKod === "number" && Number.isFinite(distKod)
-      ? `AND f.LNGDISTKOD = ${Math.floor(distKod)}`
-      : "";
-
   const sql = `
     SELECT
       ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro30,
@@ -146,7 +144,6 @@ export async function getCustomerSales(
       MAX(f.TRHISLEMTARIHI)         AS sonFaturaTarihi
     FROM dbo.TBLMSDFATURA AS f
     WHERE f.LNGMUSTERIKOD = ${Math.floor(musteriKod)}
-      ${distFilter}
       AND f.TRHISLEMTARIHI >= DATEADD(day, -${Math.floor(days)}, GETDATE())
       AND f.BYTTUR  = 0
       AND f.BYTDURUM = 0
