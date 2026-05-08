@@ -341,7 +341,7 @@ export default function SalesMap({ customers }: Props) {
                   {sales.kind === "loading"
                     ? "…"
                     : sales.kind === "ok"
-                    ? `${formatCompact(sales.data.ciro30)} ₺`
+                    ? `${formatCompact(Number(sales.data.ciro30 ?? 0))} ₺`
                     : "—"}
                 </div>
               </div>
@@ -353,7 +353,7 @@ export default function SalesMap({ customers }: Props) {
                   {sales.kind === "loading"
                     ? "…"
                     : sales.kind === "ok"
-                    ? sales.data.fatura30.toLocaleString("tr-TR")
+                    ? Number(sales.data.fatura30 ?? 0).toLocaleString("tr-TR")
                     : "—"}
                 </div>
               </div>
@@ -365,7 +365,7 @@ export default function SalesMap({ customers }: Props) {
                   {sales.kind === "loading"
                     ? "…"
                     : sales.kind === "ok"
-                    ? sales.data.ziyaret30.toLocaleString("tr-TR")
+                    ? Number(sales.data.ziyaret30 ?? 0).toLocaleString("tr-TR")
                     : "—"}
                 </div>
               </div>
