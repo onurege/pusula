@@ -170,6 +170,33 @@ export async function explainOnRadar(
   });
 }
 
+export type MapCustomer = {
+  id: number;
+  unvan: string;
+  adres: string | null;
+  sehir: string | null;
+  ilce: string | null;
+  distributor: string | null;
+  lat: number;
+  lng: number;
+  ciro30: number;
+  fatura30: number;
+};
+
+export async function listMapCustomers(params: {
+  sehir?: string;
+  distKod?: number;
+  minCiro?: number;
+  limit?: number;
+} = {}): Promise<{ count: number; customers: MapCustomer[] }> {
+  const qp = new URLSearchParams();
+  if (params.sehir) qp.set("sehir", params.sehir);
+  if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
+  if (typeof params.minCiro === "number") qp.set("minCiro", String(params.minCiro));
+  if (typeof params.limit === "number") qp.set("limit", String(params.limit));
+  return request(`/api/map/customers?${qp.toString()}`);
+}
+
 export type RadarRun = {
   id: string;
   title: string;

@@ -10,6 +10,7 @@ import {
   formatRetrievalForPrompt,
   getRadarDefinition,
   getReport,
+  listMapCustomers,
   listRadarDefinitions,
   listReports,
   loadSnapshot,
@@ -245,6 +246,23 @@ app.post("/api/radars/:id/explain", async (c) => {
       sampleRows: agentRun.rows.slice(0, 8),
       steps: agentRun.steps,
     });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.get("/api/map/customers", async (c) => {
+  try {
+    const sehir = c.req.query("sehir") ?? undefined;
+    const distKodRaw = c.req.query("distKod");
+    const distKod = distKodRaw ? parseInt(distKodRaw, 10) : undefined;
+    const minCiroRaw = c.req.query("minCiro");
+    const minCiro = minCiroRaw ? Number(minCiroRaw) : undefined;
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+
+    const customers = await listMapCustomers({ sehir, distKod, minCiro, limit });
+    return c.json({ count: customers.length, customers });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
