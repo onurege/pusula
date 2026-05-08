@@ -22,14 +22,22 @@ type ChartSpec =
   | { kind: "line"; xKey: string; yKey: string }
   | { kind: "pie"; nameKey: string; valueKey: string };
 
-const ACCENT = "oklch(0.78 0.16 60)";
+// Tailwind hex equivalents — recharts paint props don't read CSS variables
+// so these are pinned to match @theme tokens (light + indigo from
+// globals.css). Update both places together.
+const ACCENT = "#6366f1"; // indigo-500
+const GRID_STROKE = "#e4e4e7"; // zinc-200
+const AXIS_STROKE = "#71717a"; // zinc-500
+const TOOLTIP_BG = "#ffffff";
+const TOOLTIP_BORDER = "#e4e4e7";
+const TOOLTIP_TEXT = "#18181b";
 const PIE_COLORS = [
-  "oklch(0.78 0.16 60)",
-  "oklch(0.72 0.15 200)",
-  "oklch(0.78 0.18 145)",
-  "oklch(0.65 0.22 25)",
-  "oklch(0.70 0.16 290)",
-  "oklch(0.75 0.13 100)",
+  "#6366f1", // indigo-500
+  "#0ea5e9", // sky-500
+  "#16a34a", // green-600
+  "#f97316", // orange-500
+  "#a855f7", // violet-500
+  "#eab308", // yellow-500
 ];
 
 function formatTick(v: unknown): string {
@@ -75,24 +83,24 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
             layout={horizontal ? "vertical" : "horizontal"}
             margin={{ top: 8, right: 12, bottom: 8, left: horizontal ? 80 : 0 }}
           >
-            <CartesianGrid stroke="oklch(0.30 0 0)" strokeDasharray="3 3" />
+            <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
             {horizontal ? (
               <>
-                <XAxis type="number" stroke="oklch(0.65 0 0)" tickFormatter={formatTick} />
-                <YAxis dataKey={spec.xKey} type="category" stroke="oklch(0.65 0 0)" width={120} />
+                <XAxis type="number" stroke={AXIS_STROKE} tickFormatter={formatTick} />
+                <YAxis dataKey={spec.xKey} type="category" stroke={AXIS_STROKE} width={120} />
               </>
             ) : (
               <>
-                <XAxis dataKey={spec.xKey} stroke="oklch(0.65 0 0)" tickFormatter={formatTick} />
-                <YAxis stroke="oklch(0.65 0 0)" tickFormatter={formatTick} />
+                <XAxis dataKey={spec.xKey} stroke={AXIS_STROKE} tickFormatter={formatTick} />
+                <YAxis stroke={AXIS_STROKE} tickFormatter={formatTick} />
               </>
             )}
             <Tooltip
               contentStyle={{
-                background: "oklch(0.18 0 0)",
-                border: "1px solid oklch(0.30 0 0)",
+                background: TOOLTIP_BG,
+                border: `1px solid ${TOOLTIP_BORDER}`,
                 borderRadius: 8,
-                color: "oklch(0.96 0 0)",
+                color: TOOLTIP_TEXT,
               }}
               formatter={(value) => tooltipFmt(value)}
             />
@@ -108,15 +116,15 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
       <div className="h-72 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 8, right: 16, bottom: 8, left: 0 }}>
-            <CartesianGrid stroke="oklch(0.30 0 0)" strokeDasharray="3 3" />
-            <XAxis dataKey={spec.xKey} stroke="oklch(0.65 0 0)" tickFormatter={formatTick} />
-            <YAxis stroke="oklch(0.65 0 0)" tickFormatter={formatTick} />
+            <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
+            <XAxis dataKey={spec.xKey} stroke={AXIS_STROKE} tickFormatter={formatTick} />
+            <YAxis stroke={AXIS_STROKE} tickFormatter={formatTick} />
             <Tooltip
               contentStyle={{
-                background: "oklch(0.18 0 0)",
-                border: "1px solid oklch(0.30 0 0)",
+                background: TOOLTIP_BG,
+                border: `1px solid ${TOOLTIP_BORDER}`,
                 borderRadius: 8,
-                color: "oklch(0.96 0 0)",
+                color: TOOLTIP_TEXT,
               }}
               formatter={(value) => tooltipFmt(value)}
             />
@@ -153,10 +161,10 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
             </Pie>
             <Tooltip
               contentStyle={{
-                background: "oklch(0.18 0 0)",
-                border: "1px solid oklch(0.30 0 0)",
+                background: TOOLTIP_BG,
+                border: `1px solid ${TOOLTIP_BORDER}`,
                 borderRadius: 8,
-                color: "oklch(0.96 0 0)",
+                color: TOOLTIP_TEXT,
               }}
               formatter={(value) => tooltipFmt(value)}
             />

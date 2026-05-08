@@ -1,17 +1,22 @@
 @import "tailwindcss";
 @import "maplibre-gl/dist/maplibre-gl.css";
 
+/*
+ * Light + indigo palette borrowed from the map-check project. White
+ * surfaces, zinc neutrals, indigo accent — readable for the long
+ * stretches of analytical text the dashboard puts on screen.
+ */
 @theme {
-  --color-bg: oklch(0.14 0 0);
-  --color-surface: oklch(0.18 0 0);
-  --color-surface-2: oklch(0.22 0 0);
-  --color-border: oklch(0.30 0 0);
-  --color-fg: oklch(0.96 0 0);
-  --color-muted: oklch(0.65 0 0);
-  --color-accent: oklch(0.78 0.16 60);
-  --color-accent-fg: oklch(0.14 0 0);
-  --color-good: oklch(0.78 0.18 145);
-  --color-bad: oklch(0.65 0.22 25);
+  --color-bg: #fafafa;            /* zinc-50 page backdrop */
+  --color-surface: #ffffff;        /* card surface */
+  --color-surface-2: #f4f4f5;     /* zinc-100 (hover, secondary) */
+  --color-border: #e4e4e7;        /* zinc-200 */
+  --color-fg: #18181b;             /* zinc-900 primary text */
+  --color-muted: #71717a;          /* zinc-500 secondary text */
+  --color-accent: #6366f1;         /* indigo-500 */
+  --color-accent-fg: #ffffff;
+  --color-good: #16a34a;           /* green-600 */
+  --color-bad: #dc2626;            /* red-600 */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
 }

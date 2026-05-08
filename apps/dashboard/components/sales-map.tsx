@@ -34,16 +34,17 @@ const MAP_STYLE: StyleSpecification = {
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
-// maplibre-gl's style spec only accepts hex / rgb / hsl / named colors —
-// no oklch(). These are the closest hex equivalents to the dashboard's
-// accent palette so the map reads as part of the same brand surface.
-const COLOR_ACCENT = "#e8993f";
-const COLOR_ACCENT_MID = "#dc7d2a";
-const COLOR_ACCENT_HIGH = "#c46118";
-const COLOR_ACCENT_DEEP = "#a44a0d";
-const COLOR_MUTED = "#5a5a5a"; // silent (no recent sales) marker
-const COLOR_STROKE = "#1a1a1a";
-const COLOR_LABEL = "#0a0a0a";
+// Indigo / zinc palette borrowed from the map-check project so the map
+// reads as part of the same family. maplibre-gl's style spec only takes
+// hex / rgb / hsl / named colors — these are the Tailwind indigo + zinc
+// hex values map-check used directly.
+const COLOR_ACCENT = "#6366f1";        // indigo-500 (small clusters / active)
+const COLOR_ACCENT_MID = "#4f46e5";    // indigo-600 (≥50)
+const COLOR_ACCENT_HIGH = "#4338ca";   // indigo-700 (≥200)
+const COLOR_ACCENT_DEEP = "#3730a3";   // indigo-800 (≥1000)
+const COLOR_MUTED = "#a1a1aa";         // zinc-400 (silent customer)
+const COLOR_STROKE = "#ffffff";         // white stroke for light tiles
+const COLOR_LABEL = "#ffffff";          // cluster count text on indigo
 
 type Props = {
   customers: MapCustomer[];
