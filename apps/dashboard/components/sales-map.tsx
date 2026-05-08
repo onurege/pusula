@@ -67,7 +67,6 @@ type ExplainState =
 export default function SalesMap({ customers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
-  const [styleReady, setStyleReady] = useState(false);
   const [selected, setSelected] = useState<MapCustomer | null>(null);
   const [sales, setSales] = useState<SalesState>({ kind: "idle" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
@@ -108,10 +107,8 @@ export default function SalesMap({ customers }: Props) {
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
     map.on("load", () => {
-      setStyleReady(true);
       // ssr:false dynamic import + flexbox layout often gives the map a 0×0
-      // canvas on first paint. Force a resize once we're loaded and again
-      // whenever the container box changes size (sidebar opens/closes etc.).
+      // canvas on first paint. Force a resize once we're loaded.
       map.resize();
     });
 
@@ -128,22 +125,30 @@ export default function SalesMap({ customers }: Props) {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !styleReady) return;
+    if (!map) return;
 
     const SRC = "customers";
-    const existing = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
-    if (existing) {
-      existing.setData(geojson);
-      return;
-    }
 
-    map.addSource(SRC, {
-      type: "geojson",
-      data: geojson,
-      cluster: true,
-      clusterMaxZoom: 13,
-      clusterRadius: 50,
-    });
+    const apply = () => {
+      // Belt-and-braces: maplibre throws if you call addSource/addLayer
+      // before the style finishes loading. React's `load` listener can
+      // fire a tick before isStyleLoaded() flips to true, especially
+      // under HMR. Re-check at runtime and bail if not yet ready.
+      if (!map.isStyleLoaded()) return;
+
+      const existing = map.getSource(SRC) as maplibregl.GeoJSONSource | undefined;
+      if (existing) {
+        existing.setData(geojson);
+        return;
+      }
+
+      map.addSource(SRC, {
+        type: "geojson",
+        data: geojson,
+        cluster: true,
+        clusterMaxZoom: 13,
+        clusterRadius: 50,
+      });
 
     map.addLayer({
       id: "clusters",
@@ -240,14 +245,21 @@ export default function SalesMap({ customers }: Props) {
         .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
     });
 
-    const setCursor = (cursor: string) => {
-      map.getCanvas().style.cursor = cursor;
+      const setCursor = (cursor: string) => {
+        map.getCanvas().style.cursor = cursor;
+      };
+      map.on("mouseenter", "clusters", () => setCursor("pointer"));
+      map.on("mouseleave", "clusters", () => setCursor(""));
+      map.on("mouseenter", "unclustered", () => setCursor("pointer"));
+      map.on("mouseleave", "unclustered", () => setCursor(""));
     };
-    map.on("mouseenter", "clusters", () => setCursor("pointer"));
-    map.on("mouseleave", "clusters", () => setCursor(""));
-    map.on("mouseenter", "unclustered", () => setCursor("pointer"));
-    map.on("mouseleave", "unclustered", () => setCursor(""));
-  }, [styleReady, geojson]);
+
+    if (map.isStyleLoaded()) {
+      apply();
+    } else {
+      map.once("load", apply);
+    }
+  }, [geojson]);
 
   async function runExplain(c: MapCustomer, s: CustomerSales) {
     setExplain({ kind: "loading" });
