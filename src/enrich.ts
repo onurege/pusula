@@ -124,7 +124,7 @@ export async function enrichSnapshot(
     async (table) => {
       const prompt = buildPrompt(table, sampleCap, fkByTable.get(table.fullName) ?? []);
       try {
-        const text = await generate(SYSTEM_INSTRUCTION, prompt, { temperature: 0.1, maxOutputTokens: 200 });
+        const text = await generate(SYSTEM_INSTRUCTION, prompt, { temperature: 0.1, maxOutputTokens: 512 });
         table.description = text.trim();
       } catch (err) {
         table.description = `[enrich-failed] ${(err as Error).message}`;
