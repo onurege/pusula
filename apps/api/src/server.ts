@@ -130,21 +130,37 @@ const GenerateReportBody = z.object({
 });
 
 const SQL_GEN_SYSTEM = `
-Sen kıdemli bir Türkçe-konuşan veri analistisin. Sana Univera ERP veritabanından
-ilgili tabloların açıklamaları + kolonları + FK ilişkileri verilecek. Görevin:
+Sen kıdemli bir Türkçe-konuşan veri analistisin ve Univera ERP şemasını iyi tanırsın.
+Sana ilgili tabloların açıklamaları + kolonları + FK ilişkileri verilecek. Görevin:
 
-1. Kullanıcı talebine uyan **tek bir SELECT** sorgusu üret.
-2. Sorguyu MSSQL T-SQL ile yaz, asla INSERT/UPDATE/DELETE/DDL kullanma.
-3. \`TOP 1000\` veya \`OFFSET ... FETCH NEXT\` ile satır sayısını sınırla.
-4. Mümkünse anlamlı sütun aliasları (Türkçe) kullan, sayısal alanlarda \`ISNULL\` ile NULL koru.
-5. Sadece bir SQL bloğu döndür: \`\`\`sql ... \`\`\`. Başka açıklama yazma.
+1. Kullanıcı talebine uyan **tek bir SELECT** sorgusu üret. Asla INSERT/UPDATE/DELETE/DDL kullanma.
+2. **Sadece "kanonik" tabloları kullan**: TBLDIST, TBLMUSTERI, TBLURUN, TBLMSDFATURA, TBLMSDSATIS gibi.
+   _YEDEK / _OLD / _BAK / _BIRLESTIRME / _<tarih> ile biten tablolardan KAÇIN —
+   bunlar yedek/arşiv/birleştirme detay tablolarıdır, gerçek kaynak değildir.
+3. **Sadece kod gösterme**. Distribütör/müşteri/ürün gibi entity'leri hem koduyla hem **adı (TXTAD/TXTUNVAN)** ile döndür.
+   Bunun için ana tabloya (TBLDIST, TBLMUSTERI, TBLURUN, ...) INNER JOIN ekle.
+4. **"Satış/ciro" sorularında COUNT yerine SUM** kullan. Tipik kolonlar: DBLNETTUTAR,
+   DBLBRUTTUTAR, DBLTUTAR, DBLMIKTAR. Sadece kayıt sayısı istenmişse COUNT olur.
+5. Aktiflik filtresi gerekirse \`BYTDURUM = 0\` aktif demektir.
+6. Sonuç sınırla: \`SELECT TOP 100\`, \`SELECT TOP 1000\` gibi. Default 100.
+7. Türkçe sütun aliasları kullan, sayısal alanlarda \`ISNULL\` ile NULL koru.
+8. Sadece bir SQL bloğu döndür: \`\`\`sql ... \`\`\`. Başka açıklama yazma.
 `.trim();
 
 const BRIEF_SYSTEM = `
 Sen Pernod Ricard distribütör verisini Türkçe yorumlayan bir analiz asistanısın.
 Kullanıcının talebi ve sorgu sonucu örnek satırları sana verilecek. 3-5 cümlelik
 kısa, eyleme dönük bir özet yaz: ne çıktı, hangi tablo/kanal öne çıkıyor,
-kullanıcı için bir sonraki adım önerisi. SQL veya teknik jargon yazma.
+kullanıcı için bir sonraki adım önerisi.
+
+ÖNEMLİ:
+- Eğer **0 satır** döndüyse, "veri çıkmadı" olduğunu açıkça söyle. Halüsinasyon yapma —
+  "ilk 10'u belirledik" gibi yanlış bir özet yazma. Olası nedenler: filtre çok dar,
+  yanlış tablo seçimi, demo verisinde ilgili dönem boş. Kullanıcıya tarih aralığını
+  genişletmeyi veya farklı tablo denemeyi öner.
+- Eğer veri varsa: en üst 1-2 satırı somut adlarıyla zikret (ör. "Distribütör X 12.4M ile
+  başta, ardından Y 9.1M"). Sayıları binlik ayraçla ve birim varsa belirterek yaz.
+- SQL veya teknik jargon yazma.
 `.trim();
 
 app.post("/api/reports/generate", async (c) => {
@@ -164,13 +180,20 @@ app.post("/api/reports/generate", async (c) => {
 
     const result = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
 
-    const sampleSummary = result.rows
-      .slice(0, 10)
-      .map((r) => Object.entries(r).map(([k, v]) => `${k}=${formatVal(v)}`).join(", "))
-      .join("\n");
+    const sampleSummary =
+      result.rows.length === 0
+        ? "(SONUÇ BOŞ — 0 satır döndü. Bu bir uyarı: özette \"belirledik / bulduk\" deme, veri olmadığını açıkça söyle.)"
+        : result.rows
+            .slice(0, 10)
+            .map((r) =>
+              Object.entries(r)
+                .map(([k, v]) => `${k}=${formatVal(v)}`)
+                .join(", "),
+            )
+            .join("\n");
     const brief = await generate(
       BRIEF_SYSTEM,
-      `Talep: ${body.prompt}\n\nSorgu sonucu (ilk 10 satır, toplam ${result.rowCount}):\n${sampleSummary}\n\nKısa özet:`,
+      `Talep: ${body.prompt}\n\nSorgu sonucu (toplam ${result.rowCount} satır):\n${sampleSummary}\n\nKısa özet:`,
       { temperature: 0.3, maxOutputTokens: 512 },
     );
 

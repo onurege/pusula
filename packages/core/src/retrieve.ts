@@ -62,6 +62,40 @@ function scoreTable(
     }
   }
 
+  // Penalty for non-canonical table variants (backups, archives, dated copies,
+  // merge/dedupe scratch tables). These rank artificially high on raw keyword
+  // matches but are almost never the right table to query.
+  const NON_CANONICAL = [
+    /_YEDEK$/,
+    /_YEDEK\d*/,
+    /_OLD$/,
+    /_BAK$/,
+    /_BACKUP$/,
+    /_TEMP$/,
+    /_TMP$/,
+    /_TEST$/,
+    /_ARCHIVE$/,
+    /_ARSIV$/,
+    /_UPCD$/,
+    /_BIRLESTIRME(DETAY)?$/,
+    /_\d{6,}$/,    // _20230704
+    /[A-Z]\d{6,}$/, // TBLDIST250521 (no underscore between)
+  ];
+  for (const pat of NON_CANONICAL) {
+    if (pat.test(tableNameUpper)) {
+      score -= 6;
+      reasons.push(`non-canonical penalty: ${pat.source}`);
+      break;
+    }
+  }
+
+  // Mild bonus for the "main" Univera table family — TBLMSD* / TBL<word>BASLIK
+  // are typically the canonical headers, while the other variants are details
+  // or auxiliary stores.
+  if (/^TBL(MSD|DIST|MUSTERI|URUN|FATURA|SATIS|SIPARIS|STOK|BANKA|HESAP|CARI|DEPO)\b/.test(tableNameUpper)) {
+    score += 1;
+  }
+
   if (score <= 0) return null;
   return { table, score, reasons };
 }

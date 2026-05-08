@@ -18,7 +18,7 @@ export const KEYWORD_MAP: Record<string, string> = {
   IRSALIYE: "irsaliye",
   MUSTERI: "müşteri",
   URUN: "ürün",
-  DIST: "dağıtıcı/satış temsilcisi",
+  DIST: "dağıtıcı/satış temsilcisi/distribütör",
   PERSONEL: "personel",
   DEPO: "depo",
   STOK: "stok",
