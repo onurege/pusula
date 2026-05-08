@@ -332,12 +332,12 @@ export default function SalesMap({ customers }: Props) {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2">
               <div className="rounded-lg border border-border bg-bg p-3">
                 <div className="text-[10px] uppercase tracking-wider text-muted">
                   30 Gün Ciro
                 </div>
-                <div className="text-xl font-semibold tracking-tight tabular-nums mt-1">
+                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
                   {sales.kind === "loading"
                     ? "…"
                     : sales.kind === "ok"
@@ -347,9 +347,9 @@ export default function SalesMap({ customers }: Props) {
               </div>
               <div className="rounded-lg border border-border bg-bg p-3">
                 <div className="text-[10px] uppercase tracking-wider text-muted">
-                  Fatura Sayısı
+                  Fatura
                 </div>
-                <div className="text-xl font-semibold tracking-tight tabular-nums mt-1">
+                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
                   {sales.kind === "loading"
                     ? "…"
                     : sales.kind === "ok"
@@ -357,11 +357,34 @@ export default function SalesMap({ customers }: Props) {
                     : "—"}
                 </div>
               </div>
+              <div className="rounded-lg border border-border bg-bg p-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted">
+                  Ziyaret
+                </div>
+                <div className="text-lg font-semibold tracking-tight tabular-nums mt-1 leading-tight">
+                  {sales.kind === "loading"
+                    ? "…"
+                    : sales.kind === "ok"
+                    ? sales.data.ziyaret30.toLocaleString("tr-TR")
+                    : "—"}
+                </div>
+              </div>
             </div>
 
-            {sales.kind === "ok" && sales.data.sonFaturaTarihi && (
-              <div className="text-xs text-muted">
-                Son fatura: {new Date(sales.data.sonFaturaTarihi).toLocaleDateString("tr-TR")}
+            {sales.kind === "ok" && (sales.data.sonFaturaTarihi || sales.data.sonZiyaretTarihi) && (
+              <div className="text-xs text-muted space-y-0.5">
+                {sales.data.sonFaturaTarihi && (
+                  <div>
+                    Son fatura:{" "}
+                    {new Date(sales.data.sonFaturaTarihi).toLocaleDateString("tr-TR")}
+                  </div>
+                )}
+                {sales.data.sonZiyaretTarihi && (
+                  <div>
+                    Son ziyaret:{" "}
+                    {new Date(sales.data.sonZiyaretTarihi).toLocaleDateString("tr-TR")}
+                  </div>
+                )}
               </div>
             )}
             {sales.kind === "err" && (

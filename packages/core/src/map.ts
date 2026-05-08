@@ -260,37 +260,65 @@ export type CustomerSales = {
   ciro30: number;
   fatura30: number;
   sonFaturaTarihi: string | null;
+  ziyaret30: number;
+  sonZiyaretTarihi: string | null;
 };
 
 /**
- * Single-customer revenue lookup — the one function on the map path
- * that still goes to MSSQL, because per-click sales numbers are too
- * dynamic to mirror cheaply. Indexed seek on LNGMUSTERIKOD; sub-second.
+ * Single-customer activity lookup — sales + visits from the last N days.
+ * Two parallel queries against MSSQL, both sub-second on indexed columns.
+ *
+ * Visit counting follows Pernod's report 5190 (SSP_RPT_5190_ZIYARET_ANALIZI):
+ * each row in TBLPMPZIYARETBASLIK with TRHGIRIS NOT NULL counts as a
+ * customer visit. The full SP layers more (rut içi/dışı, ozet kapanışı,
+ * payment splits) — for the popup we only need the count + last date.
  */
 export async function getCustomerSales(
   musteriKod: number,
   _distKod: number | null,
   days = 30,
 ): Promise<CustomerSales> {
-  const sql = `
+  const id = Math.floor(musteriKod);
+  const d = Math.floor(days);
+
+  const salesSql = `
     SELECT
-      ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro30,
-      COUNT(*)                      AS fatura30,
-      MAX(f.TRHISLEMTARIHI)         AS sonFaturaTarihi
+      ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,
+      COUNT(*)                      AS fatura,
+      MAX(f.TRHISLEMTARIHI)         AS sonTarih
     FROM dbo.TBLMSDFATURA AS f
-    WHERE f.LNGMUSTERIKOD = ${Math.floor(musteriKod)}
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -${Math.floor(days)}, GETDATE())
+    WHERE f.LNGMUSTERIKOD = ${id}
+      AND f.TRHISLEMTARIHI >= DATEADD(day, -${d}, GETDATE())
       AND f.BYTTUR  = 0
       AND f.BYTDURUM = 0
   `;
 
-  const result = await runReadOnly(sql, { limit: 1, timeoutMs: 20_000 });
-  const row = result.rows[0] ?? {};
+  const visitSql = `
+    SELECT
+      COUNT(*)        AS ziyaret,
+      MAX(z.TRHGIRIS) AS sonZiyaret
+    FROM dbo.TBLPMPZIYARETBASLIK AS z
+    WHERE z.LNGMUSTERIKOD = ${id}
+      AND z.TRHGIRIS IS NOT NULL
+      AND z.TRHGIRIS >= DATEADD(day, -${d}, GETDATE())
+  `;
+
+  const [salesRes, visitRes] = await Promise.all([
+    runReadOnly(salesSql, { limit: 1, timeoutMs: 20_000 }),
+    runReadOnly(visitSql, { limit: 1, timeoutMs: 20_000 }),
+  ]);
+
+  const sRow = salesRes.rows[0] ?? {};
+  const vRow = visitRes.rows[0] ?? {};
   return {
-    ciro30: Number(row.ciro30 ?? 0),
-    fatura30: Number(row.fatura30 ?? 0),
-    sonFaturaTarihi: row.sonFaturaTarihi
-      ? new Date(row.sonFaturaTarihi as string).toISOString()
+    ciro30: Number(sRow.ciro ?? 0),
+    fatura30: Number(sRow.fatura ?? 0),
+    sonFaturaTarihi: sRow.sonTarih
+      ? new Date(sRow.sonTarih as string).toISOString()
+      : null,
+    ziyaret30: Number(vRow.ziyaret ?? 0),
+    sonZiyaretTarihi: vRow.sonZiyaret
+      ? new Date(vRow.sonZiyaret as string).toISOString()
       : null,
   };
 }

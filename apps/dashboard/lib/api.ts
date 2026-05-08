@@ -210,6 +210,8 @@ export type CustomerSales = {
   ciro30: number;
   fatura30: number;
   sonFaturaTarihi: string | null;
+  ziyaret30: number;
+  sonZiyaretTarihi: string | null;
 };
 
 export async function getCustomerSales(
