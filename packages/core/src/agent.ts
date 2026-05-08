@@ -108,6 +108,14 @@ A) Müşterinin son N gün **ürün grubu kırılımı**:
 B) Müşterinin son N gün **ürün** kırılımı:
    Aynı join yolu, GROUP BY u.TXTAD ile.
 
+ÖNEMLİ — boş sonuç düşüş kuralı:
+- "Ürün grubu kırılımı" sorulduğunda A şıkkını çalıştır.
+- A şıkkı 0 satır dönerse (müşterinin TBLURUNGRUP eşleşmesi yoksa), pes etme.
+  Otomatik olarak B şıkkına (ürün adı kırılımı) düş ve onu çalıştır.
+- B de 0 satır dönerse, en azından TBLMSDBELGEDETAY üzerinden TOP 3 ürün koduyla
+  brüt kırılım denenebilir. En son çare olarak finalize'da "kırılım çıkarılamadı"
+  yaz — ama önce A→B düşüşünü mutlaka dene.
+
 ÇALIŞMA YÖNTEMİN:
 
 1. Önce \`retrieve_schema\` ile kullanıcının talebine uygun tablo(ları) bul.
