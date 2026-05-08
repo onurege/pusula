@@ -20,9 +20,16 @@ export default async function MapPage({
     apiError = (err as Error).message;
   }
 
+  // Hard-coded pixel height instead of flex chain — flex-1 inside
+  // calc(100vh-N) was leaving the map container at 0×0 in some browsers.
+  // 56px header strip + this height fits the visible viewport on a
+  // typical 1080p laptop without scroll, with a min so smaller screens
+  // still get a useful map.
+  const MAP_HEIGHT = "min(calc(100vh - 140px), 900px)";
+
   return (
-    <div className="-m-5 h-[calc(100vh-48px)] flex flex-col">
-      <header className="border-b border-border bg-surface/40 px-5 py-3 flex items-center justify-between gap-4 shrink-0">
+    <div className="space-y-3">
+      <header className="flex items-baseline justify-between flex-wrap gap-3">
         <div className="flex items-baseline gap-3 flex-wrap">
           <Link href="/" className="text-xs text-muted hover:text-fg">← Radar</Link>
           <h1 className="text-lg font-semibold tracking-tight">Satış Haritası</h1>
@@ -36,7 +43,10 @@ export default async function MapPage({
         </div>
       </header>
 
-      <div className="flex-1 relative min-h-0">
+      <div
+        className="rounded-xl overflow-hidden border border-border bg-surface relative"
+        style={{ height: MAP_HEIGHT, minHeight: 480 }}
+      >
         {apiError ? (
           <div className="absolute inset-0 flex items-center justify-center p-8">
             <div className="rounded-lg border border-bad/40 bg-bad/10 px-5 py-4 text-sm max-w-lg">
