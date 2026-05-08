@@ -8,6 +8,7 @@ import { z } from "zod";
 import {
   closePool,
   formatRetrievalForPrompt,
+  getCustomerSales,
   getRadarDefinition,
   getReport,
   listMapCustomers,
@@ -256,13 +257,26 @@ app.get("/api/map/customers", async (c) => {
     const sehir = c.req.query("sehir") ?? undefined;
     const distKodRaw = c.req.query("distKod");
     const distKod = distKodRaw ? parseInt(distKodRaw, 10) : undefined;
-    const minCiroRaw = c.req.query("minCiro");
-    const minCiro = minCiroRaw ? Number(minCiroRaw) : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
 
-    const customers = await listMapCustomers({ sehir, distKod, minCiro, limit });
+    const customers = await listMapCustomers({ sehir, distKod, limit });
     return c.json({ count: customers.length, customers });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+app.get("/api/map/customers/:id/sales", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"), 10);
+    if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
+    const distKodRaw = c.req.query("distKod");
+    const distKod = distKodRaw ? parseInt(distKodRaw, 10) : null;
+    const daysRaw = c.req.query("days");
+    const days = daysRaw ? parseInt(daysRaw, 10) : 30;
+    const sales = await getCustomerSales(id, distKod, days);
+    return c.json(sales);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }

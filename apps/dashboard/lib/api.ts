@@ -172,6 +172,7 @@ export async function explainOnRadar(
 
 export type MapCustomer = {
   id: number;
+  distKod: number | null;
   unvan: string;
   adres: string | null;
   sehir: string | null;
@@ -179,22 +180,35 @@ export type MapCustomer = {
   distributor: string | null;
   lat: number;
   lng: number;
-  ciro30: number;
-  fatura30: number;
 };
 
 export async function listMapCustomers(params: {
   sehir?: string;
   distKod?: number;
-  minCiro?: number;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
   if (params.sehir) qp.set("sehir", params.sehir);
   if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
-  if (typeof params.minCiro === "number") qp.set("minCiro", String(params.minCiro));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
+}
+
+export type CustomerSales = {
+  ciro30: number;
+  fatura30: number;
+  sonFaturaTarihi: string | null;
+};
+
+export async function getCustomerSales(
+  id: number,
+  distKod: number | null,
+  days = 30,
+): Promise<CustomerSales> {
+  const qp = new URLSearchParams();
+  if (typeof distKod === "number") qp.set("distKod", String(distKod));
+  qp.set("days", String(days));
+  return request(`/api/map/customers/${id}/sales?${qp.toString()}`);
 }
 
 export type RadarRun = {

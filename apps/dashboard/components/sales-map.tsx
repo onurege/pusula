@@ -3,14 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import type { MapCustomer } from "@/lib/api";
-import { explainOnRadar } from "@/lib/api";
+import type { CustomerSales, MapCustomer } from "@/lib/api";
+import { explainOnRadar, getCustomerSales } from "@/lib/api";
 
-// CartoCDN positron — free, no API key, dark theme variant available.
 const MAP_STYLE =
   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
-
-// Turkey-centered initial view.
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
@@ -18,7 +15,12 @@ type Props = {
   customers: MapCustomer[];
 };
 
-type SelectedCustomer = MapCustomer & { explainState?: ExplainState };
+type SalesState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ok"; data: CustomerSales }
+  | { kind: "err"; message: string };
+
 type ExplainState =
   | { kind: "idle" }
   | { kind: "loading" }
@@ -29,14 +31,9 @@ export default function SalesMap({ customers }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [styleReady, setStyleReady] = useState(false);
-  const [selected, setSelected] = useState<SelectedCustomer | null>(null);
+  const [selected, setSelected] = useState<MapCustomer | null>(null);
+  const [sales, setSales] = useState<SalesState>({ kind: "idle" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
-
-  // Tone thresholds for revenue colour. Numbers are last-30-day ciro in ₺.
-  // High = healthy, Mid = ok, Low = needs attention, Zero = silent.
-  // Designed for Pernod scale where a top customer does ~10M+/30d.
-  const HIGH = 1_000_000;
-  const MID = 100_000;
 
   const geojson = useMemo(
     () => ({
@@ -45,13 +42,12 @@ export default function SalesMap({ customers }: Props) {
         type: "Feature" as const,
         properties: {
           id: c.id,
+          distKod: c.distKod ?? -1,
           unvan: c.unvan,
           adres: c.adres ?? "",
           sehir: c.sehir ?? "",
           ilce: c.ilce ?? "",
           distributor: c.distributor ?? "",
-          ciro30: c.ciro30,
-          fatura30: c.fatura30,
         },
         geometry: {
           type: "Point" as const,
@@ -62,7 +58,6 @@ export default function SalesMap({ customers }: Props) {
     [customers],
   );
 
-  // Init map once
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
@@ -81,7 +76,6 @@ export default function SalesMap({ customers }: Props) {
     };
   }, []);
 
-  // Add / refresh source + layers
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !styleReady) return;
@@ -99,10 +93,6 @@ export default function SalesMap({ customers }: Props) {
       cluster: true,
       clusterMaxZoom: 13,
       clusterRadius: 50,
-      clusterProperties: {
-        ciroSum: ["+", ["get", "ciro30"]],
-        highCount: ["+", ["case", [">=", ["get", "ciro30"], HIGH], 1, 0]],
-      },
     });
 
     map.addLayer({
@@ -111,30 +101,31 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["has", "point_count"],
       paint: {
-        // Cluster fill leans on revenue density: any high-revenue customer
-        // pulls the cluster green; mostly silent clusters render gray.
         "circle-color": [
-          "case",
-          [">", ["get", "highCount"], 0],
-          "oklch(0.78 0.18 145)", // good
-          [">", ["get", "ciroSum"], MID],
-          "oklch(0.78 0.16 60)", // accent
-          "oklch(0.45 0 0)", // muted
+          "step",
+          ["get", "point_count"],
+          "oklch(0.78 0.16 60)",
+          50,
+          "oklch(0.72 0.18 50)",
+          200,
+          "oklch(0.65 0.22 30)",
+          1000,
+          "oklch(0.60 0.24 20)",
         ],
         "circle-radius": [
           "step",
           ["get", "point_count"],
-          18,
-          25,
-          22,
-          100,
-          28,
-          500,
-          36,
+          16,
+          50,
+          20,
+          200,
+          26,
+          1000,
+          32,
         ],
         "circle-stroke-width": 2,
         "circle-stroke-color": "oklch(0.18 0 0)",
-        "circle-opacity": 0.85,
+        "circle-opacity": 0.9,
       },
     });
 
@@ -157,29 +148,8 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-color": [
-          "case",
-          [">=", ["get", "ciro30"], HIGH],
-          "oklch(0.78 0.18 145)",
-          [">=", ["get", "ciro30"], MID],
-          "oklch(0.78 0.16 60)",
-          [">", ["get", "ciro30"], 0],
-          "oklch(0.65 0 0)",
-          "oklch(0.40 0 0)",
-        ],
-        "circle-radius": [
-          "interpolate",
-          ["linear"],
-          ["get", "ciro30"],
-          0,
-          4,
-          MID,
-          7,
-          HIGH,
-          11,
-          10_000_000,
-          16,
-        ],
+        "circle-color": "oklch(0.78 0.16 60)",
+        "circle-radius": 6,
         "circle-stroke-width": 1.5,
         "circle-stroke-color": "oklch(0.18 0 0)",
       },
@@ -199,8 +169,10 @@ export default function SalesMap({ customers }: Props) {
       const f = e.features?.[0];
       if (!f) return;
       const p = f.properties as Record<string, string | number>;
-      setSelected({
+      const distKodNum = Number(p.distKod);
+      const c: MapCustomer = {
         id: Number(p.id),
+        distKod: distKodNum > 0 ? distKodNum : null,
         unvan: String(p.unvan),
         adres: (p.adres as string) || null,
         sehir: (p.sehir as string) || null,
@@ -208,10 +180,14 @@ export default function SalesMap({ customers }: Props) {
         distributor: (p.distributor as string) || null,
         lat: (f.geometry as GeoJSON.Point).coordinates[1] as number,
         lng: (f.geometry as GeoJSON.Point).coordinates[0] as number,
-        ciro30: Number(p.ciro30),
-        fatura30: Number(p.fatura30),
-      });
+      };
+      setSelected(c);
       setExplain({ kind: "idle" });
+      // Lazy-load this customer's 30d revenue.
+      setSales({ kind: "loading" });
+      getCustomerSales(c.id, c.distKod)
+        .then((data) => setSales({ kind: "ok", data }))
+        .catch((err) => setSales({ kind: "err", message: (err as Error).message }));
     });
 
     const setCursor = (cursor: string) => {
@@ -223,12 +199,12 @@ export default function SalesMap({ customers }: Props) {
     map.on("mouseleave", "unclustered", () => setCursor(""));
   }, [styleReady, geojson]);
 
-  async function runExplain(c: SelectedCustomer) {
+  async function runExplain(c: MapCustomer, s: CustomerSales) {
     setExplain({ kind: "loading" });
     try {
       const res = await explainOnRadar(
         "sales",
-        `Univera ERP'de "${c.unvan}" adlı müşteri (TBLMUSTERI.LNGKOD = ${c.id}, distribütör: ${c.distributor ?? "—"}, şehir: ${c.sehir ?? "—"}). Son 30 gün satış cirosu ${c.ciro30.toLocaleString("tr-TR")} ₺ ve ${c.fatura30} satış faturası kaydı var. Bu müşterinin son 30 gündeki **ürün grubu / marka kırılımını** TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUN üzerinden çıkar (TBLMSDFATURA.LNGMUSTERIKOD = ${c.id} AND BYTTUR=0 AND BYTDURUM=0). En çok ciro getiren 2-3 marka veya ürün grubunu somut adlarıyla, miktarlarıyla ver. 2-3 cümlelik Türkçe yönetici özeti yaz.`,
+        `Univera ERP'de "${c.unvan}" adlı müşteri (TBLMUSTERI.LNGKOD = ${c.id}, distribütör: ${c.distributor ?? "—"}, şehir: ${c.sehir ?? "—"}). Son 30 gün satış cirosu ${s.ciro30.toLocaleString("tr-TR")} ₺ ve ${s.fatura30} satış faturası kaydı var. Bu müşterinin son 30 gündeki **ürün grubu / marka kırılımını** TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUN üzerinden çıkar (TBLMSDFATURA.LNGMUSTERIKOD = ${c.id} AND BYTTUR=0 AND BYTDURUM=0). En çok ciro getiren 2-3 marka veya ürün grubunu somut adlarıyla, miktarlarıyla ver. 2-3 cümlelik Türkçe yönetici özeti yaz.`,
       );
       setExplain({ kind: "ok", brief: res.brief, sql: res.sql });
     } catch (err) {
@@ -275,7 +251,11 @@ export default function SalesMap({ customers }: Props) {
                   30 Gün Ciro
                 </div>
                 <div className="text-xl font-semibold tracking-tight tabular-nums mt-1">
-                  {formatCompact(selected.ciro30)} ₺
+                  {sales.kind === "loading"
+                    ? "…"
+                    : sales.kind === "ok"
+                    ? `${formatCompact(sales.data.ciro30)} ₺`
+                    : "—"}
                 </div>
               </div>
               <div className="rounded-lg border border-border bg-bg p-3">
@@ -283,21 +263,36 @@ export default function SalesMap({ customers }: Props) {
                   Fatura Sayısı
                 </div>
                 <div className="text-xl font-semibold tracking-tight tabular-nums mt-1">
-                  {selected.fatura30.toLocaleString("tr-TR")}
+                  {sales.kind === "loading"
+                    ? "…"
+                    : sales.kind === "ok"
+                    ? sales.data.fatura30.toLocaleString("tr-TR")
+                    : "—"}
                 </div>
               </div>
             </div>
 
-            <div>
+            {sales.kind === "ok" && sales.data.sonFaturaTarihi && (
+              <div className="text-xs text-muted">
+                Son fatura: {new Date(sales.data.sonFaturaTarihi).toLocaleDateString("tr-TR")}
+              </div>
+            )}
+            {sales.kind === "err" && (
+              <div className="text-xs text-bad">
+                Ciro alınamadı: <code className="text-[10px]">{sales.message}</code>
+              </div>
+            )}
+
+            {sales.kind === "ok" && (
               <button
                 type="button"
-                onClick={() => runExplain(selected)}
+                onClick={() => runExplain(selected, sales.data)}
                 disabled={explain.kind === "loading"}
                 className="w-full inline-flex items-center justify-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
               >
                 {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
               </button>
-            </div>
+            )}
 
             {explain.kind === "err" && (
               <div className="text-sm text-bad">
@@ -327,29 +322,6 @@ export default function SalesMap({ customers }: Props) {
           </div>
         </div>
       )}
-
-      {/* Legend */}
-      <div className="absolute left-4 bottom-4 rounded-lg border border-border bg-surface/90 backdrop-blur p-3 text-xs space-y-1.5">
-        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">
-          Son 30 gün cirosu
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full" style={{ background: "oklch(0.78 0.18 145)" }} />
-          1 Mn ₺ ve üzeri
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full" style={{ background: "oklch(0.78 0.16 60)" }} />
-          100 B – 1 Mn ₺
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full" style={{ background: "oklch(0.65 0 0)" }} />
-          Düşük aktivite
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="size-3 rounded-full" style={{ background: "oklch(0.40 0 0)" }} />
-          Sessiz (0 ₺)
-        </div>
-      </div>
     </div>
   );
 }

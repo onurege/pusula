@@ -11,13 +11,11 @@ export default async function MapPage({
 }) {
   const sp = await searchParams;
   const sehir = typeof sp.sehir === "string" ? sp.sehir : undefined;
-  const minCiroRaw = typeof sp.minCiro === "string" ? sp.minCiro : undefined;
-  const minCiro = minCiroRaw && !isNaN(Number(minCiroRaw)) ? Number(minCiroRaw) : undefined;
 
   let data: Awaited<ReturnType<typeof listMapCustomers>> = { count: 0, customers: [] };
   let apiError: string | null = null;
   try {
-    data = await listMapCustomers({ sehir, minCiro, limit: 5000 });
+    data = await listMapCustomers({ sehir, limit: 5000 });
   } catch (err) {
     apiError = (err as Error).message;
   }
@@ -29,11 +27,11 @@ export default async function MapPage({
           <Link href="/" className="text-xs text-muted hover:text-fg">← Radar</Link>
           <h1 className="text-lg font-semibold tracking-tight">Satış Haritası</h1>
           <span className="text-xs text-muted">
-            Müşteri bazlı, son 30 gün satış cirosuna göre renklendirilmiş.
+            Onaylı müşteriler. Bir noktaya tıklayınca son 30 gün ciro + AI analizi.
           </span>
         </div>
         <div className="text-[11px] text-muted tabular-nums">
-          {data.count.toLocaleString("tr-TR")} müşteri · top 5.000 ciro
+          {data.count.toLocaleString("tr-TR")} müşteri
           {sehir && <span className="ml-2">· {sehir}</span>}
         </div>
       </header>
