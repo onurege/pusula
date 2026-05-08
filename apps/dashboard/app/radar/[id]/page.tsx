@@ -141,7 +141,7 @@ export default async function RadarPage({
 
       {/* Table'lar — alt bölüm */}
       {tableBlocks.map((b) => (
-        <section key={b.id} className="space-y-2">
+        <section key={b.id} className="space-y-3">
           <div className="flex items-baseline justify-between flex-wrap gap-2">
             <div>
               <h2 className="text-sm font-medium tracking-tight">{b.title}</h2>
@@ -156,11 +156,7 @@ export default async function RadarPage({
           ) : (
             <ResultTable rows={b.rows} max={50} />
           )}
-          {b.narrative && (
-            <p className="text-xs leading-relaxed text-fg/85 max-w-3xl border-l-2 border-accent/40 pl-3 py-1">
-              {b.narrative}
-            </p>
-          )}
+          {b.narrative && <NarrativeCard text={b.narrative} />}
         </section>
       ))}
     </div>
@@ -175,7 +171,7 @@ function ChartSection({
   colSpan: string;
 }) {
   return (
-    <section className={`col-span-12 ${colSpan} space-y-2`}>
+    <section className={`col-span-12 ${colSpan} space-y-3`}>
       <div className="flex items-baseline justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-sm font-medium tracking-tight">{block.title}</h2>
@@ -196,11 +192,19 @@ function ChartSection({
           <RadarChart spec={block.chart} rows={block.rows} />
         </div>
       ) : null}
-      {block.narrative && (
-        <p className="text-xs leading-relaxed text-fg/85 border-l-2 border-accent/40 pl-3 py-1">
-          {block.narrative}
-        </p>
-      )}
+      {block.narrative && <NarrativeCard text={block.narrative} />}
     </section>
+  );
+}
+
+function NarrativeCard({ text }: { text: string }) {
+  return (
+    <div className="rounded-xl border border-accent/40 bg-accent/8 px-5 py-4">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
+        <span className="size-1.5 rounded-full bg-accent" />
+        AI Analizi
+      </div>
+      <p className="text-[14px] leading-relaxed text-fg/95">{text}</p>
+    </div>
   );
 }
