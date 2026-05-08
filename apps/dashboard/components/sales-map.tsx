@@ -11,6 +11,16 @@ const MAP_STYLE =
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
+// maplibre-gl's style spec only accepts hex / rgb / hsl / named colors —
+// no oklch(). These are the closest hex equivalents to the dashboard's
+// accent palette so the map reads as part of the same brand surface.
+const COLOR_ACCENT = "#e8993f";
+const COLOR_ACCENT_MID = "#dc7d2a";
+const COLOR_ACCENT_HIGH = "#c46118";
+const COLOR_ACCENT_DEEP = "#a44a0d";
+const COLOR_STROKE = "#1a1a1a";
+const COLOR_LABEL = "#0a0a0a";
+
 type Props = {
   customers: MapCustomer[];
 };
@@ -104,13 +114,13 @@ export default function SalesMap({ customers }: Props) {
         "circle-color": [
           "step",
           ["get", "point_count"],
-          "oklch(0.78 0.16 60)",
+          COLOR_ACCENT,
           50,
-          "oklch(0.72 0.18 50)",
+          COLOR_ACCENT_MID,
           200,
-          "oklch(0.65 0.22 30)",
+          COLOR_ACCENT_HIGH,
           1000,
-          "oklch(0.60 0.24 20)",
+          COLOR_ACCENT_DEEP,
         ],
         "circle-radius": [
           "step",
@@ -124,7 +134,7 @@ export default function SalesMap({ customers }: Props) {
           32,
         ],
         "circle-stroke-width": 2,
-        "circle-stroke-color": "oklch(0.18 0 0)",
+        "circle-stroke-color": COLOR_STROKE,
         "circle-opacity": 0.9,
       },
     });
@@ -139,7 +149,7 @@ export default function SalesMap({ customers }: Props) {
         "text-size": 12,
         "text-font": ["Open Sans Semibold", "Arial Unicode MS Bold"],
       },
-      paint: { "text-color": "#0a0a0a" },
+      paint: { "text-color": COLOR_LABEL },
     });
 
     map.addLayer({
@@ -148,10 +158,10 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-color": "oklch(0.78 0.16 60)",
+        "circle-color": COLOR_ACCENT,
         "circle-radius": 6,
         "circle-stroke-width": 1.5,
-        "circle-stroke-color": "oklch(0.18 0 0)",
+        "circle-stroke-color": COLOR_STROKE,
       },
     });
 
