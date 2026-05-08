@@ -131,8 +131,20 @@ B) Müşterinin son N gün **ürün** kırılımı:
 6. SQL çalışıp anlamlı sonuç dönünce \`finalize\` çağır:
    - \`sql\`: çalıştığı son SELECT.
    - \`brief\`: 3-5 cümlelik Türkçe iş özeti. Sonuç boşsa "veri çıkmadı"
-     diyerek dürüstçe belirt; doluysa en üst 1-2 satırı somut adlarıyla
-     zikret. SQL veya teknik jargon yok.
+     diyerek dürüstçe belirt; doluysa **en üst 1-2 satırı SOMUT adlarıyla
+     ve sayılarıyla zikret**. Generic ifadeler ("en yüksek katkıyı sağlayan
+     ürün grupları belirlenmiştir") kabul edilmez — gerçek ad ve rakam yaz.
+
+   Brief örneği — KÖTÜ (yasak, sayılar/adlar yok):
+   > "Müşterinin son 30 günlük cirosu incelendiğinde, en yüksek katkıyı
+   > sağlayan ürün grupları belirlenmiştir."
+
+   Brief örneği — İYİ (somut adlar + rakamlar):
+   > "Mustafa Paydaş'ın son 30 günde 142.300 ₺ olan cirosunun büyük kısmı
+   > Whisky grubundan (89.500 ₺, %63) gelmiş; ikinci sırada Vodka (28.700 ₺)
+   > yer alıyor. 18.100 ₺'lik Şarap üçüncü kalem."
+
+   SQL veya teknik jargon yok; iş dilinde yaz.
 
 ÇOK ÖNEMLİ — VAZGEÇME:
 - Her turda **mutlaka** bir tool çağırırsın: retrieve_schema, run_sql veya finalize.
@@ -472,7 +484,43 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           }
         } else if (name === "finalize") {
           const sql = String(args.sql ?? "");
-          const brief = String(args.brief ?? "");
+          let brief = String(args.brief ?? "");
+
+          // Brief quality guard: if the model returned generic prose without
+          // any concrete value from the result set, rewrite it deterministically
+          // from the actual rows. The model frequently produces filler like
+          // "en yüksek katkıyı sağlayan ürün grupları belirlenmiştir" instead
+          // of citing real names + amounts — this catches that.
+          if (lastRunRowCount > 0 && lastRunRows.length > 0) {
+            const stringValues = lastRunRows
+              .slice(0, 5)
+              .flatMap((r) => Object.values(r))
+              .filter((v): v is string => typeof v === "string" && v.length > 3);
+            const briefRefsRow = stringValues.some((v) =>
+              brief.toLocaleLowerCase("tr").includes(v.toLocaleLowerCase("tr")),
+            );
+            if (!briefRefsRow) {
+              try {
+                const sample = lastRunRows
+                  .slice(0, 5)
+                  .map((r) =>
+                    Object.entries(r)
+                      .map(([k, v]) => `${k}=${formatVal(v)}`)
+                      .join(", "),
+                  )
+                  .join("\n");
+                const rewritten = await generate(
+                  "Sen Türkçe bir analiz asistanısın. Sana kullanıcı talebi ve sorgu sonuç satırları verilecek. 3-4 cümle Türkçe yönetici özeti yaz. Satırlardaki SOMUT adları ve sayıları aynen kullan; jenerik ifade yasak. Para birimi ₺ ise Türkçe okunaklı format (örn. 89.500 ₺). Yüzdelik kıyas yapabilirsen yap.",
+                  `Talep:\n${userPrompt}\n\nSorgu sonucu (toplam ${lastRunRowCount} satır):\n${sample}\n\nBrief:`,
+                  { temperature: 0.3, maxOutputTokens: 512 },
+                );
+                if (rewritten.trim()) brief = rewritten.trim();
+              } catch (err) {
+                console.error("[runAgent] brief rewrite failed:", err);
+              }
+            }
+          }
+
           steps.push({ kind: "final", sql, brief });
           finalized = true;
           responseParts.push({
