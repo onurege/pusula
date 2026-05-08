@@ -74,6 +74,9 @@ export function CustomerModal({ customer, onClose }: Props) {
         <header className="sticky top-0 z-10 bg-surface border-b border-border px-6 py-4 flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold tracking-tight truncate">{customer.unvan}</h2>
+            {customer.kisaAd && customer.kisaAd !== customer.unvan && (
+              <div className="text-sm text-fg/70 mt-0.5 truncate">{customer.kisaAd}</div>
+            )}
             <div className="text-xs text-muted mt-1 flex flex-wrap gap-x-3 gap-y-1">
               {customer.distributor && (
                 <span className="text-accent">{customer.distributor}</span>

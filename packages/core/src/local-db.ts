@@ -34,6 +34,7 @@ export function getLocalDb(repoRoot: string): Database.Database {
       id           INTEGER PRIMARY KEY,
       dist_kod     INTEGER,
       unvan        TEXT NOT NULL,
+      kisa_ad      TEXT,
       adres        TEXT,
       sehir        TEXT,
       ilce         TEXT,
@@ -67,9 +68,30 @@ export function getLocalDb(repoRoot: string): Database.Database {
     );
   `);
 
+  // Idempotent column migrations. SQLite's CREATE TABLE IF NOT EXISTS won't
+  // touch an existing table, so columns added after the initial schema must
+  // be applied via ALTER TABLE guarded by pragma_table_info().
+  ensureColumn(db, "map_customers", "kisa_ad", "TEXT");
+
   dbInstance = db;
   dbRoot = repoRoot;
   return db;
+}
+
+function ensureColumn(
+  db: Database.Database,
+  table: string,
+  column: string,
+  type: string,
+): void {
+  const exists = db
+    .prepare(
+      `SELECT 1 FROM pragma_table_info(?) WHERE name = ?`,
+    )
+    .get(table, column);
+  if (!exists) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }
 
 export function closeLocalDb(): void {

@@ -183,6 +183,7 @@ export type MapCustomer = {
   id: number;
   distKod: number | null;
   unvan: string;
+  kisaAd: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;

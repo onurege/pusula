@@ -30,7 +30,11 @@ export function MapFilters({ facets, customers, count }: Props) {
     const t = q.trim().toLocaleLowerCase("tr");
     if (t.length < 2) return [];
     return customers
-      .filter((c) => c.unvan.toLocaleLowerCase("tr").includes(t))
+      .filter((c) => {
+        const unvan = c.unvan.toLocaleLowerCase("tr");
+        const kisa = (c.kisaAd ?? "").toLocaleLowerCase("tr");
+        return unvan.includes(t) || kisa.includes(t);
+      })
       .slice(0, 10);
   }, [q, customers]);
 
@@ -97,6 +101,9 @@ export function MapFilters({ facets, customers, count }: Props) {
                   className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 border-b border-border/60 last:border-b-0"
                 >
                   <div className="truncate">{c.unvan}</div>
+                  {c.kisaAd && c.kisaAd !== c.unvan && (
+                    <div className="text-[11px] text-muted truncate italic">{c.kisaAd}</div>
+                  )}
                   <div className="text-[11px] text-muted truncate">
                     {[c.ilce, c.sehir].filter(Boolean).join(" / ")}
                     {c.distributor ? ` · ${c.distributor}` : ""}

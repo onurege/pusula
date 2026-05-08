@@ -5,6 +5,7 @@ export type MapCustomer = {
   id: number;
   distKod: number | null;
   unvan: string;
+  kisaAd: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;
@@ -71,8 +72,8 @@ export function listMapCustomers(
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
-    SELECT id, dist_kod AS distKod, unvan, adres, sehir, ilce, distributor,
-           lat, lng, has_sales AS hasSales
+    SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd, adres, sehir,
+           ilce, distributor, lat, lng, has_sales AS hasSales
     FROM map_customers
     ${whereSql}
     ORDER BY has_sales DESC, id
@@ -82,6 +83,7 @@ export function listMapCustomers(
     id: number;
     distKod: number | null;
     unvan: string;
+    kisaAd: string | null;
     adres: string | null;
     sehir: string | null;
     ilce: string | null;
@@ -95,6 +97,7 @@ export function listMapCustomers(
     id: r.id,
     distKod: r.distKod ?? null,
     unvan: r.unvan,
+    kisaAd: r.kisaAd ?? null,
     adres: r.adres,
     sehir: r.sehir,
     ilce: r.ilce,
@@ -160,6 +163,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       m.LNGKOD       AS id,
       m.LNGDISTKOD   AS distKod,
       m.TXTUNVAN     AS unvan,
+      m.TXTKISAAD    AS kisaAd,
       m.TXTADRES1    AS adres,
       m.TXTSEHIR     AS sehir,
       m.TXTILCE      AS ilce,
@@ -197,9 +201,9 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const db = getLocalDb(repoRoot);
   const insCustomer = db.prepare(`
     INSERT INTO map_customers
-      (id, dist_kod, unvan, adres, sehir, ilce, distributor, lat, lng, has_sales)
+      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor, lat, lng, has_sales)
     VALUES
-      (@id, @distKod, @unvan, @adres, @sehir, @ilce, @distributor, @lat, @lng, @hasSales)
+      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor, @lat, @lng, @hasSales)
   `);
   const insCity = db.prepare("INSERT OR IGNORE INTO map_cities (sehir) VALUES (?)");
   const insDist = db.prepare(
@@ -213,6 +217,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         id: Number(r.id),
         distKod: r.distKod == null ? null : Number(r.distKod),
         unvan: String(r.unvan ?? ""),
+        kisaAd: (r.kisaAd as string | null) ?? null,
         adres: (r.adres as string | null) ?? null,
         sehir: (r.sehir as string | null) ?? null,
         ilce: (r.ilce as string | null) ?? null,
