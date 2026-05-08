@@ -242,15 +242,38 @@ app.post("/api/radars/:id/explain", async (c) => {
       return c.json({ error: "question required" }, 400);
     }
     const agentRun = await runAgent(question);
+    if (!agentRun.final) {
+      // Agent loop exhausted MAX_ITERATIONS or gave up without a successful
+      // SQL. Surface the last few step summaries so the dashboard panel can
+      // show *why* — silent "ok with no brief" is the worst possible UX.
+      const lastSteps = agentRun.steps.slice(-6).map((s) => {
+        if (s.kind === "tool_call") return `→ ${s.tool}(${JSON.stringify(s.args).slice(0, 200)})`;
+        if (s.kind === "tool_result")
+          return `   ${s.ok ? "✓" : "✗"} ${s.tool}: ${s.summary}`;
+        if (s.kind === "give_up") return `× model verdi: ${s.reason}`;
+        if (s.kind === "final") return `✓ finalize`;
+        return "";
+      });
+      console.error("[/api/radars/:id/explain] agent produced no final answer:", lastSteps);
+      return c.json(
+        {
+          error:
+            "Agent yanıt üretemedi (tablo bulunamadı veya sorgu döngüsü sonuçsuz bitti). Son adımlar:\n" +
+            lastSteps.join("\n"),
+        },
+        502,
+      );
+    }
     return c.json({
       question,
-      brief: agentRun.final?.brief,
-      sql: agentRun.final?.sql,
+      brief: agentRun.final.brief,
+      sql: agentRun.final.sql,
       rowCount: agentRun.rowCount,
       sampleRows: agentRun.rows.slice(0, 8),
       steps: agentRun.steps,
     });
   } catch (err) {
+    console.error("[/api/radars/:id/explain] failed:", err);
     return c.json({ error: (err as Error).message }, 400);
   }
 });
