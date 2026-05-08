@@ -11,30 +11,23 @@ import { explainOnRadar, getCustomerSales } from "@/lib/api";
 // (free, no key) for a dark theme that matches the dashboard.
 const MAP_STYLE: StyleSpecification = {
   version: 8,
-  // Required for symbol/text layers — without this maplibre rejects any
-  // text-field paint property at addLayer time.
   glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
-    "carto-dark": {
+    osm: {
       type: "raster",
-      tiles: [
-        "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://c.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-        "https://d.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-      ],
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
       tileSize: 256,
       attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     },
   },
   layers: [
     {
-      id: "carto-dark",
+      id: "osm",
       type: "raster",
-      source: "carto-dark",
+      source: "osm",
       minzoom: 0,
-      maxzoom: 20,
+      maxzoom: 19,
     },
   ],
 };
@@ -281,11 +274,13 @@ export default function SalesMap({ customers }: Props) {
   }
 
   return (
-    <div className="relative w-full h-full">
-      <div ref={containerRef} className="absolute inset-0" />
+    <>
+      {/* The container is the only thing that fills the parent box. No
+          wrappers, no absolute children of its parent. Map-check style. */}
+      <div ref={containerRef} className="w-full h-full" />
 
       {selected && (
-        <div className="absolute right-4 top-4 w-[360px] max-h-[calc(100vh-160px)] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl z-10">
+        <div className="fixed right-6 top-24 w-[360px] max-h-[calc(100vh-140px)] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl z-50">
           <div className="p-5 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
@@ -390,7 +385,7 @@ export default function SalesMap({ customers }: Props) {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
