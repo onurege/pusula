@@ -7,7 +7,7 @@ import {
   type Tool,
 } from "@google/generative-ai";
 import { runReadOnly } from "./db.js";
-import { generate } from "./gemini.js";
+import { geminiAttempts, generate, isTransientGeminiError } from "./gemini.js";
 import { formatRetrievalForPrompt, retrieve } from "./retrieve.js";
 import { loadSnapshot } from "./snapshot.js";
 
@@ -197,13 +197,6 @@ const MAX_ITERATIONS = 8;
 const RETRIEVE_TOPK_CAP = 20;
 
 export async function runAgent(userPrompt: string): Promise<AgentResult> {
-  const modelName = process.env.GEMINI_GENERATION_MODEL ?? "gemini-2.5-flash-lite";
-  const model = getClient().getGenerativeModel({
-    model: modelName,
-    systemInstruction: AGENT_SYSTEM,
-    tools: TOOLS,
-  });
-
   const contents: Content[] = [
     { role: "user", parts: [{ text: userPrompt }] },
   ];
@@ -219,17 +212,38 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
   let lastRunDuration = 0;
 
   for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
-    const result = await model.generateContent({
-      contents,
-      generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-      // Force the model to emit a function call every turn. Without this it
-      // tends to bail out with apologetic Turkish text after one tool error,
-      // which collapses the agent loop. With ANY it must call retrieve_schema,
-      // run_sql, or finalize — never give up by chatting back.
-      toolConfig: {
-        functionCallingConfig: { mode: FunctionCallingMode.ANY },
-      },
-    });
+    // Retry / fallback inside each agent turn the same way the standalone
+    // generate() helper does — Gemini 503/429 in the middle of an agent loop
+    // would otherwise kill the whole explain flow with no retry.
+    let result: Awaited<ReturnType<ReturnType<GoogleGenerativeAI["getGenerativeModel"]>["generateContent"]>> | null = null;
+    let lastErr: unknown = null;
+    for await (const { model: modelName } of geminiAttempts()) {
+      try {
+        const model = getClient().getGenerativeModel({
+          model: modelName,
+          systemInstruction: AGENT_SYSTEM,
+          tools: TOOLS,
+        });
+        result = await model.generateContent({
+          contents,
+          generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+          // Force the model to emit a function call every turn. Without this it
+          // tends to bail out with apologetic Turkish text after one tool error,
+          // which collapses the agent loop. With ANY it must call retrieve_schema,
+          // run_sql, or finalize — never give up by chatting back.
+          toolConfig: {
+            functionCallingConfig: { mode: FunctionCallingMode.ANY },
+          },
+        });
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (!isTransientGeminiError(err)) throw err;
+      }
+    }
+    if (!result) {
+      throw lastErr ?? new Error("Gemini agent turn failed without an error");
+    }
 
     const candidate = result.response.candidates?.[0];
     const parts = candidate?.content?.parts ?? [];

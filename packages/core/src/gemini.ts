@@ -40,7 +40,7 @@ export async function embedBatch(texts: string[]): Promise<number[][]> {
  * Google capacity issue rather than a real prompt problem. Used to gate
  * automatic retries inside generate().
  */
-function isTransientGeminiError(err: unknown): boolean {
+export function isTransientGeminiError(err: unknown): boolean {
   const msg = (err as Error | undefined)?.message ?? "";
   return /\b(503|429)\b|high demand|service unavailable|temporarily|rate.?limit|overloaded/i.test(
     msg,
@@ -51,29 +51,40 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Standard primary→primary-retry→fallback attempt schedule shared by both
+ * `generate()` and `runAgent()`. Yields a (modelName, label) pair after the
+ * appropriate sleep so callers only need to wrap their own generateContent
+ * call in a try/catch and check isTransientGeminiError.
+ */
+export async function* geminiAttempts(): AsyncGenerator<{
+  model: string;
+  label: string;
+}> {
+  const primary = process.env.GEMINI_GENERATION_MODEL ?? "gemini-2.5-flash-lite";
+  const fallback =
+    process.env.GEMINI_GENERATION_FALLBACK_MODEL ?? "gemini-2.5-flash";
+  const schedule: { model: string; delayMs: number; label: string }[] = [
+    { model: primary, delayMs: 0, label: "primary" },
+    { model: primary, delayMs: 800, label: "primary-retry" },
+    { model: fallback, delayMs: 1600, label: "fallback" },
+  ];
+  for (const a of schedule) {
+    if (a.delayMs > 0) await sleep(a.delayMs);
+    yield { model: a.model, label: a.label };
+  }
+}
+
 export async function generate(
   systemInstruction: string,
   userPrompt: string,
   options: { temperature?: number; maxOutputTokens?: number } = {},
 ): Promise<string> {
-  const primary = process.env.GEMINI_GENERATION_MODEL ?? "gemini-2.5-flash-lite";
-  // gemini-2.5-flash is the thinking-capable bigger sibling — used as a
-  // fallback because when lite is over-quota the regular model often isn't.
-  const fallback =
-    process.env.GEMINI_GENERATION_FALLBACK_MODEL ?? "gemini-2.5-flash";
-
-  const attempts: { model: string; delayMs: number; label: string }[] = [
-    { model: primary, delayMs: 0, label: "primary" },
-    { model: primary, delayMs: 800, label: "primary-retry" },
-    { model: fallback, delayMs: 1600, label: "fallback" },
-  ];
-
   let lastErr: unknown = null;
-  for (const a of attempts) {
-    if (a.delayMs > 0) await sleep(a.delayMs);
+  for await (const { model: modelName } of geminiAttempts()) {
     try {
       const model = getClient().getGenerativeModel({
-        model: a.model,
+        model: modelName,
         systemInstruction,
       });
       const result = await model.generateContent({
