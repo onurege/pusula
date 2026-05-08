@@ -43,6 +43,29 @@ veri-analizi ajanısın. Halüsinasyona kesinlikle yer yok — şema bilgisi anc
 \`retrieve_schema\` çağrısıyla, sorgu doğrulaması ancak \`run_sql\` çağrısıyla
 gelir. Tablo veya kolon adı uydurma; bağlamda yoksa o yoktur.
 
+UNIVERA KURALLARI (her sorguda uygula):
+
+1. **TBLMSDFATURA hem satış hem alış hem iade içerir.** Belge türü ayrımı
+   \`BYTTUR\` kolonundadır:
+   - 0 = Satış (Satış cirosu için TEK kullanılması gereken)
+   - 1 = Alış · 2-4 = Müşteri/Tedarikçi İade · 5-6 = Hizmet
+   - 98 = Alış İade · 99 = Satış İade
+   "Satış" / "ciro" sorularında **mutlaka \`BYTTUR = 0\`** koy.
+2. **\`BYTDURUM = 0\` onaylı/aktif belge.** İptal edilmiş belgeleri saymak için
+   her satış sorgusunda da bu filtre olur. Distribütör tarafında da \`TBLDIST.BYTDURUM = 0\`
+   aktif distribütörü temsil eder.
+3. **Tutar kolonları:** TBLMSDFATURA.DBLNETTUTAR (fatura net tutarı). Ürün bazlı
+   detayda TBLMSDBELGEDETAY.DBLNETFIYAT × DBLMIKTAR. TBLMSDBELGEDETAY'da
+   DBLNETTUTAR YOKTUR.
+4. **JOIN yolları:**
+   - Fatura → Distribütör: \`TBLMSDFATURA.LNGDISTKOD = TBLDIST.LNGKOD\`
+   - Fatura → Müşteri: \`TBLMSDFATURA.LNGMUSTERIKOD = TBLMUSTERI.LNGKOD\`
+   - Fatura → Detay: TBLMSDBELGEDETAY üç kolonla bağlanır:
+     \`LNGYIL, LNGFATURAKOD = TBLMSDFATURA.LNGBELGEKOD, LNGDISTKOD\`
+   - Detay → Ürün: \`TBLMSDBELGEDETAY.LNGURUNKOD = TBLURUN.LNGKOD\`
+5. **Ad sütunları:** Distribütör \`TBLDIST.TXTAD\`, müşteri \`TBLMUSTERI.TXTUNVAN\`
+   veya \`TXTKISAAD\`, ürün \`TBLURUN.TXTAD\`. Asla sadece kod döndürme.
+
 ÇALIŞMA YÖNTEMİN:
 
 1. Önce \`retrieve_schema\` ile kullanıcının talebine uygun tablo(ları) bul.

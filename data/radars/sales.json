@@ -1,7 +1,7 @@
 {
   "id": "sales",
   "title": "Sales Radar",
-  "description": "Distribütör satış performansı, ciro trendi ve aktif distribütör hareketi.",
+  "description": "Distribütör satış performansı, ciro trendi ve aktif distribütör hareketi. Yalnızca satış faturaları (BYTTUR=0) ve onaylı belgeler (BYTDURUM=0) dahil; alış, iade ve hizmet belgeleri hariç.",
   "tagline": "Bölge yöneticisi için son 30 günün satış manzarası — tek bakışta.",
   "defaultParams": {
     "days": 30,
@@ -14,7 +14,7 @@
     {
       "id": "anomalies",
       "title": "Bugün dikkat çekenler",
-      "description": "Son @recent günün cirosu, önceki @baseline günün haftalık ortalamasıyla kıyaslanarak en sert sapan distribütörler.",
+      "description": "Son @recent günün satış cirosu, önceki @baseline günün haftalık ortalamasıyla kıyaslanarak en sert sapan distribütörler.",
       "display": "anomalies",
       "anomalySpec": {
         "labelColumn": "ad",
@@ -26,24 +26,24 @@
         "topN": 5,
         "thresholds": { "warn": 15, "bad": 30 }
       },
-      "sql": "WITH son AS (\n  SELECT f.LNGDISTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS guncel\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@recent, GETDATE())\n  GROUP BY f.LNGDISTKOD\n),\nonceki AS (\n  SELECT f.LNGDISTKOD,\n         ISNULL(SUM(f.DBLNETTUTAR), 0) * (CAST(@recent AS FLOAT) / @baseline) AS beklenen\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -(@recent + @baseline), GETDATE())\n    AND f.TRHISLEMTARIHI <  DATEADD(day, -@recent, GETDATE())\n  GROUP BY f.LNGDISTKOD\n)\nSELECT TOP 20\n  d.TXTAD AS ad,\n  s.guncel AS guncel,\n  ISNULL(o.beklenen, 0) AS beklenen,\n  CASE\n    WHEN ISNULL(o.beklenen, 0) > 0\n      THEN ((s.guncel - o.beklenen) / o.beklenen) * 100\n    ELSE NULL\n  END AS degisim_pct\nFROM son AS s\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = s.LNGDISTKOD\nLEFT  JOIN onceki AS o ON o.LNGDISTKOD = s.LNGDISTKOD\nWHERE d.BYTDURUM = 0\n  AND ISNULL(o.beklenen, 0) > 0\nORDER BY ABS(((s.guncel - o.beklenen) / o.beklenen) * 100) DESC"
+      "sql": "WITH son AS (\n  SELECT f.LNGDISTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS guncel\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0\n    AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n),\nonceki AS (\n  SELECT f.LNGDISTKOD,\n         ISNULL(SUM(f.DBLNETTUTAR), 0) * (CAST(@recent AS FLOAT) / @baseline) AS beklenen\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -(@recent + @baseline), GETDATE())\n    AND f.TRHISLEMTARIHI <  DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0\n    AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n)\nSELECT TOP 20\n  d.TXTAD AS ad,\n  s.guncel AS guncel,\n  ISNULL(o.beklenen, 0) AS beklenen,\n  CASE\n    WHEN ISNULL(o.beklenen, 0) > 0\n      THEN ((s.guncel - o.beklenen) / o.beklenen) * 100\n    ELSE NULL\n  END AS degisim_pct\nFROM son AS s\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = s.LNGDISTKOD\nLEFT  JOIN onceki AS o ON o.LNGDISTKOD = s.LNGDISTKOD\nWHERE d.BYTDURUM = 0\n  AND ISNULL(o.beklenen, 0) > 0\nORDER BY ABS(((s.guncel - o.beklenen) / o.beklenen) * 100) DESC"
     },
     {
       "id": "kpis",
       "title": "Genel KPI'lar",
       "display": "kpi-row",
-      "sql": "SELECT \n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS toplam_ciro,\n  COUNT(*)               AS fatura_sayisi,\n  COUNT(DISTINCT f.LNGDISTKOD) AS aktif_distributor\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())",
+      "sql": "SELECT \n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS toplam_ciro,\n  COUNT(*)               AS fatura_sayisi,\n  COUNT(DISTINCT f.LNGDISTKOD) AS aktif_distributor\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0",
       "kpiMapping": [
         {
           "id": "toplam_ciro",
-          "label": "Toplam Ciro",
+          "label": "Satış Cirosu",
           "valueColumn": "toplam_ciro",
           "unit": "₺",
           "tone": { "good": 1000000, "warn": 100000, "bad": 0, "direction": "asc" }
         },
         {
           "id": "fatura_sayisi",
-          "label": "Fatura Sayısı",
+          "label": "Satış Faturası",
           "valueColumn": "fatura_sayisi",
           "tone": { "good": 100, "warn": 10, "bad": 0, "direction": "asc" }
         },
@@ -57,8 +57,8 @@
     },
     {
       "id": "top_distributors",
-      "title": "En çok ciro yapan distribütörler",
-      "description": "Son @days günde toplam net cirosu en yüksek ilk @topN distribütör.",
+      "title": "En çok satış yapan distribütörler",
+      "description": "Son @days günde toplam satış cirosu en yüksek ilk @topN distribütör. Onaylı satış faturaları üzerinden.",
       "display": "chart",
       "chart": {
         "kind": "bar",
@@ -66,19 +66,19 @@
         "yKey": "ciro",
         "orientation": "horizontal"
       },
-      "sql": "SELECT TOP (@topN)\n  d.TXTAD AS ad,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura_sayisi\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = f.LNGDISTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND d.BYTDURUM = 0\nGROUP BY d.TXTAD\nORDER BY ciro DESC"
+      "sql": "SELECT TOP (@topN)\n  d.TXTAD AS ad,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura_sayisi\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLDIST AS d ON d.LNGKOD = f.LNGDISTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0\n  AND d.BYTDURUM = 0\nGROUP BY d.TXTAD\nORDER BY ciro DESC"
     },
     {
       "id": "daily_trend",
-      "title": "Günlük ciro trendi",
-      "description": "Son @days günün ciro eğrisi.",
+      "title": "Günlük satış cirosu trendi",
+      "description": "Son @days günün ciro eğrisi. Onaylı satış faturaları.",
       "display": "chart",
       "chart": {
         "kind": "line",
         "xKey": "gun",
         "yKey": "ciro"
       },
-      "sql": "SELECT\n  CAST(f.TRHISLEMTARIHI AS DATE) AS gun,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\nGROUP BY CAST(f.TRHISLEMTARIHI AS DATE)\nORDER BY gun ASC"
+      "sql": "SELECT\n  CAST(f.TRHISLEMTARIHI AS DATE) AS gun,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura\nFROM dbo.TBLMSDFATURA AS f\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0\n  AND f.BYTDURUM = 0\nGROUP BY CAST(f.TRHISLEMTARIHI AS DATE)\nORDER BY gun ASC"
     }
   ]
 }
