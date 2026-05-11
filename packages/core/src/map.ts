@@ -2,6 +2,8 @@ import { runReadOnly } from "./db.js";
 import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
 
+export type RiskTier = "high" | "medium" | "low" | "active";
+
 export type MapCustomer = {
   id: number;
   distKod: number | null;
@@ -16,7 +18,53 @@ export type MapCustomer = {
   /** True if this customer has at least one approved sales invoice in the
    *  last 30 days. Used both for the activity filter and for marker tone. */
   hasSales: boolean;
+  /** Days since most recent approved sales invoice. NULL = never bought. */
+  daysSinceLastSale: number | null;
+  /** Days since most recent recorded visit. NULL = never visited. */
+  daysSinceLastVisit: number | null;
+  /** 30-day ciro and the prior 30-day ciro — feed momentum view. */
+  ciro30: number;
+  ciroPrev30: number;
+  /** Risk tier computed at sync time. See computeRiskTier(). */
+  riskTier: RiskTier;
 };
+
+/**
+ * Derives a risk tier from activity recency and ciro momentum. The thresholds
+ * are intentionally simple — a sales manager can override in the UI but the
+ * default should never bury a HIGH tier customer.
+ */
+export function computeRiskTier(input: {
+  daysSinceLastSale: number | null;
+  daysSinceLastVisit: number | null;
+  ciro30: number;
+  ciroPrev30: number;
+}): RiskTier {
+  const { daysSinceLastSale: dSale, daysSinceLastVisit: dVisit, ciro30, ciroPrev30 } = input;
+
+  // Never-engaged customer (no recorded sale) — not "risk", just dormant.
+  if (dSale === null) return "low";
+
+  // High-value customer (was buying ≥ X ₺/month) going silent ≥30 days → HIGH risk.
+  if (dSale >= 30 && ciroPrev30 >= 50_000) return "high";
+
+  // Long silence (60+ days no sale) on any non-dormant account → HIGH.
+  if (dSale >= 60 && ciroPrev30 >= 5_000) return "high";
+
+  // Big momentum drop (≥50% decline 30d vs prev 30d) on meaningful baseline.
+  if (ciroPrev30 >= 10_000 && ciro30 < ciroPrev30 * 0.5) return "high";
+
+  // Stale visit (90+ days no visit) AND non-trivial baseline.
+  if ((dVisit ?? 999) >= 90 && ciroPrev30 >= 5_000) return "medium";
+
+  // Moderate silence — 30-60 days no sale, low/medium baseline.
+  if (dSale >= 30 && ciroPrev30 >= 1_000) return "medium";
+
+  // Active customer with recent sale.
+  if (dSale <= 14) return "active";
+
+  return "low";
+}
 
 export type MapCustomerFilters = {
   sehir?: string;
@@ -24,6 +72,10 @@ export type MapCustomerFilters = {
   /** "with" → only customers with recent sales, "without" → only silent
    *  customers, undefined → no filter. */
   salesFilter?: "with" | "without";
+  /** Filter by risk tier. Useful for the "kayıp riski" view. */
+  riskTier?: RiskTier;
+  /** Show only customers not visited for ≥ N days. */
+  minDaysSinceVisit?: number;
   limit?: number;
 };
 
@@ -71,13 +123,30 @@ export function listMapCustomers(
     where.push("has_sales = 0");
   }
 
+  if (filters.riskTier) {
+    where.push("risk_tier = @riskTier");
+    params.riskTier = filters.riskTier;
+  }
+  if (typeof filters.minDaysSinceVisit === "number") {
+    where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
+    params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
+  }
+
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
     SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd, adres, sehir,
-           ilce, distributor, lat, lng, has_sales AS hasSales
+           ilce, distributor, lat, lng, has_sales AS hasSales,
+           days_since_last_sale  AS daysSinceLastSale,
+           days_since_last_visit AS daysSinceLastVisit,
+           ciro_30d              AS ciro30,
+           ciro_prev_30d         AS ciroPrev30,
+           risk_tier             AS riskTier
     FROM map_customers
     ${whereSql}
-    ORDER BY has_sales DESC, id
+    ORDER BY
+      CASE risk_tier WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'active' THEN 2 ELSE 3 END,
+      has_sales DESC,
+      id
     LIMIT @limit
   `;
   const rows = db.prepare(sql).all({ ...params, limit }) as Array<{
@@ -92,6 +161,11 @@ export function listMapCustomers(
     lat: number;
     lng: number;
     hasSales: number;
+    daysSinceLastSale: number | null;
+    daysSinceLastVisit: number | null;
+    ciro30: number | null;
+    ciroPrev30: number | null;
+    riskTier: string | null;
   }>;
 
   return rows.map((r) => ({
@@ -106,6 +180,11 @@ export function listMapCustomers(
     lat: r.lat,
     lng: r.lng,
     hasSales: r.hasSales === 1,
+    daysSinceLastSale: r.daysSinceLastSale ?? null,
+    daysSinceLastVisit: r.daysSinceLastVisit ?? null,
+    ciro30: r.ciro30 ?? 0,
+    ciroPrev30: r.ciroPrev30 ?? 0,
+    riskTier: (r.riskTier as RiskTier) ?? "low",
   }));
 }
 
@@ -152,13 +231,36 @@ export function getSyncStatus(repoRoot: string): MapSyncStatus {
 export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const startedAt = Date.now();
 
+  // Pre-aggregated risk dimensions per customer — single trip during sync so
+  // map page renders use only SQLite. Risk tier is derived in JS after the
+  // pull (easier to tune thresholds without a SQL rewrite).
   const customerSql = `
-    WITH satisli AS (
-      SELECT DISTINCT f.LNGMUSTERIKOD
+    WITH son_satis AS (
+      SELECT f.LNGMUSTERIKOD, MAX(f.TRHISLEMTARIHI) AS son
       FROM dbo.TBLMSDFATURA AS f
-      WHERE f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
-        AND f.BYTTUR  = 0
-        AND f.BYTDURUM = 0
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    ciro_30 AS (
+      SELECT f.LNGMUSTERIKOD, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA AS f
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    ciro_prev_30 AS (
+      SELECT f.LNGMUSTERIKOD, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA AS f
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    son_ziyaret AS (
+      SELECT z.LNGMUSTERIKOD, MAX(z.TRHGIRIS) AS son
+      FROM dbo.TBLPMPZIYARETBASLIK AS z
+      WHERE z.TRHGIRIS IS NOT NULL
+      GROUP BY z.LNGMUSTERIKOD
     )
     SELECT
       m.LNGKOD       AS id,
@@ -171,10 +273,17 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       d.TXTAD        AS distributor,
       CAST(m.DBLKOORDINATX AS FLOAT) AS lat,
       CAST(m.DBLKOORDINATY AS FLOAT) AS lng,
-      CASE WHEN s.LNGMUSTERIKOD IS NULL THEN 0 ELSE 1 END AS hasSales
+      CASE WHEN c30.LNGMUSTERIKOD IS NULL THEN 0 ELSE 1 END AS hasSales,
+      CASE WHEN s.son IS NULL THEN NULL ELSE DATEDIFF(day, s.son, GETDATE()) END AS daysSinceLastSale,
+      CASE WHEN z.son IS NULL THEN NULL ELSE DATEDIFF(day, z.son, GETDATE()) END AS daysSinceLastVisit,
+      ISNULL(c30.ciro, 0)   AS ciro30,
+      ISNULL(cp30.ciro, 0)  AS ciroPrev30
     FROM dbo.TBLMUSTERI AS m
-    LEFT JOIN dbo.TBLDIST AS d ON d.LNGKOD = m.LNGDISTKOD
-    LEFT JOIN satisli   AS s ON s.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN dbo.TBLDIST    AS d   ON d.LNGKOD = m.LNGDISTKOD
+    LEFT JOIN son_satis      AS s   ON s.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN ciro_30        AS c30 ON c30.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN ciro_prev_30   AS cp30 ON cp30.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN son_ziyaret    AS z   ON z.LNGMUSTERIKOD = m.LNGKOD
     WHERE m.DBLKOORDINATX > 0 AND m.DBLKOORDINATY > 0
     ORDER BY hasSales DESC, m.LNGKOD
   `;
@@ -202,9 +311,15 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const db = getLocalDb(repoRoot);
   const insCustomer = db.prepare(`
     INSERT INTO map_customers
-      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor, lat, lng, has_sales)
+      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor,
+       lat, lng, has_sales,
+       days_since_last_sale, days_since_last_visit,
+       ciro_30d, ciro_prev_30d, risk_tier)
     VALUES
-      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor, @lat, @lng, @hasSales)
+      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor,
+       @lat, @lng, @hasSales,
+       @daysSinceLastSale, @daysSinceLastVisit,
+       @ciro30, @ciroPrev30, @riskTier)
   `);
   const insCity = db.prepare("INSERT OR IGNORE INTO map_cities (sehir) VALUES (?)");
   const insDist = db.prepare(
@@ -214,6 +329,10 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const replaceAll = db.transaction(() => {
     db.exec("DELETE FROM map_customers; DELETE FROM map_cities; DELETE FROM map_distributors;");
     for (const r of customersRes.rows) {
+      const daysSinceLastSale = r.daysSinceLastSale == null ? null : Number(r.daysSinceLastSale);
+      const daysSinceLastVisit = r.daysSinceLastVisit == null ? null : Number(r.daysSinceLastVisit);
+      const ciro30 = Number(r.ciro30 ?? 0);
+      const ciroPrev30 = Number(r.ciroPrev30 ?? 0);
       insCustomer.run({
         id: Number(r.id),
         distKod: r.distKod == null ? null : Number(r.distKod),
@@ -226,6 +345,16 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         lat: Number(r.lat),
         lng: Number(r.lng),
         hasSales: Number(r.hasSales) === 1 ? 1 : 0,
+        daysSinceLastSale,
+        daysSinceLastVisit,
+        ciro30,
+        ciroPrev30,
+        riskTier: computeRiskTier({
+          daysSinceLastSale,
+          daysSinceLastVisit,
+          ciro30,
+          ciroPrev30,
+        }),
       });
     }
     for (const r of citiesRes.rows) {

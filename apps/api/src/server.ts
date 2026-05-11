@@ -301,10 +301,24 @@ app.get("/api/map/customers", async (c) => {
       salesFilterRaw === "with" || salesFilterRaw === "without"
         ? salesFilterRaw
         : undefined;
+    const riskTierRaw = c.req.query("riskTier");
+    const riskTier =
+      riskTierRaw === "high" || riskTierRaw === "medium" || riskTierRaw === "low" || riskTierRaw === "active"
+        ? (riskTierRaw as "high" | "medium" | "low" | "active")
+        : undefined;
+    const minDaysVisitRaw = c.req.query("minDaysSinceVisit");
+    const minDaysSinceVisit = minDaysVisitRaw ? parseInt(minDaysVisitRaw, 10) : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
 
-    const customers = listMapCustomers(REPO_ROOT, { sehir, distKod, salesFilter, limit });
+    const customers = listMapCustomers(REPO_ROOT, {
+      sehir,
+      distKod,
+      salesFilter,
+      riskTier,
+      minDaysSinceVisit,
+      limit,
+    });
     return c.json({ count: customers.length, customers });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);

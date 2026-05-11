@@ -24,6 +24,9 @@ const COLOR_ACCENT_DEEP = "#3730a3";   // indigo-800 (≥1000)
 const COLOR_MUTED = "#a1a1aa";         // zinc-400 (silent customer)
 const COLOR_STROKE = "#ffffff";         // white stroke for light tiles
 const COLOR_LABEL = "#ffffff";          // cluster count text on indigo
+const COLOR_RISK_HIGH = "#dc2626";     // red-600 — customer at high risk
+const COLOR_RISK_MED  = "#d97706";     // amber-600 — medium risk
+const COLOR_ACTIVE    = "#16a34a";     // green-600 — healthy / active
 
 type Props = {
   customers: MapCustomer[];
@@ -62,6 +65,17 @@ export default function SalesMap({ customers }: Props) {
           ilce: c.ilce ?? "",
           distributor: c.distributor ?? "",
           hasSales: c.hasSales ? 1 : 0,
+          // Numeric encoding for maplibre paint expressions:
+          //   3 high · 2 medium · 1 active · 0 low/dormant
+          riskScore:
+            c.riskTier === "high" ? 3 :
+            c.riskTier === "medium" ? 2 :
+            c.riskTier === "active" ? 1 : 0,
+          riskTier: c.riskTier,
+          daysSinceLastSale: c.daysSinceLastSale ?? -1,
+          daysSinceLastVisit: c.daysSinceLastVisit ?? -1,
+          ciro30: c.ciro30,
+          ciroPrev30: c.ciroPrev30,
         },
         geometry: {
           type: "Point" as const,
@@ -197,17 +211,25 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["!", ["has", "point_count"]],
       paint: {
+        // Color priority: high risk first (red), then medium (amber), then
+        // active (green), else muted (gray) for dormant/never-bought.
         "circle-color": [
-          "case",
-          ["==", ["get", "hasSales"], 1],
-          COLOR_ACCENT,
-          COLOR_MUTED,
+          "match",
+          ["get", "riskScore"],
+          3, COLOR_RISK_HIGH,
+          2, COLOR_RISK_MED,
+          1, COLOR_ACTIVE,
+          /* default */ COLOR_MUTED,
         ],
+        // High-risk points get a bigger marker to draw the eye when scanning
+        // a dense city; active are normal; dormant are small.
         "circle-radius": [
-          "case",
-          ["==", ["get", "hasSales"], 1],
-          7,
-          5,
+          "match",
+          ["get", "riskScore"],
+          3, 9,
+          2, 7,
+          1, 6,
+          /* default */ 4,
         ],
         "circle-stroke-width": 1.5,
         "circle-stroke-color": COLOR_STROKE,
@@ -229,6 +251,8 @@ export default function SalesMap({ customers }: Props) {
       if (!f) return;
       const p = f.properties as Record<string, string | number>;
       const distKodNum = Number(p.distKod);
+      const dSale = Number(p.daysSinceLastSale);
+      const dVisit = Number(p.daysSinceLastVisit);
       const c: MapCustomer = {
         id: Number(p.id),
         distKod: distKodNum > 0 ? distKodNum : null,
@@ -241,6 +265,11 @@ export default function SalesMap({ customers }: Props) {
         lat: (f.geometry as GeoJSON.Point).coordinates[1] as number,
         lng: (f.geometry as GeoJSON.Point).coordinates[0] as number,
         hasSales: Number(p.hasSales) === 1,
+        daysSinceLastSale: dSale >= 0 ? dSale : null,
+        daysSinceLastVisit: dVisit >= 0 ? dVisit : null,
+        ciro30: Number(p.ciro30 ?? 0),
+        ciroPrev30: Number(p.ciroPrev30 ?? 0),
+        riskTier: ((p.riskTier as string) || "low") as MapCustomer["riskTier"],
       };
       setSelected(c);
     });

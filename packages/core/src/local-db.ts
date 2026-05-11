@@ -87,6 +87,14 @@ export function getLocalDb(repoRoot: string): Database.Database {
   // touch an existing table, so columns added after the initial schema must
   // be applied via ALTER TABLE guarded by pragma_table_info().
   ensureColumn(db, "map_customers", "kisa_ad", "TEXT");
+  // Risk / activity recency fields, populated during sync. Letting these be
+  // NULL is intentional — a customer with no recorded sale/visit yet should
+  // show as "?" instead of "0 gün ago" (which would imply today).
+  ensureColumn(db, "map_customers", "days_since_last_sale", "INTEGER");
+  ensureColumn(db, "map_customers", "days_since_last_visit", "INTEGER");
+  ensureColumn(db, "map_customers", "ciro_30d", "REAL");
+  ensureColumn(db, "map_customers", "ciro_prev_30d", "REAL");
+  ensureColumn(db, "map_customers", "risk_tier", "TEXT");
 
   dbInstance = db;
   dbRoot = repoRoot;

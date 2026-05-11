@@ -151,6 +151,15 @@ export function CustomerModal({ customer, onClose }: Props) {
               <div className="text-sm text-fg-2 mt-0.5 truncate">{customer.kisaAd}</div>
             )}
             <div className="text-xs text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              {customer.riskTier === "high" && (
+                <Badge tone="bad" size="sm" dot>Yüksek risk</Badge>
+              )}
+              {customer.riskTier === "medium" && (
+                <Badge tone="warn" size="sm" dot>Orta risk</Badge>
+              )}
+              {customer.riskTier === "active" && (
+                <Badge tone="good" size="sm" dot>Aktif</Badge>
+              )}
               {customer.distributor && (
                 <Badge tone="accent" size="sm">
                   {customer.distributor}
@@ -170,6 +179,30 @@ export function CustomerModal({ customer, onClose }: Props) {
                 {customer.id}
               </span>
             </div>
+            {(customer.daysSinceLastSale !== null || customer.daysSinceLastVisit !== null) && (
+              <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
+                {customer.daysSinceLastSale !== null && (
+                  <span>
+                    Son satış:{" "}
+                    <span className="text-fg-2 font-medium">
+                      {customer.daysSinceLastSale === 0
+                        ? "bugün"
+                        : `${customer.daysSinceLastSale} gün önce`}
+                    </span>
+                  </span>
+                )}
+                {customer.daysSinceLastVisit !== null && (
+                  <span>
+                    Son ziyaret:{" "}
+                    <span className="text-fg-2 font-medium">
+                      {customer.daysSinceLastVisit === 0
+                        ? "bugün"
+                        : `${customer.daysSinceLastVisit} gün önce`}
+                    </span>
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           <button
             type="button"

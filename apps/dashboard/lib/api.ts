@@ -179,6 +179,8 @@ export async function explainOnRadar(
   });
 }
 
+export type RiskTier = "high" | "medium" | "low" | "active";
+
 export type MapCustomer = {
   id: number;
   distKod: number | null;
@@ -191,18 +193,27 @@ export type MapCustomer = {
   lat: number;
   lng: number;
   hasSales: boolean;
+  daysSinceLastSale: number | null;
+  daysSinceLastVisit: number | null;
+  ciro30: number;
+  ciroPrev30: number;
+  riskTier: RiskTier;
 };
 
 export async function listMapCustomers(params: {
   sehir?: string;
   distKod?: number;
   salesFilter?: "with" | "without";
+  riskTier?: RiskTier;
+  minDaysSinceVisit?: number;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
   if (params.sehir) qp.set("sehir", params.sehir);
   if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
   if (params.salesFilter) qp.set("salesFilter", params.salesFilter);
+  if (params.riskTier) qp.set("riskTier", params.riskTier);
+  if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
 }

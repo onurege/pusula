@@ -20,9 +20,19 @@ export default async function MapPage({
     salesFilterRaw === "with" || salesFilterRaw === "without"
       ? salesFilterRaw
       : undefined;
+  const riskTierRaw = typeof sp.riskTier === "string" ? sp.riskTier : undefined;
+  const riskTier: "high" | "medium" | "low" | "active" | undefined =
+    riskTierRaw === "high" || riskTierRaw === "medium" || riskTierRaw === "low" || riskTierRaw === "active"
+      ? (riskTierRaw as "high" | "medium" | "low" | "active")
+      : undefined;
+  const minDaysSinceVisitRaw = typeof sp.minDaysSinceVisit === "string" ? sp.minDaysSinceVisit : undefined;
+  const minDaysSinceVisit =
+    minDaysSinceVisitRaw && !isNaN(Number(minDaysSinceVisitRaw))
+      ? Number(minDaysSinceVisitRaw)
+      : undefined;
 
   const [customersResult, facetsResult, syncResult] = await Promise.allSettled([
-    listMapCustomers({ sehir, distKod, salesFilter, limit: 5000 }),
+    listMapCustomers({ sehir, distKod, salesFilter, riskTier, minDaysSinceVisit, limit: 5000 }),
     getMapFacets(),
     getMapSyncStatus(),
   ]);

@@ -25,6 +25,8 @@ export function MapFilters({ facets, customers, count }: Props) {
   const sehir = params.get("sehir") ?? "";
   const distKod = params.get("distKod") ?? "";
   const salesFilter = params.get("salesFilter") ?? "";
+  const riskTier = params.get("riskTier") ?? "";
+  const minDaysSinceVisit = params.get("minDaysSinceVisit") ?? "";
 
   const [q, setQ] = useState("");
   const hits = useMemo(() => {
@@ -64,7 +66,7 @@ export function MapFilters({ facets, customers, count }: Props) {
     );
   }
 
-  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q;
+  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q || !!riskTier || !!minDaysSinceVisit;
 
   const inputCls =
     "w-full bg-surface border border-border rounded-md px-3 h-9 text-sm shadow-xs " +
@@ -175,6 +177,38 @@ export function MapFilters({ facets, customers, count }: Props) {
           <option value="">Tümü</option>
           <option value="with">Sadece satışı olanlar</option>
           <option value="without">Sadece sessiz müşteriler</option>
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className={labelCls}>Risk seviyesi</label>
+        <select
+          value={riskTier}
+          onChange={(e) => update({ riskTier: e.target.value })}
+          disabled={isPending}
+          className={inputCls}
+        >
+          <option value="">Tümü</option>
+          <option value="high">Yüksek risk (kırmızı)</option>
+          <option value="medium">Orta risk (amber)</option>
+          <option value="active">Aktif (yeşil)</option>
+          <option value="low">Sessiz (gri)</option>
+        </select>
+      </div>
+
+      <div className="space-y-1.5">
+        <label className={labelCls}>Ziyaretsiz süre</label>
+        <select
+          value={minDaysSinceVisit}
+          onChange={(e) => update({ minDaysSinceVisit: e.target.value })}
+          disabled={isPending}
+          className={inputCls}
+        >
+          <option value="">Süre fark etmez</option>
+          <option value="30">30+ gündür ziyaretsiz</option>
+          <option value="60">60+ gündür ziyaretsiz</option>
+          <option value="90">90+ gündür ziyaretsiz</option>
+          <option value="180">180+ gündür ziyaretsiz</option>
         </select>
       </div>
 
