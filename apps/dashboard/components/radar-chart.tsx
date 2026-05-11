@@ -75,8 +75,13 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
 
   if (spec.kind === "bar") {
     const horizontal = spec.orientation === "horizontal";
+    // Horizontal charts need taller height when there are many categories so
+    // recharts doesn't skip labels. ~32px per bar is comfortable.
+    const containerHeight = horizontal
+      ? Math.max(320, data.length * 32 + 40)
+      : 320;
     return (
-      <div className="h-80 w-full">
+      <div className="w-full" style={{ height: containerHeight }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={data}
@@ -87,7 +92,16 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
             {horizontal ? (
               <>
                 <XAxis type="number" stroke={AXIS_STROKE} tickFormatter={formatTick} />
-                <YAxis dataKey={spec.xKey} type="category" stroke={AXIS_STROKE} width={120} />
+                {/* interval={0} forces every label to render — without it
+                    recharts auto-skips when the next tick would overlap. */}
+                <YAxis
+                  dataKey={spec.xKey}
+                  type="category"
+                  stroke={AXIS_STROKE}
+                  width={140}
+                  interval={0}
+                  tick={{ fontSize: 11 }}
+                />
               </>
             ) : (
               <>
