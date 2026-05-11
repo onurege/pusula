@@ -475,7 +475,7 @@ export async function runForesight(
     llmOut = "";
   }
 
-  const { brief, actions: rawActions } = parseForesightOutput(llmOut);
+  const { brief: llmBrief, actions: rawActions } = parseForesightOutput(llmOut);
 
   // Quality filter: drop actions that are (a) passive-voice ops fluff or
   // (b) reference categories not present in any signal. The signals are the
@@ -490,18 +490,125 @@ export async function runForesight(
   for (const d of dropped) signalNames.add(d.urunGrubu.toLocaleLowerCase("tr"));
   for (const c of cohort) signalNames.add(c.urunGrubu.toLocaleLowerCase("tr"));
 
-  const passiveFluffRx =
-    /\b(yapılması|edilmesi|geliştirilmesi|sağlanması|değerlendirilmesi|olarak değerlend|göz önünde bulund|potansiyeli)/i;
+  const fluffRx =
+    /\b(yapılması|edilmesi|geliştirilmesi|sağlanması|değerlendirilmesi|değerlend|göz önünde|potansiyeli|önemlidir|önemli ?\.?$|kontrol[üu] yap|görünürlüğü artır|kampanya geliştir|strateji|odaklan)/i;
 
-  const actions = rawActions.filter((a) => {
-    if (passiveFluffRx.test(a)) return false;
+  const llmActions = rawActions.filter((a) => {
+    if (fluffRx.test(a)) return false;
     const lower = a.toLocaleLowerCase("tr");
-    // Must reference at least one signal-derived name (kategori, etkinlik, vs.)
     const refsSignal = [...signalNames].some((n) => n.length > 2 && lower.includes(n));
     return refsSignal;
   });
 
+  // Deterministic floor: brief + actions built mechanically from signals.
+  // Used either standalone (LLM down/failed) or as a fallback when the LLM
+  // output is fluff that doesn't survive the quality gate.
+  const detBrief = buildDeterministicBrief(customerLabel, signals);
+  const detActions = buildDeterministicActions(signals);
+
+  // Accept LLM brief only if (a) it has at least one signal name AND (b) no
+  // banned fluff phrase. Otherwise prefer deterministic.
+  const llmBriefLower = llmBrief.toLocaleLowerCase("tr");
+  const briefRefsSignal = [...signalNames].some(
+    (n) => n.length > 2 && llmBriefLower.includes(n),
+  );
+  const briefIsClean = !fluffRx.test(llmBrief);
+  const brief = llmBrief && briefRefsSignal && briefIsClean ? llmBrief : detBrief;
+
+  // Actions: prefer LLM if it survived the filter with ≥2 entries, else fall
+  // back to deterministic. Never return empty if signals exist.
+  const actions = llmActions.length >= 2 ? llmActions : detActions;
+
   return { ...signals, brief, actions };
+}
+
+function buildDeterministicBrief(
+  customerLabel: string,
+  s: ForesightSignals,
+): string {
+  const parts: string[] = [];
+
+  const topEvents = s.events.slice(0, 2);
+  if (topEvents.length > 0) {
+    const evt = topEvents
+      .map((e) => `${e.date} ${e.name}`)
+      .join(" + ");
+    parts.push(`${customerLabel} için önümüzdeki 14 günde: ${evt}.`);
+  }
+
+  if (s.yoy.length > 0) {
+    const total = s.yoy.reduce((a, b) => a + b.ciro, 0);
+    const top = s.yoy.filter((y) => y.urunGrubu).slice(0, 2);
+    if (top.length > 0) {
+      const topStr = top.map((y) => `${y.urunGrubu} (${formatTl(y.ciro)})`).join(", ");
+      parts.push(
+        `Geçen yıl aynı hafta toplam ${formatTl(total)} ciro, en yüksek kalemler: ${topStr}.`,
+      );
+    } else {
+      parts.push(`Geçen yıl aynı hafta toplam ${formatTl(total)} ciro yapılmıştı.`);
+    }
+  }
+
+  const d = s.dropped[0];
+  if (d) {
+    parts.push(
+      `${d.urunGrubu} kategorisi ${d.daysSinceLast ?? "?"} gündür hiç sipariş edilmiyor (eskiden ${formatTl(d.baselineCiro)} alıyordu).`,
+    );
+  }
+
+  const c = s.cohort[0];
+  if (c) {
+    parts.push(
+      `Aynı segmentten ${c.cohortBuyerCount}/${c.cohortTotalBuyers} müşteri bu hafta ${c.urunGrubu} aldı, bu müşteri almadı.`,
+    );
+  }
+
+  if (parts.length === 0) {
+    return "Önümüzdeki 14 günde anlamlı bir foresight sinyali yok.";
+  }
+  return parts.join(" ");
+}
+
+function buildDeterministicActions(s: ForesightSignals): string[] {
+  const out: string[] = [];
+
+  // 1) Strongest YoY pick around the next calendar event
+  const nextEvent = s.events[0];
+  const topYoy = s.yoy.find((y) => y.urunGrubu);
+  if (nextEvent && topYoy) {
+    out.push(
+      `${nextEvent.date} ${nextEvent.name} öncesi ${topYoy.urunGrubu} kategorisini hatırlat — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
+    );
+  } else if (topYoy) {
+    out.push(
+      `${topYoy.urunGrubu} kategorisinde bu hafta stok teklif et — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
+    );
+  } else if (nextEvent) {
+    const cats = nextEvent.category_hints?.slice(0, 2).join(", ");
+    if (cats) {
+      out.push(
+        `${nextEvent.date} ${nextEvent.name} öncesi ${cats} kategorilerinde stok hatırlat (takvim sinyali)`,
+      );
+    }
+  }
+
+  // 2) Re-engagement on dropped category
+  const dropped = s.dropped[0];
+  if (dropped) {
+    out.push(
+      `${dropped.urunGrubu} için yeniden teklif sun — ${dropped.daysSinceLast ?? "?"} gündür hiç almadı, eskiden ${formatTl(dropped.baselineCiro)} alıyordu (düşmüş kategori)`,
+    );
+  }
+
+  // 3) Cross-sell via cohort
+  const cohort = s.cohort[0];
+  if (cohort) {
+    out.push(
+      `${cohort.urunGrubu} öner — aynı segmentteki ${cohort.cohortBuyerCount}/${cohort.cohortTotalBuyers} müşteri bu hafta aldı, bu hesap almadı (segment kıyası)`,
+    );
+  }
+
+  return out.slice(0, 3);
 }
 
 function parseForesightOutput(raw: string): { brief: string; actions: string[] } {
