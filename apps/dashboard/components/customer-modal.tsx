@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
+import { describeRiskReason } from "@/lib/risk";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -201,6 +202,21 @@ export function CustomerModal({ customer, onClose }: Props) {
                     </span>
                   </span>
                 )}
+              </div>
+            )}
+            {(customer.riskTier === "high" || customer.riskTier === "medium") && (
+              <div
+                className={
+                  "mt-2 text-[11px] leading-snug px-2.5 py-1.5 rounded-md border " +
+                  (customer.riskTier === "high"
+                    ? "border-bad/30 bg-[var(--color-bad-soft)] text-bad"
+                    : "border-warn/30 bg-[var(--color-warn-soft)] text-warn")
+                }
+              >
+                <span className="font-semibold uppercase tracking-wider text-[10px] mr-1.5">
+                  Neden:
+                </span>
+                <span className="text-fg-2">{describeRiskReason(customer)}</span>
               </div>
             )}
           </div>

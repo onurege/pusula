@@ -76,6 +76,60 @@ export function computeRiskTier(input: {
   return "low";
 }
 
+/**
+ * Human-readable explanation for why a customer ended up in their tier.
+ * Mirrors the rules in computeRiskTier() — keep in sync if you change one.
+ *
+ * Used in the customer modal so a saha temsilcisi sees WHY the system
+ * flagged this customer (without it, a 25-day-silent customer marked HIGH
+ * looks like a bug to the rep).
+ */
+export function describeRiskReason(input: {
+  daysSinceLastSale: number | null;
+  daysSinceLastVisit: number | null;
+  ciro30: number;
+  ciroPrev30: number;
+  riskTier: RiskTier;
+}): string {
+  const { daysSinceLastSale: dSale, daysSinceLastVisit: dVisit, ciro30, ciroPrev30, riskTier } = input;
+  const fmt = (n: number) => Math.round(n).toLocaleString("tr-TR") + " ₺";
+  const hasAnyHistory = ciro30 > 0 || ciroPrev30 > 0 || (dSale !== null && dSale < 365);
+
+  if (riskTier === "high") {
+    if (dSale === null) return ""; // shouldn't happen
+    if (dSale >= 60 && hasAnyHistory)
+      return `${dSale} gündür hiç sipariş yok, daha önce alıyordu`;
+    if (dSale >= 30 && ciroPrev30 >= 10_000)
+      return `${dSale} gündür sipariş yok; geçen 30 günde ${fmt(ciroPrev30)} alıyordu`;
+    if (ciroPrev30 >= 5_000 && ciro30 < ciroPrev30 * 0.5) {
+      const dropPct = Math.round(((ciroPrev30 - ciro30) / ciroPrev30) * 100);
+      return `Ciro önceki 30 günde ${fmt(ciroPrev30)} iken son 30 günde ${fmt(ciro30)}'ye düştü (%${dropPct} kayıp)`;
+    }
+    return "Yüksek öncelikli risk";
+  }
+
+  if (riskTier === "medium") {
+    if (dSale !== null && dSale >= 30 && hasAnyHistory)
+      return `${dSale} gündür sipariş yok`;
+    if ((dVisit ?? 999) >= 60 && hasAnyHistory)
+      return `${dVisit} gündür hiç ziyaret edilmemiş`;
+    if (ciroPrev30 >= 1_000 && ciro30 < ciroPrev30 * 0.7) {
+      const dropPct = Math.round(((ciroPrev30 - ciro30) / ciroPrev30) * 100);
+      return `Ciro %${dropPct} düşüş gösterdi (${fmt(ciroPrev30)} → ${fmt(ciro30)})`;
+    }
+    return "Erken uyarı";
+  }
+
+  if (riskTier === "active") {
+    return `Son ${dSale ?? "?"} gün içinde satış oldu, ciro sağlıklı`;
+  }
+
+  // low
+  if (dSale === null) return "Hiç sipariş kaydı yok";
+  if (dSale >= 180) return `${dSale} gündür hiç sipariş yok`;
+  return "Düşük öncelik";
+}
+
 export type MapCustomerFilters = {
   sehir?: string;
   distKod?: number;
