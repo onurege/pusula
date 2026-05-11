@@ -95,7 +95,7 @@ export function CustomerModal({ customer, onClose }: Props) {
   return (
     <div
       className={
-        "fixed inset-0 z-50 flex bg-black/40 backdrop-blur-sm transition-all " +
+        "fixed inset-0 z-[60] flex bg-black/40 backdrop-blur-sm transition-all " +
         (expanded ? "items-stretch justify-stretch p-4" : "items-center justify-center p-4")
       }
       onClick={onClose}
