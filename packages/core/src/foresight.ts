@@ -155,13 +155,35 @@ export async function getCustomerYoyWindow(
   }));
 }
 
+export type DroppedCategoryUrgency = "high" | "medium" | "low";
+
 export type DroppedCategory = {
   urunGrubu: string;
   baselineCiro: number;
   baselineMiktar: number;
   recentCiro: number;
   daysSinceLast: number | null;
+  urgency: DroppedCategoryUrgency;
 };
+
+/**
+ * Urgency scoring for a dropped category. The signal that matters is
+ * `baselineCiro × daysSinceLast` — a customer who used to buy 1M ₺ in this
+ * category and hasn't ordered for 40+ days is a relationship risk, not a
+ * routine re-engagement note. The thresholds are intentionally simple — a
+ * field rep can override but the system should never bury a HIGH item.
+ */
+function computeDroppedUrgency(
+  baselineCiro: number,
+  daysSinceLast: number | null,
+): DroppedCategoryUrgency {
+  const days = daysSinceLast ?? 0;
+  if (baselineCiro >= 100_000 && days >= 30) return "high";
+  if (baselineCiro >= 250_000) return "high"; // huge historical relationship, even short pauses matter
+  if (baselineCiro >= 20_000 && days >= 30) return "medium";
+  if (baselineCiro >= 50_000) return "medium";
+  return "low";
+}
 
 /**
  * Categories the customer used to buy regularly (in 31-120 day baseline) but
@@ -209,13 +231,25 @@ export async function getDroppedCategories(
     ORDER BY baselineCiro DESC
   `;
   const out = await runReadOnly(sql, { limit: 20, timeoutMs: 30_000 });
-  return out.rows.map((r) => ({
-    urunGrubu: String(r.urunGrubu ?? ""),
-    baselineCiro: Number(r.baselineCiro ?? 0),
-    baselineMiktar: Number(r.baselineMiktar ?? 0),
-    recentCiro: Number(r.recentCiro ?? 0),
-    daysSinceLast: r.daysSinceLast == null ? null : Number(r.daysSinceLast),
-  }));
+  return out.rows
+    .map((r) => {
+      const baselineCiro = Number(r.baselineCiro ?? 0);
+      const daysSinceLast = r.daysSinceLast == null ? null : Number(r.daysSinceLast);
+      return {
+        urunGrubu: String(r.urunGrubu ?? ""),
+        baselineCiro,
+        baselineMiktar: Number(r.baselineMiktar ?? 0),
+        recentCiro: Number(r.recentCiro ?? 0),
+        daysSinceLast,
+        urgency: computeDroppedUrgency(baselineCiro, daysSinceLast),
+      };
+    })
+    // High first, then medium, then low — and within each tier highest baseline first
+    .sort((a, b) => {
+      const rank = { high: 0, medium: 1, low: 2 } as const;
+      if (rank[a.urgency] !== rank[b.urgency]) return rank[a.urgency] - rank[b.urgency];
+      return b.baselineCiro - a.baselineCiro;
+    });
 }
 
 export type CohortPick = {
@@ -338,6 +372,14 @@ export async function getCohortRecent(
   }));
 }
 
+export type RiskFlag = {
+  kind: "dropped-high-value";
+  urunGrubu: string;
+  baselineCiro: number;
+  daysSinceLast: number | null;
+  message: string;
+};
+
 export type ForesightSignals = {
   customerId: number;
   generatedAt: string;
@@ -345,6 +387,7 @@ export type ForesightSignals = {
   yoy: YoyPurchase[];
   dropped: DroppedCategory[];
   cohort: CohortPick[];
+  riskFlags: RiskFlag[];
 };
 
 export type ForesightResult = ForesightSignals & {
@@ -375,7 +418,24 @@ export async function runForesight(
   ]);
 
   const generatedAt = new Date().toISOString();
-  const signals: ForesightSignals = { customerId, generatedAt, events, yoy, dropped, cohort };
+  const riskFlags: RiskFlag[] = dropped
+    .filter((d) => d.urgency === "high")
+    .map((d) => ({
+      kind: "dropped-high-value" as const,
+      urunGrubu: d.urunGrubu,
+      baselineCiro: d.baselineCiro,
+      daysSinceLast: d.daysSinceLast,
+      message: `${d.urunGrubu} kategorisinden eskiden ${formatTl(d.baselineCiro)} alıyordu, ${d.daysSinceLast ?? "?"} gündür hiç sipariş yok — müşteri başka kanala kaymış olabilir`,
+    }));
+  const signals: ForesightSignals = {
+    customerId,
+    generatedAt,
+    events,
+    yoy,
+    dropped,
+    cohort,
+    riskFlags,
+  };
 
   // If we have literally nothing to say, return empty brief instead of hallucinating.
   if (events.length === 0 && yoy.length === 0 && dropped.length === 0 && cohort.length === 0) {
@@ -419,9 +479,16 @@ export async function runForesight(
     )
     .join("\n");
 
+  const riskLines = riskFlags.map((r) => `- ${r.message}`).join("\n");
+
   const userPrompt = [
     `Müşteri: ${customerLabel} (id ${customerId}).`,
     `Bugün: ${new Date().toISOString().slice(0, 10)}. Pencere: ${windowDays} gün.`,
+    "",
+    riskFlags.length > 0
+      ? "⚠️ YÜKSEK ÖNCELİKLİ RİSK SİNYALLERİ (BRIEF'in İLK CÜMLESİ BUNU AÇIKLAYACAK):"
+      : "(yüksek öncelikli risk yok)",
+    riskFlags.length > 0 ? riskLines : "",
     "",
     "ÖNÜMÜZDEKİ TAKVİM:",
     eventLines || "(önümüzdeki 14 günde özel gün yok)",
@@ -429,7 +496,7 @@ export async function runForesight(
     "GEÇEN YIL AYNI HAFTA BU MÜŞTERİ NE ALDIYDI:",
     yoyLines || "(geçen yıl bu hafta için kayıt bulunamadı)",
     "",
-    "DÜŞMÜŞ KATEGORİLER (eskiden alıyordu, son 30 günde hiç):",
+    "DÜŞMÜŞ KATEGORİLER (eskiden alıyordu, son 30 günde hiç) — high/medium/low etiketli:",
     droppedLines || "(düşmüş kategori yok)",
     "",
     "SEGMENT KIYASI (aynı şehir + ciro bandındaki müşteriler bu hafta aldı, bu müşteri almadı):",
@@ -531,12 +598,22 @@ function buildDeterministicBrief(
 ): string {
   const parts: string[] = [];
 
+  // Lead with risk if any HIGH urgency dropped category exists. A relationship
+  // worth six figures going dark is the headline, not the upcoming bayram.
+  const risk = s.riskFlags[0];
+  if (risk) {
+    parts.push(
+      `${customerLabel}: ${risk.urunGrubu} kategorisinden eskiden ${formatTl(risk.baselineCiro)} alıyordu, ${risk.daysSinceLast ?? "?"} gündür hiç sipariş yok — yüksek öncelikli risk.`,
+    );
+  }
+
   const topEvents = s.events.slice(0, 2);
   if (topEvents.length > 0) {
     const evt = topEvents
       .map((e) => `${e.date} ${e.name}`)
       .join(" + ");
-    parts.push(`${customerLabel} için önümüzdeki 14 günde: ${evt}.`);
+    const prefix = risk ? "Bu arada önümüzdeki 14 günde" : `${customerLabel} için önümüzdeki 14 günde`;
+    parts.push(`${prefix}: ${evt}.`);
   }
 
   if (s.yoy.length > 0) {
@@ -575,7 +652,15 @@ function buildDeterministicBrief(
 function buildDeterministicActions(s: ForesightSignals): string[] {
   const out: string[] = [];
 
-  // 1) Strongest YoY pick around the next calendar event
+  // 1) HIGH-urgency risk first — relationship at risk trumps event-based picks
+  const risk = s.riskFlags[0];
+  if (risk) {
+    out.push(
+      `Bu hafta ziyaret listesine al ve ${risk.urunGrubu} için neden sipariş gelmediğini sor — ${risk.daysSinceLast ?? "?"} gündür hiç almıyor, eskiden ${formatTl(risk.baselineCiro)} alıyordu (yüksek öncelikli risk)`,
+    );
+  }
+
+  // 2) Strongest YoY pick around the next calendar event
   const nextEvent = s.events[0];
   const topYoy = s.yoy.find((y) => y.urunGrubu);
   if (nextEvent && topYoy) {
@@ -595,15 +680,17 @@ function buildDeterministicActions(s: ForesightSignals): string[] {
     }
   }
 
-  // 2) Re-engagement on dropped category
-  const dropped = s.dropped[0];
-  if (dropped) {
-    out.push(
-      `${dropped.urunGrubu} için yeniden teklif sun — ${dropped.daysSinceLast ?? "?"} gündür hiç almadı, eskiden ${formatTl(dropped.baselineCiro)} alıyordu (düşmüş kategori)`,
-    );
+  // 3) If no HIGH risk already covered, include lower-urgency dropped item
+  if (!risk) {
+    const dropped = s.dropped[0];
+    if (dropped) {
+      out.push(
+        `${dropped.urunGrubu} için yeniden teklif sun — ${dropped.daysSinceLast ?? "?"} gündür hiç almadı, eskiden ${formatTl(dropped.baselineCiro)} alıyordu (düşmüş kategori)`,
+      );
+    }
   }
 
-  // 3) Cross-sell via cohort
+  // 4) Cross-sell via cohort
   const cohort = s.cohort[0];
   if (cohort) {
     out.push(

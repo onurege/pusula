@@ -347,9 +347,31 @@ function ForesightPanel({ data }: { data: ForesightResult }) {
 
   return (
     <div className="rounded-lg border border-accent/40 bg-accent/5 p-4 space-y-4">
-      <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
-        Öngörü · sonraki 14 gün
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
+          Öngörü · sonraki 14 gün
+        </div>
+        {data.riskFlags.length > 0 && (
+          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold text-bad bg-bad/15 border border-bad/30 px-1.5 py-0.5 rounded">
+            ● Risk · {data.riskFlags.length}
+          </span>
+        )}
       </div>
+
+      {data.riskFlags.length > 0 && (
+        <div className="rounded-md border border-bad/40 bg-bad/10 p-3 space-y-1.5">
+          <div className="text-[10px] uppercase tracking-wider font-semibold text-bad">
+            Yüksek öncelikli risk
+          </div>
+          <ul className="space-y-1">
+            {data.riskFlags.map((r, i) => (
+              <li key={i} className="text-sm leading-snug text-fg">
+                {r.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {data.brief && (
         <div className="text-sm leading-relaxed whitespace-pre-wrap">
@@ -397,13 +419,21 @@ function ForesightPanel({ data }: { data: ForesightResult }) {
               />
             )}
             {data.dropped.length > 0 && (
-              <ForesightSignalList
-                title="Düşmüş kategoriler"
-                items={data.dropped.slice(0, 5).map(
-                  (d) =>
-                    `${d.urunGrubu} — eskiden ${Math.round(d.baselineCiro).toLocaleString("tr-TR")} ₺, ${d.daysSinceLast ?? "?"} gündür yok`,
-                )}
-              />
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">
+                  Düşmüş kategoriler
+                </div>
+                <ul className="space-y-0.5 list-disc pl-4 text-[11px]">
+                  {data.dropped.slice(0, 5).map((d, i) => (
+                    <li key={i} className="leading-snug">
+                      <UrgencyBadge urgency={d.urgency} />{" "}
+                      {d.urunGrubu} — eskiden{" "}
+                      {Math.round(d.baselineCiro).toLocaleString("tr-TR")} ₺,{" "}
+                      {d.daysSinceLast ?? "?"} gündür yok
+                    </li>
+                  ))}
+                </ul>
+              </div>
             )}
             {data.cohort.length > 0 && (
               <ForesightSignalList
@@ -433,5 +463,27 @@ function ForesightSignalList({ title, items }: { title: string; items: string[] 
         ))}
       </ul>
     </div>
+  );
+}
+
+function UrgencyBadge({ urgency }: { urgency: "high" | "medium" | "low" }) {
+  if (urgency === "high") {
+    return (
+      <span className="inline-block text-[9px] uppercase tracking-wider font-bold text-bad bg-bad/15 border border-bad/30 px-1 rounded">
+        Yüksek
+      </span>
+    );
+  }
+  if (urgency === "medium") {
+    return (
+      <span className="inline-block text-[9px] uppercase tracking-wider font-bold text-warn bg-warn/15 border border-warn/30 px-1 rounded">
+        Orta
+      </span>
+    );
+  }
+  return (
+    <span className="inline-block text-[9px] uppercase tracking-wider font-bold text-muted bg-muted/15 border border-muted/30 px-1 rounded">
+      Düşük
+    </span>
   );
 }

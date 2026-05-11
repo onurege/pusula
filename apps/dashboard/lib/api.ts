@@ -258,6 +258,15 @@ export type ForesightDropped = {
   baselineMiktar: number;
   recentCiro: number;
   daysSinceLast: number | null;
+  urgency: "high" | "medium" | "low";
+};
+
+export type ForesightRiskFlag = {
+  kind: "dropped-high-value";
+  urunGrubu: string;
+  baselineCiro: number;
+  daysSinceLast: number | null;
+  message: string;
 };
 
 export type ForesightCohort = {
@@ -274,6 +283,7 @@ export type ForesightResult = {
   yoy: ForesightYoy[];
   dropped: ForesightDropped[];
   cohort: ForesightCohort[];
+  riskFlags: ForesightRiskFlag[];
   brief: string;
   actions: string[];
 };

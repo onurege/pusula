@@ -16,6 +16,7 @@
   --color-accent: #6366f1;         /* indigo-500 */
   --color-accent-fg: #ffffff;
   --color-good: #16a34a;           /* green-600 */
+  --color-warn: #d97706;           /* amber-600 — medium-urgency badge */
   --color-bad: #dc2626;            /* red-600 */
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
