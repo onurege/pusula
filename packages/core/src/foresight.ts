@@ -122,9 +122,12 @@ export async function getCustomerYoyWindow(
   const lastYear = addDays(today, -365);
   const start = isoDate(addDays(lastYear, -3));
   const end = isoDate(addDays(lastYear, windowDays));
+  // Group at product-group level when TBLURUNGRUP join exists, otherwise fall
+  // back to product name. COALESCE means orphan products (no group match)
+  // still surface with a usable name instead of collapsing into a NULL bucket.
   const sql = `
     SELECT TOP 10
-      g.TXTAD AS urunGrubu,
+      COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
       SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro,
       SUM(d.DBLMIKTAR) AS miktar
     FROM dbo.TBLMSDFATURA f
@@ -141,7 +144,7 @@ export async function getCustomerYoyWindow(
       AND f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= '${start}'
       AND f.TRHISLEMTARIHI <= '${end}'
-    GROUP BY g.TXTAD
+    GROUP BY COALESCE(g.TXTAD, u.TXTAD)
     ORDER BY ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 50, timeoutMs: 30_000 });
@@ -174,7 +177,7 @@ export async function getDroppedCategories(
   const sql = `
     WITH detay AS (
       SELECT
-        g.TXTAD AS urunGrubu,
+        COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
         d.DBLNETFIYAT * d.DBLMIKTAR AS satirCiro,
         d.DBLMIKTAR AS satirMiktar,
         f.TRHISLEMTARIHI AS tarih
@@ -185,7 +188,7 @@ export async function getDroppedCategories(
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u
         ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.TBLURUNGRUP g
+      LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
        AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.LNGMUSTERIKOD = ${Math.floor(customerId)}
@@ -281,7 +284,7 @@ export async function getCohortRecent(
     ),
     cohortBuys AS (
       SELECT
-        g.TXTAD AS urunGrubu,
+        COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
         f.LNGMUSTERIKOD AS musteriKod,
         SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
@@ -291,21 +294,21 @@ export async function getCohortRecent(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.TBLURUNGRUP g
+      LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -${days}, GETDATE())
-      GROUP BY g.TXTAD, f.LNGMUSTERIKOD
+      GROUP BY COALESCE(g.TXTAD, u.TXTAD), f.LNGMUSTERIKOD
     ),
     selfBuys AS (
-      SELECT DISTINCT g.TXTAD AS urunGrubu
+      SELECT DISTINCT COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMSDBELGEDETAY d
         ON d.LNGYIL = f.LNGYIL
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.TBLURUNGRUP g
+      LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.LNGMUSTERIKOD = ${Math.floor(customerId)}
         AND f.BYTTUR = 0 AND f.BYTDURUM = 0
