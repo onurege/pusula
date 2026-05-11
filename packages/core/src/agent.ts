@@ -548,10 +548,13 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
                   "- Satırlardaki adları (ürün grubu, marka, müşteri, vs.) BİREBİR yaz.",
                   "- Sayıları Türkçe formatta zikret (89.500 ₺, 1.234 adet).",
                   "- Mümkünse en üstteki satırın toplam içindeki yüzdesini hesapla.",
+                  "- Düşüş/kayıp anlatımında doğru fiiller seç: 'düşüşün büyük kısmı X'ten geliyor', 'kayıp X müşterisinden kaynaklanıyor', 'eskiden X alıyordu, şimdi 0'.",
                   "",
                   "YASAK:",
                   "- 'Belirlenmiştir', 'önemlidir', 'değerlendirilmiştir' gibi içi boş ifadeler.",
                   "- 'En yüksek katkıyı sağlayan ürün grupları' gibi adsız genellemeler.",
+                  "- ÖZELLİKLE: 'düşüşe katkı sağladı/sağlamıştır' YASAK — 'katkı sağlamak' pozitif anlamlıdır, düşüş için kullanılmaz.",
+                  "  Onun yerine: 'düşüşün ana kaynağı X', 'kayıp ikinci olarak X'ten', 'X müşterisi eskiden Y ₺ alıyordu, son dönemde 0' yaz.",
                   "- SQL/teknik jargon, 'rapor', 'sorgu', 'tablo' gibi sözcükler.",
                 ].join("\n"),
                 `KULLANICI TALEBİ:\n${userPrompt}\n\nSORGU SONUCU (toplam ${lastRunRowCount} satır):\n${sample}\n\nBrief:`,
@@ -560,7 +563,13 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
               const trimmed = rewritten.trim();
               if (trimmed) {
                 console.log("[runAgent] brief rewritten from rows");
-                brief = trimmed;
+                // Last-line defense: model occasionally still produces
+                // "düşüşe katkı sağlamıştır" despite the prompt. Replace
+                // with the natural Turkish alternative inline.
+                brief = trimmed
+                  .replace(/düşüşe katkı sağla(?:dı|mış(?:tır)?|nmış)/gi, "kayba ikinci sırada eklendi")
+                  .replace(/düşüşün ana kaynağına katkı sağla\w*/gi, "düşüşün ana kaynağı")
+                  .replace(/düşüşe katkı\w*/gi, "düşüşün kaynaklarından");
               }
             } catch (err) {
               console.error("[runAgent] brief rewrite failed, keeping model's brief:", err);
