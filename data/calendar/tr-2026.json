@@ -1,0 +1,33 @@
+{
+  "year": 2026,
+  "country": "TR",
+  "notes": [
+    "Static deterministic foresight calendar. Loaded once at startup.",
+    "Add new events by editing this file — no migration needed.",
+    "Dini bayram tarihleri Diyanet 2026 takvimine göre, sabit (ay/gün) günler 2026 için yazıldı.",
+    "'category_hints' alanı LLM'e ilgili bayramda ne kategorisinin sıçradığını söyler — ürün adı değil, kategori sezgisi."
+  ],
+  "events": [
+    { "date": "2026-01-01", "name": "Yılbaşı", "kind": "milli", "category_hints": ["şarküteri", "alkollü içecek", "şarküteri", "atıştırmalık", "kuruyemiş"] },
+    { "date": "2026-02-14", "name": "Sevgililer Günü", "kind": "ozel", "category_hints": ["çikolata", "şekerleme", "şarküteri", "şarap"] },
+    { "date": "2026-02-17", "name": "Ramazan başlangıcı", "kind": "dini", "duration_days": 30, "category_hints": ["hurma", "pekmez", "un", "yağ", "şeker", "süt", "yoğurt", "et"] },
+    { "date": "2026-03-19", "name": "Ramazan Bayramı 1. gün", "kind": "dini", "duration_days": 3, "category_hints": ["çikolata", "şekerleme", "kuruyemiş", "kolonya", "lokum"] },
+    { "date": "2026-03-21", "name": "Nevruz", "kind": "milli" },
+    { "date": "2026-04-23", "name": "23 Nisan Ulusal Egemenlik ve Çocuk Bayramı", "kind": "milli", "category_hints": ["çocuk atıştırmalık", "meyve suyu", "çikolata", "şekerleme"] },
+    { "date": "2026-05-01", "name": "Emek ve Dayanışma Günü", "kind": "milli" },
+    { "date": "2026-05-10", "name": "Anneler Günü", "kind": "ozel", "category_hints": ["çikolata", "kahve", "şarküteri"] },
+    { "date": "2026-05-19", "name": "19 Mayıs Atatürk'ü Anma, Gençlik ve Spor Bayramı", "kind": "milli" },
+    { "date": "2026-05-26", "name": "Kurban Bayramı 1. gün", "kind": "dini", "duration_days": 4, "category_hints": ["et baharatı", "kömür", "kuruyemiş", "şekerleme", "soğuk içecek"] },
+    { "date": "2026-06-21", "name": "Babalar Günü", "kind": "ozel" },
+    { "date": "2026-06-15", "name": "Okul dönem sonu", "kind": "okul", "category_hints": ["atıştırmalık", "soğuk içecek", "dondurma"] },
+    { "date": "2026-07-15", "name": "15 Temmuz Demokrasi ve Milli Birlik Günü", "kind": "milli" },
+    { "date": "2026-08-30", "name": "30 Ağustos Zafer Bayramı", "kind": "milli" },
+    { "date": "2026-09-14", "name": "Okul açılışı", "kind": "okul", "category_hints": ["çocuk atıştırmalık", "süt", "meyve suyu", "bisküvi", "kraker", "şekerleme"] },
+    { "date": "2026-10-29", "name": "Cumhuriyet Bayramı", "kind": "milli" },
+    { "date": "2026-12-31", "name": "Yılbaşı arifesi", "kind": "ozel", "category_hints": ["alkollü içecek", "şarküteri", "çerez", "atıştırmalık"] }
+  ],
+  "recurring": [
+    { "name": "Maaş günü (kamu)", "kind": "maas", "day_of_month": 15, "category_hints": [] },
+    { "name": "Maaş günü (özel)", "kind": "maas", "day_of_month": 1, "category_hints": [] }
+  ]
+}

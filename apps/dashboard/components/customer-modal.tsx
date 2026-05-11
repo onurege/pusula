@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { CustomerSales, MapCustomer } from "@/lib/api";
-import { explainOnRadar, getCustomerSales } from "@/lib/api";
+import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
+import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
 
 type SalesState =
   | { kind: "idle" }
@@ -16,6 +16,12 @@ type ExplainState =
   | { kind: "ok"; brief?: string; sql?: string }
   | { kind: "err"; message: string };
 
+type ForesightState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ok"; data: ForesightResult }
+  | { kind: "err"; message: string };
+
 type Props = {
   customer: MapCustomer;
   onClose: () => void;
@@ -24,12 +30,14 @@ type Props = {
 export function CustomerModal({ customer, onClose }: Props) {
   const [sales, setSales] = useState<SalesState>({ kind: "loading" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
+  const [foresight, setForesight] = useState<ForesightState>({ kind: "idle" });
 
   // Fetch detail when the modal opens / customer changes.
   useEffect(() => {
     let cancelled = false;
     setSales({ kind: "loading" });
     setExplain({ kind: "idle" });
+    setForesight({ kind: "idle" });
     getCustomerSales(customer.id, customer.distKod)
       .then((data) => !cancelled && setSales({ kind: "ok", data }))
       .catch((err) => !cancelled && setSales({ kind: "err", message: (err as Error).message }));
@@ -66,6 +74,16 @@ export function CustomerModal({ customer, onClose }: Props) {
       setExplain({ kind: "ok", brief: res.brief, sql: res.sql });
     } catch (err) {
       setExplain({ kind: "err", message: (err as Error).message });
+    }
+  }
+
+  async function runForesight() {
+    setForesight({ kind: "loading" });
+    try {
+      const data = await getCustomerForesight(customer.id, customer.unvan, 14);
+      setForesight({ kind: "ok", data });
+    } catch (err) {
+      setForesight({ kind: "err", message: (err as Error).message });
     }
   }
 
@@ -217,24 +235,34 @@ export function CustomerModal({ customer, onClose }: Props) {
                 </div>
               </section>
 
-              {/* AI Analizi */}
-              <section className="pt-2 border-t border-border">
-                <button
-                  type="button"
-                  onClick={runExplain}
-                  disabled={explain.kind === "loading"}
-                  className="w-full inline-flex items-center justify-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
-                >
-                  {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
-                </button>
+              {/* AI Analizi + Öngörü */}
+              <section className="pt-2 border-t border-border space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={runExplain}
+                    disabled={explain.kind === "loading"}
+                    className="inline-flex items-center justify-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
+                  >
+                    {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={runForesight}
+                    disabled={foresight.kind === "loading"}
+                    className="inline-flex items-center justify-center gap-2 border border-accent text-accent px-4 h-10 rounded-md text-sm font-medium hover:bg-accent/5 disabled:opacity-40"
+                  >
+                    {foresight.kind === "loading" ? "Öngörü çıkarılıyor…" : "Öngörü al (14 gün)"}
+                  </button>
+                </div>
 
                 {explain.kind === "err" && (
-                  <div className="mt-3 text-sm text-bad">
+                  <div className="text-sm text-bad">
                     <code className="text-xs">{explain.message}</code>
                   </div>
                 )}
                 {explain.kind === "ok" && explain.brief && (
-                  <div className="mt-3 rounded-lg border border-accent/40 bg-accent/5 p-4">
+                  <div className="rounded-lg border border-accent/40 bg-accent/5 p-4">
                     <div className="text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
                       AI Analizi
                     </div>
@@ -252,6 +280,15 @@ export function CustomerModal({ customer, onClose }: Props) {
                       </details>
                     )}
                   </div>
+                )}
+
+                {foresight.kind === "err" && (
+                  <div className="text-sm text-bad">
+                    <code className="text-xs">{foresight.message}</code>
+                  </div>
+                )}
+                {foresight.kind === "ok" && (
+                  <ForesightPanel data={foresight.data} />
                 )}
               </section>
             </>
@@ -299,4 +336,102 @@ function formatCompact(n: number): string {
   if (Math.abs(n) >= 1_000_000)
     return (n / 1_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mn";
   return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
+}
+
+function ForesightPanel({ data }: { data: ForesightResult }) {
+  const hasSignals =
+    data.events.length > 0 ||
+    data.yoy.length > 0 ||
+    data.dropped.length > 0 ||
+    data.cohort.length > 0;
+
+  return (
+    <div className="rounded-lg border border-accent/40 bg-accent/5 p-4 space-y-4">
+      <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
+        Öngörü · sonraki 14 gün
+      </div>
+
+      {data.brief && (
+        <div className="text-sm leading-relaxed whitespace-pre-wrap">
+          {data.brief}
+        </div>
+      )}
+
+      {data.actions.length > 0 && (
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1.5">
+            Önerilen aksiyonlar
+          </div>
+          <ul className="space-y-1.5">
+            {data.actions.map((a, i) => (
+              <li key={i} className="text-sm flex gap-2">
+                <span className="text-accent font-semibold tabular-nums">{i + 1}.</span>
+                <span className="flex-1">{a}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {hasSignals && (
+        <details className="text-xs">
+          <summary className="cursor-pointer text-muted hover:text-fg">
+            Sinyaller (kaynak veri)
+          </summary>
+          <div className="mt-2 space-y-3">
+            {data.events.length > 0 && (
+              <ForesightSignalList
+                title="Takvim"
+                items={data.events.map(
+                  (e) => `${e.date} (T+${e.daysAhead}g) — ${e.name}`,
+                )}
+              />
+            )}
+            {data.yoy.length > 0 && (
+              <ForesightSignalList
+                title="Geçen yıl bu hafta"
+                items={data.yoy.slice(0, 5).map(
+                  (y) =>
+                    `${y.urunGrubu ?? "(grup yok)"} — ${Math.round(y.ciro).toLocaleString("tr-TR")} ₺ / ${Math.round(y.miktar).toLocaleString("tr-TR")} adet`,
+                )}
+              />
+            )}
+            {data.dropped.length > 0 && (
+              <ForesightSignalList
+                title="Düşmüş kategoriler"
+                items={data.dropped.slice(0, 5).map(
+                  (d) =>
+                    `${d.urunGrubu} — eskiden ${Math.round(d.baselineCiro).toLocaleString("tr-TR")} ₺, ${d.daysSinceLast ?? "?"} gündür yok`,
+                )}
+              />
+            )}
+            {data.cohort.length > 0 && (
+              <ForesightSignalList
+                title="Segment kıyası (aldı, bu müşteri almadı)"
+                items={data.cohort.slice(0, 5).map(
+                  (c) =>
+                    `${c.urunGrubu} — ${c.cohortBuyerCount}/${c.cohortTotalBuyers} müşteri aldı`,
+                )}
+              />
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ForesightSignalList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">
+        {title}
+      </div>
+      <ul className="space-y-0.5 list-disc pl-4 text-[11px]">
+        {items.map((it, i) => (
+          <li key={i} className="leading-snug">{it}</li>
+        ))}
+      </ul>
+    </div>
+  );
 }

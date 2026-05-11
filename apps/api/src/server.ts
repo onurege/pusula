@@ -27,6 +27,7 @@ import {
   loadSnapshot,
   retrieve,
   runAgent,
+  runForesight,
   runRadar,
   runReadOnly,
   runReport,
@@ -356,6 +357,29 @@ app.get("/api/map/customers/:id/sales", async (c) => {
     return c.json(sales);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Foresight: deterministic 4-signal pipeline (calendar / YoY / dropped /
+// cohort) stitched into a brief + 2-3 actions by a single Gemini call.
+// No agent loop — signals are the source of truth, LLM only phrases.
+app.post("/api/map/customers/:id/foresight", async (c) => {
+  try {
+    const id = parseInt(c.req.param("id"), 10);
+    if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
+    const body = (await c.req.json().catch(() => ({}))) as {
+      label?: string;
+      windowDays?: number;
+    };
+    const label = body.label?.trim() || `Müşteri #${id}`;
+    const windowDays = Number.isFinite(body.windowDays)
+      ? Math.max(7, Math.min(30, Math.floor(body.windowDays!)))
+      : 14;
+    const result = await runForesight(id, label, windowDays);
+    return c.json(result);
+  } catch (err) {
+    console.error("[/api/map/customers/:id/foresight] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
   }
 });
 

@@ -10,3 +10,4 @@ export * from "./snapshot.js";
 export * from "./agent.js";
 export * from "./radar.js";
 export * from "./map.js";
+export * from "./foresight.js";

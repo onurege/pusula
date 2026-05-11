@@ -238,6 +238,57 @@ export async function getCustomerSales(
   return request(`/api/map/customers/${id}/sales?${qp.toString()}`);
 }
 
+export type ForesightEvent = {
+  date: string;
+  name: string;
+  kind: string;
+  daysAhead: number;
+  category_hints?: string[];
+};
+
+export type ForesightYoy = {
+  urunGrubu: string | null;
+  ciro: number;
+  miktar: number;
+};
+
+export type ForesightDropped = {
+  urunGrubu: string;
+  baselineCiro: number;
+  baselineMiktar: number;
+  recentCiro: number;
+  daysSinceLast: number | null;
+};
+
+export type ForesightCohort = {
+  urunGrubu: string;
+  cohortBuyerCount: number;
+  cohortTotalBuyers: number;
+  cohortCiro: number;
+};
+
+export type ForesightResult = {
+  customerId: number;
+  generatedAt: string;
+  events: ForesightEvent[];
+  yoy: ForesightYoy[];
+  dropped: ForesightDropped[];
+  cohort: ForesightCohort[];
+  brief: string;
+  actions: string[];
+};
+
+export async function getCustomerForesight(
+  id: number,
+  label: string,
+  windowDays = 14,
+): Promise<ForesightResult> {
+  return request(`/api/map/customers/${id}/foresight`, {
+    method: "POST",
+    body: JSON.stringify({ label, windowDays }),
+  });
+}
+
 export type MapFacets = {
   cities: string[];
   distributors: { lngKod: number; ad: string }[];
