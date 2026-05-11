@@ -14,14 +14,27 @@ basılana kadar tekrar MSSQL'e gitmez.
 Univera fatura ve belge sistemine ait standart filtreler her sorguda
 uygulanır. Bu filtreler raporun "satış" tanımını tutarlı kılar.
 
-| Kolon | Değer | Anlamı |
-|---|---|---|
-| `TBLMSDFATURA.BYTTUR` | `0` | Satış faturası (1=alış, 2-4=iade, 5-6=hizmet, 98-99=iade hariç) |
-| `TBLMSDFATURA.BYTDURUM` | `0` | Aktif/onaylı belge (iptal edilenler hariç) |
-| `TBLDIST.BYTDURUM` | `0` | Aktif distribütör |
-| `TBLPMPZIYARETBASLIK.TRHGIRIS` | `IS NOT NULL` | Gerçekten ziyaret edilmiş (rota üzerinde planlananlar değil, fiilen yapılanlar) |
-| Tahsilat işlem kodları | `100, 104, 108, 112` | Nakit, Çek, Senet, Kredi Kartı tahsilatları (sırasıyla 102/106/110/114 iptal kodları hariç) |
-| Satış belge kodları (ziyaret içinde) | `4, 30, 60` | Fatura kesimi, İrsaliye, Sipariş (sırasıyla 6/32/62 iptal kodları hariç) |
+**Belge tipi filtresi**
+
+- `TBLMSDFATURA.BYTTUR = 0` → satış faturası
+  (1=alış, 2-4=iade, 5-6=hizmet, 98-99=iade hariç)
+- `TBLMSDFATURA.BYTDURUM = 0` → aktif/onaylı belge (iptal hariç)
+- `TBLDIST.BYTDURUM = 0` → aktif distribütör
+
+**Ziyaret filtresi**
+
+- `TBLPMPZIYARETBASLIK.TRHGIRIS IS NOT NULL` → gerçekten yapılmış ziyaret
+  (rota üzerinde planlananlar değil, fiilen yapılanlar)
+
+**Tahsilat işlem kodları**
+
+- `100` Nakit · `104` Çek · `108` Senet · `112` Kredi Kartı
+- İptal pair'leri: `102 / 106 / 110 / 114` — bunlar düşülür
+
+**Saha belge kodları** (ziyaret içinde üretilen)
+
+- `4` Fatura kesimi · `30` İrsaliye · `60` Sipariş
+- İptal pair'leri: `6 / 32 / 62`
 
 > Belge ve tahsilat tipi kodları Univera'nın **5190 numaralı `SSP_RPT_5190_ZIYARET_ANALIZI`** raporundan birebir alınmıştır.
 
@@ -47,17 +60,29 @@ gidilmez.
 
 Sırayla kontrol edilir, ilk uyan kural kazanır.
 
-| # | Kural | Sonuç | Renk |
-|---|---|---|---|
-| 1 | Hiç satış yok **veya** son satış 180+ gün önce | LOW | gri |
-| 2 | 60+ gün sessiz **ve** geçmişte alım var | **HIGH** | kırmızı |
-| 3 | 30+ gün sessiz **ve** önceki 30 gün cirosu ≥ 10.000 ₺ | **HIGH** | kırmızı |
-| 4 | Önceki 30 gün ≥ 5.000 ₺ **ve** son 30 gün < %50'si | **HIGH** | kırmızı |
-| 5 | 30-59 gün sessiz **ve** geçmişte alım var | MEDIUM | amber |
-| 6 | 60+ gün ziyaretsiz **ve** geçmişte alım var | MEDIUM | amber |
-| 7 | Önceki 30 gün ≥ 1.000 ₺ **ve** son 30 gün < %70'i | MEDIUM | amber |
-| 8 | Son 30 gün içinde satış var **ve** ciro mevcut | ACTIVE | yeşil |
-| 9 | Diğer (kalan kıyı durumlar) | LOW | gri |
+**LOW (gri):**
+
+1. Hiç satış kaydı yok **veya** son satış 180+ gün önce
+
+**HIGH (kırmızı):**
+
+2. 60+ gün sessiz **ve** geçmişte alım var
+3. 30+ gün sessiz **ve** önceki 30 gün cirosu ≥ 10.000 ₺
+4. Önceki 30 gün ≥ 5.000 ₺ **ve** son 30 gün, önceki 30 günün %50'sinden az
+
+**MEDIUM (amber):**
+
+5. 30-59 gün sessiz **ve** geçmişte alım var
+6. 60+ gün ziyaretsiz **ve** geçmişte alım var
+7. Önceki 30 gün ≥ 1.000 ₺ **ve** son 30 gün, önceki 30 günün %70'inden az
+
+**ACTIVE (yeşil):**
+
+8. Son 30 gün içinde satış var **ve** ciro > 0
+
+**LOW (gri):**
+
+9. Diğer (yukarıdaki kurallara uymayan kıyı durumlar)
 
 **Mantık özeti:** "Eskiden büyük müşteri sessizleşmiş" durumunu KIRMIZI;
 "erken uyarı sinyali" olan durumları AMBER; sağlıklı aktif satışı olanları
@@ -401,12 +426,13 @@ Performans için pahalı sorgular **yerel SQLite mirror'a** cache'lenir.
 
 ### 9.1 Cache Domain'leri
 
-| Domain | Anahtar | İçerik |
-|---|---|---|
-| `map_customers` (tablo) | müşteri ID | Müşteri risk bilgileri (sync output) |
-| `customer-detail` | `<id>:<days>` | Modal'daki son 30 gün metrikleri |
-| `foresight` | `<id>:<windowDays>` | Foresight 4-sinyal + brief |
-| `radar:<id>` | params hash | Radar block sonuçları + brief |
+- **`map_customers` (tablo)** — anahtar: müşteri ID. Senkronizasyon sırasında
+  hesaplanan risk bilgileri.
+- **`customer-detail`** — anahtar: `<id>:<days>`. Modal'daki son 30 gün
+  metrikleri (ciro, fatura, ziyaret, tahsilat).
+- **`foresight`** — anahtar: `<id>:<windowDays>`. Foresight 4-sinyal +
+  yönetici brifi + aksiyonlar.
+- **`radar:<id>`** — anahtar: params hash. Radar block sonuçları + brief.
 
 ### 9.2 Yenileme Tetikleyicileri
 
@@ -448,3 +474,51 @@ optimizasyonu için bilinçli. Otomatik gece sync'i ileride eklenebilir.
 
 *Doküman tarihi: 2026-05-11 itibarıyla mevcut sürüm üzerinden hazırlandı.
 Yeni metrikler eklendikçe güncel tutulmalı.*
+
+---
+
+## Ek — PDF Olarak Almak İçin
+
+Bu dokümandan temiz bir PDF üretmek için iki yol var:
+
+### Yol 1 — Pandoc (en güvenilir, LaTeX kurulu olmalı)
+
+```bash
+pandoc docs/METRIKLER.md \
+  -o docs/METRIKLER.pdf \
+  --pdf-engine=xelatex \
+  -V geometry:"margin=1.5cm,a4paper" \
+  -V fontsize=10pt \
+  -V mainfont="Helvetica Neue" \
+  -V monofont="Menlo" \
+  -V colorlinks=true \
+  --toc
+```
+
+### Yol 2 — Chrome'da Print (kurulum gerekmez)
+
+`docs/METRIKLER.html` dosyasını üretip Chrome'da aç, **Yazdır → PDF olarak
+kaydet** yap. Yazdırma diyaloğunda:
+
+- **Sayfa boyutu:** A4
+- **Kenar boşlukları:** Dar (Narrow / Custom 1cm)
+- **Ölçekleme:** Sığdır (Fit to page)
+- **Arka plan grafikleri:** Açık (rozet renkleri korunsun diye)
+
+HTML üretmek için en hızlı yol:
+
+```bash
+npx marked docs/METRIKLER.md > docs/METRIKLER.html
+```
+
+Veya VS Code "Markdown PDF" eklentisi de aynı işi yapar — sağ tık → "Export
+to PDF". Eklentinin ayarlarında `pageOrientation: portrait`, `format: A4`
+seçili olsun.
+
+### Yazılar Hâlâ Üst Üste Geliyorsa
+
+- **Tablolar çok geniş kalıyor:** Yazdırma diyaloğunda sayfa yönünü **yatay
+  (landscape)** yap.
+- **Font çok büyük:** Ölçeklemeyi **%80-90** civarına çek.
+- **VS Code eklentisi sıkıştırıyor:** Pandoc'a geç — tablo word-wrap'i daha
+  iyi yönetir.
