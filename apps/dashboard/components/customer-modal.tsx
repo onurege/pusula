@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
 
@@ -92,7 +93,17 @@ export function CustomerModal({ customer, onClose }: Props) {
   // keep the centered card.
   const expanded = foresight.kind === "ok";
 
-  return (
+  // Mount-state gate so SSR doesn't trip on document.body during pre-render.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return null;
+
+  // Render through a portal so the modal escapes the map page's
+  // `fixed inset-0 top-12` wrapper (which was clipping our z-index above the
+  // global sticky navbar).
+  return createPortal(
     <div
       className={
         "fixed inset-0 z-[60] flex bg-black/40 backdrop-blur-sm transition-all " +
@@ -320,7 +331,8 @@ export function CustomerModal({ customer, onClose }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
