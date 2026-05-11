@@ -712,7 +712,11 @@ function parseForesightOutput(raw: string): { brief: string; actions: string[] }
   const actionsBlock = (actionsMatch?.[1] ?? "").trim();
   const actions = actionsBlock
     .split("\n")
-    .map((l) => l.replace(/^[-*•\s\d.)]+/, "").trim())
+    // Strip only well-formed list prefixes: "1. ", "1) ", "- ", "* ", "• ".
+    // The greedy "[-*•\s\d.)]+" variant also ate genuine leading digits in the
+    // action text (e.g. "48 gündür..." became "gündür..."). Match the prefix
+    // shape explicitly instead.
+    .map((l) => l.replace(/^\s*(?:\d+[.)]\s+|[-*•]\s+)/, "").trim())
     .filter((l) => l.length > 2);
   return { brief: brief || raw.trim(), actions };
 }
