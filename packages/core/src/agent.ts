@@ -555,7 +555,7 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
                   "- SQL/teknik jargon, 'rapor', 'sorgu', 'tablo' gibi sözcükler.",
                 ].join("\n"),
                 `KULLANICI TALEBİ:\n${userPrompt}\n\nSORGU SONUCU (toplam ${lastRunRowCount} satır):\n${sample}\n\nBrief:`,
-                { temperature: 0.2, maxOutputTokens: 512 },
+                { temperature: 0.2, maxOutputTokens: 1024 },
               );
               const trimmed = rewritten.trim();
               if (trimmed) {
