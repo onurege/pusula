@@ -47,12 +47,18 @@ export default async function MapPage({
   const neverSynced = sync.lastSyncAt === null && data.customers.length === 0;
 
   return (
-    <div className="fixed inset-0 top-12 flex flex-col bg-bg">
-      <header className="bg-surface border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <Link href="/" className="text-xs text-muted hover:text-fg">← Radar</Link>
+    <div className="fixed inset-0 top-14 flex flex-col bg-bg">
+      <header className="bg-surface/80 backdrop-blur border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
+          <Link
+            href="/"
+            className="text-xs text-muted hover:text-fg shrink-0"
+          >
+            ← Radar
+          </Link>
+          <div className="h-4 w-px bg-border" />
           <h1 className="text-base font-semibold tracking-tight">Satış Haritası</h1>
-          <span className="text-xs text-muted hidden lg:inline">
+          <span className="text-xs text-muted hidden lg:inline truncate">
             Onaylı müşteriler · noktaya tıkla → son 30 gün ciro + AI analizi
           </span>
         </div>

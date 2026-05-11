@@ -2,8 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
+import { RefreshCw, X } from "lucide-react";
 import type { MapSyncStatus } from "@/lib/api";
 import { triggerMapSync } from "@/lib/api";
+import { Button } from "@/components/ui/button";
 
 type Props = {
   initial: MapSyncStatus;
@@ -51,18 +53,18 @@ export function SyncButton({ initial }: Props) {
           )}
         </span>
       )}
-      <button
-        type="button"
+      <Button
+        variant="outline"
+        size="sm"
         onClick={run}
-        disabled={busy}
-        className="inline-flex items-center gap-1.5 px-3 h-8 text-xs rounded-md border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50 disabled:cursor-not-allowed"
+        loading={busy}
+        iconLeft={!busy ? <RefreshCw size={13} /> : undefined}
       >
-        <RefreshIcon spinning={busy} />
         {busy ? "Senkronlanıyor…" : "Verileri yenile"}
-      </button>
+      </Button>
 
       {err && (
-        <div className="absolute right-0 top-full mt-2 w-[420px] rounded-lg border border-bad/50 bg-bad/10 p-3 text-[11px] text-fg z-50 shadow-lg">
+        <div className="absolute right-0 top-full mt-2 w-[420px] rounded-lg border border-bad/40 bg-bad/5 p-3 text-[11px] text-fg z-50 shadow-lg">
           <div className="flex items-start justify-between gap-2 mb-1">
             <span className="font-semibold text-bad">Senkronizasyon hatası</span>
             <button
@@ -71,7 +73,7 @@ export function SyncButton({ initial }: Props) {
               className="text-muted hover:text-fg leading-none"
               aria-label="Kapat"
             >
-              ×
+              <X size={14} />
             </button>
           </div>
           <code className="block whitespace-pre-wrap break-words text-[10px] text-muted leading-relaxed max-h-48 overflow-y-auto">
@@ -80,25 +82,6 @@ export function SyncButton({ initial }: Props) {
         </div>
       )}
     </div>
-  );
-}
-
-function RefreshIcon({ spinning }: { spinning: boolean }) {
-  return (
-    <svg
-      width="13"
-      height="13"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={spinning ? "animate-spin" : ""}
-    >
-      <path d="M21 12a9 9 0 1 1-3-6.7" />
-      <path d="M21 4v6h-6" />
-    </svg>
   );
 }
 

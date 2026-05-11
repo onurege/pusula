@@ -1,6 +1,13 @@
 import type { Metadata } from "next";
-import Link from "next/link";
+import { Inter } from "next/font/google";
 import "./globals.css";
+import { Navbar } from "@/components/ui/navbar";
+
+const inter = Inter({
+  subsets: ["latin", "latin-ext"],
+  variable: "--font-inter",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Enroute — DBA Agent",
@@ -9,25 +16,10 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="tr">
+    <html lang="tr" className={inter.variable}>
       <body suppressHydrationWarning>
         <div className="min-h-dvh">
-          <header className="border-b border-border bg-surface/60 backdrop-blur sticky top-0 z-40">
-            <div className="mx-auto max-w-[1600px] px-5 h-12 flex items-center justify-between">
-              <Link href="/" className="flex items-center gap-2">
-                <div className="size-6 rounded-md bg-accent text-accent-fg font-bold flex items-center justify-center text-sm">E</div>
-                <div className="font-semibold tracking-tight">Enroute</div>
-                <span className="text-muted text-xs">— DBA Agent</span>
-              </Link>
-              <nav className="flex items-center gap-5 text-sm text-muted">
-                <Link href="/" className="hover:text-fg">Radar</Link>
-                <Link href="/map" className="hover:text-fg">Harita</Link>
-                <Link href="/reports" className="hover:text-fg">Raporlar</Link>
-                <Link href="/reports/new" className="hover:text-fg">Yeni rapor</Link>
-                <Link href="/schema" className="hover:text-fg">Şema</Link>
-              </nav>
-            </div>
-          </header>
+          <Navbar />
           <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
         </div>
       </body>

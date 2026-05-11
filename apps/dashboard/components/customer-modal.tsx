@@ -2,8 +2,22 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
+import {
+  AlertCircle,
+  Calendar,
+  Hash,
+  MapPin,
+  Sparkles,
+  Target,
+  TrendingDown,
+  Users,
+  X,
+} from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardHeader } from "@/components/ui/card";
 
 type SalesState =
   | { kind: "idle" }
@@ -127,30 +141,40 @@ export function CustomerModal({ customer, onClose }: Props) {
               : "contents"
           }
         >
-        <header className="sticky top-0 z-10 bg-surface border-b border-border px-6 py-4 flex items-start justify-between gap-4">
+        <header className="sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-border px-6 py-4 flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold tracking-tight truncate">{customer.unvan}</h2>
             {customer.kisaAd && customer.kisaAd !== customer.unvan && (
-              <div className="text-sm text-fg/70 mt-0.5 truncate">{customer.kisaAd}</div>
+              <div className="text-sm text-fg-2 mt-0.5 truncate">{customer.kisaAd}</div>
             )}
-            <div className="text-xs text-muted mt-1 flex flex-wrap gap-x-3 gap-y-1">
+            <div className="text-xs text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
               {customer.distributor && (
-                <span className="text-accent">{customer.distributor}</span>
+                <Badge tone="accent" size="sm">
+                  {customer.distributor}
+                </Badge>
               )}
-              {customer.adres && <span>{customer.adres}</span>}
+              {customer.adres && (
+                <span className="inline-flex items-center gap-1">
+                  <MapPin size={11} className="opacity-60" />
+                  {customer.adres}
+                </span>
+              )}
               {(customer.ilce || customer.sehir) && (
                 <span>{[customer.ilce, customer.sehir].filter(Boolean).join(" / ")}</span>
               )}
-              <span className="text-muted/70">#{customer.id}</span>
+              <span className="inline-flex items-center gap-1 text-muted-2">
+                <Hash size={11} />
+                {customer.id}
+              </span>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="text-muted hover:text-fg text-2xl leading-none -mt-1 px-2"
+            className="size-8 -mt-1 -mr-2 flex items-center justify-center rounded-md text-muted hover:text-fg hover:bg-surface-2 transition-colors"
             aria-label="Kapat"
           >
-            ×
+            <X size={18} />
           </button>
         </header>
 
@@ -269,34 +293,40 @@ export function CustomerModal({ customer, onClose }: Props) {
               {/* AI Analizi + Öngörü */}
               <section className="pt-2 border-t border-border space-y-3">
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
+                  <Button
+                    variant="primary"
+                    size="lg"
                     onClick={runExplain}
-                    disabled={explain.kind === "loading"}
-                    className="inline-flex items-center justify-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
+                    loading={explain.kind === "loading"}
+                    iconLeft={explain.kind !== "loading" ? <Sparkles size={15} /> : undefined}
                   >
                     {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
-                  </button>
-                  <button
-                    type="button"
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="lg"
                     onClick={runForesight}
-                    disabled={foresight.kind === "loading"}
-                    className="inline-flex items-center justify-center gap-2 border border-accent text-accent px-4 h-10 rounded-md text-sm font-medium hover:bg-accent/5 disabled:opacity-40"
+                    loading={foresight.kind === "loading"}
+                    iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
+                    className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
                   >
                     {foresight.kind === "loading" ? "Öngörü çıkarılıyor…" : "Öngörü al (14 gün)"}
-                  </button>
+                  </Button>
                 </div>
 
                 {explain.kind === "err" && (
-                  <div className="text-sm text-bad">
-                    <code className="text-xs">{explain.message}</code>
-                  </div>
+                  <Card tone="bad" padding="sm">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
+                      <code className="text-[11px] text-fg-2 leading-relaxed">{explain.message}</code>
+                    </div>
+                  </Card>
                 )}
                 {explain.kind === "ok" && explain.brief && (
-                  <div className="rounded-lg border border-accent/40 bg-accent/5 p-4">
-                    <div className="text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
-                      AI Analizi
-                    </div>
+                  <Card tone="accent" padding="md">
+                    <CardHeader className="flex items-center gap-1.5 text-accent">
+                      <Sparkles size={11} /> AI Analizi
+                    </CardHeader>
                     <div className="text-sm leading-relaxed whitespace-pre-wrap">
                       {explain.brief}
                     </div>
@@ -305,18 +335,21 @@ export function CustomerModal({ customer, onClose }: Props) {
                         <summary className="text-xs text-muted cursor-pointer hover:text-fg">
                           Kullanılan SQL
                         </summary>
-                        <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-bg p-3 rounded">
+                        <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface-3 p-3 rounded-md border border-border">
                           {explain.sql}
                         </pre>
                       </details>
                     )}
-                  </div>
+                  </Card>
                 )}
 
                 {foresight.kind === "err" && (
-                  <div className="text-sm text-bad">
-                    <code className="text-xs">{foresight.message}</code>
-                  </div>
+                  <Card tone="bad" padding="sm">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
+                      <code className="text-[11px] text-fg-2 leading-relaxed">{foresight.message}</code>
+                    </div>
+                  </Card>
                 )}
                 {/* When foresight loads, the modal expands and the right pane
                     hosts the dashboard, so no inline panel is needed here. */}
@@ -346,8 +379,8 @@ function SectionHeading({ children }: { children: React.ReactNode }) {
 
 function KpiTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border bg-bg p-4">
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+    <div className="rounded-lg border border-border bg-surface p-4 shadow-xs hover:shadow-sm transition-shadow">
+      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">{label}</div>
       <div className="text-2xl font-semibold tracking-tight tabular-nums mt-1.5 leading-none">
         {value}
       </div>
@@ -357,8 +390,8 @@ function KpiTile({ label, value }: { label: string; value: string }) {
 
 function MiniTile({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border bg-bg p-3">
-      <div className="text-[10px] uppercase tracking-wider text-muted">{label}</div>
+    <div className="rounded-md border border-border bg-surface p-3 hover:bg-surface-2/50 transition-colors">
+      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">{label}</div>
       <div className="text-base font-semibold tracking-tight tabular-nums mt-1 leading-none">
         {value}
       </div>
@@ -387,18 +420,19 @@ function ForesightDashboard({
   const yoyMax = yoyTop[0]?.ciro ?? 1;
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-5">
       {/* Header */}
       <div className="flex items-baseline justify-between gap-4">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-accent font-semibold">
+            <Target size={11} />
             Foresight · sonraki 14 gün
           </div>
-          <div className="text-xl font-semibold tracking-tight mt-0.5">
+          <div className="text-xl font-semibold tracking-tight mt-1">
             {customer.unvan}
           </div>
         </div>
-        <div className="text-[10px] text-muted">
+        <div className="text-[10px] text-muted tabular-nums">
           {new Date(data.generatedAt).toLocaleString("tr-TR")}
         </div>
       </div>
@@ -406,21 +440,25 @@ function ForesightDashboard({
       {/* KPI strip */}
       <div className="grid grid-cols-4 gap-3">
         <DashKpi
+          icon={<AlertCircle size={14} />}
           label="Risk sinyali"
           value={data.riskFlags.length}
           tone={data.riskFlags.length > 0 ? "bad" : "muted"}
         />
         <DashKpi
+          icon={<Calendar size={14} />}
           label="14 günde olay"
           value={data.events.length}
           tone={data.events.length > 0 ? "accent" : "muted"}
         />
         <DashKpi
+          icon={<TrendingDown size={14} />}
           label="Düşmüş kategori"
           value={data.dropped.length}
           tone={data.dropped.length > 0 ? "warn" : "muted"}
         />
         <DashKpi
+          icon={<Users size={14} />}
           label="Segment fırsatı"
           value={data.cohort.length}
           tone={data.cohort.length > 0 ? "accent" : "muted"}
@@ -645,22 +683,24 @@ function ForesightDashboard({
 }
 
 function DashKpi({
+  icon,
   label,
   value,
   tone,
 }: {
+  icon?: React.ReactNode;
   label: string;
   value: number;
   tone: "accent" | "warn" | "bad" | "muted";
 }) {
   const toneClass =
     tone === "bad"
-      ? "border-bad/40 bg-bad/5"
+      ? "border-bad/30 bg-[var(--color-bad-soft)]"
       : tone === "warn"
-      ? "border-warn/40 bg-warn/5"
+      ? "border-warn/30 bg-[var(--color-warn-soft)]"
       : tone === "accent"
-      ? "border-accent/30 bg-accent/5"
-      : "border-border bg-bg";
+      ? "border-accent/30 bg-[var(--color-accent-soft)]"
+      : "border-border bg-surface";
   const valueColor =
     tone === "bad"
       ? "text-bad"
@@ -669,12 +709,27 @@ function DashKpi({
       : tone === "accent"
       ? "text-accent"
       : "text-muted";
+  const iconBg =
+    tone === "bad"
+      ? "bg-bad/10 text-bad"
+      : tone === "warn"
+      ? "bg-warn/10 text-warn"
+      : tone === "accent"
+      ? "bg-accent/10 text-accent"
+      : "bg-surface-2 text-muted";
   return (
-    <div className={`rounded-lg border p-3 ${toneClass}`}>
-      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
-        {label}
+    <div className={`rounded-lg border p-3 shadow-xs ${toneClass}`}>
+      <div className="flex items-center gap-2 mb-1.5">
+        {icon && (
+          <span className={`size-6 rounded-md flex items-center justify-center ${iconBg}`}>
+            {icon}
+          </span>
+        )}
+        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+          {label}
+        </div>
       </div>
-      <div className={`text-2xl font-semibold tabular-nums leading-none mt-1.5 ${valueColor}`}>
+      <div className={`text-2xl font-semibold tabular-nums leading-none ${valueColor}`}>
         {value}
       </div>
     </div>
