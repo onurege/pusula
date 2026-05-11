@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
+import { makeCacheKey, withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
 import { generate } from "./gemini.js";
 
@@ -426,8 +427,23 @@ function formatValue(v: unknown): string {
 export async function runRadar(
   def: RadarDefinition,
   paramsIn: Record<string, string | number> = {},
+  options: { forceRefresh?: boolean } = {},
 ): Promise<RadarRun> {
   const params = { ...(def.defaultParams ?? {}), ...paramsIn };
+  const cacheKey = makeCacheKey(params) || "default";
+  const cached = await withCache<RadarRun>(
+    `radar:${def.id}`,
+    cacheKey,
+    () => computeRadar(def, params),
+    { forceRefresh: options.forceRefresh },
+  );
+  return cached.value;
+}
+
+async function computeRadar(
+  def: RadarDefinition,
+  params: Record<string, string | number>,
+): Promise<RadarRun> {
   const blocks: RadarBlockResult[] = [];
   for (const block of def.blocks) {
     blocks.push(await runRadarBlock(block, params));

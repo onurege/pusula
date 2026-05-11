@@ -1,4 +1,5 @@
 import { runReadOnly } from "./db.js";
+import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
 
 export type MapCustomer = {
@@ -258,6 +259,12 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
        dist_count = excluded.dist_count`,
   ).run(status);
 
+  // Underlying MSSQL data may have shifted — invalidate every read-through
+  // cache that reflects it (customer detail, foresight). Radar caches stay
+  // because they have their own per-radar refresh affordance.
+  cachedClear("customer-detail");
+  cachedClear("foresight");
+
   return status;
 }
 
@@ -309,9 +316,25 @@ export type CustomerSales = CustomerDetail;
 export async function getCustomerDetail(
   musteriKod: number,
   days = 30,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<CustomerDetail> {
   const id = Math.floor(musteriKod);
   const d = Math.floor(days);
+
+  const cacheKey = `${id}:${d}`;
+  const result = await withCache<CustomerDetail>(
+    "customer-detail",
+    cacheKey,
+    () => loadCustomerDetailFromMssql(id, d),
+    { forceRefresh: options.forceRefresh },
+  );
+  return result.value;
+}
+
+async function loadCustomerDetailFromMssql(
+  id: number,
+  d: number,
+): Promise<CustomerDetail> {
 
   const salesSql = `
     SELECT
@@ -419,6 +442,7 @@ export async function getCustomerSales(
   musteriKod: number,
   _distKod: number | null,
   days = 30,
+  options: { forceRefresh?: boolean } = {},
 ): Promise<CustomerDetail> {
-  return getCustomerDetail(musteriKod, days);
+  return getCustomerDetail(musteriKod, days, options);
 }

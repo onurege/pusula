@@ -7,6 +7,7 @@ import {
   Calendar,
   Hash,
   MapPin,
+  RefreshCw,
   Sparkles,
   Target,
   TrendingDown,
@@ -92,10 +93,12 @@ export function CustomerModal({ customer, onClose }: Props) {
     }
   }
 
-  async function runForesight() {
+  async function runForesight(opts: { refresh?: boolean } = {}) {
     setForesight({ kind: "loading" });
     try {
-      const data = await getCustomerForesight(customer.id, customer.unvan, 14);
+      const data = await getCustomerForesight(customer.id, customer.unvan, 14, {
+        refresh: opts.refresh,
+      });
       setForesight({ kind: "ok", data });
     } catch (err) {
       setForesight({ kind: "err", message: (err as Error).message });
@@ -305,7 +308,7 @@ export function CustomerModal({ customer, onClose }: Props) {
                   <Button
                     variant="outline"
                     size="lg"
-                    onClick={runForesight}
+                    onClick={() => runForesight()}
                     loading={foresight.kind === "loading"}
                     iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
                     className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
@@ -360,7 +363,11 @@ export function CustomerModal({ customer, onClose }: Props) {
         </div>
         {expanded && foresight.kind === "ok" && (
           <div className="flex-1 overflow-y-auto bg-bg/40">
-            <ForesightDashboard data={foresight.data} customer={customer} />
+            <ForesightDashboard
+              data={foresight.data}
+              customer={customer}
+              onRefresh={() => runForesight({ refresh: true })}
+            />
           </div>
         )}
       </div>
@@ -411,9 +418,11 @@ function formatCompact(n: number): string {
 function ForesightDashboard({
   data,
   customer,
+  onRefresh,
 }: {
   data: ForesightResult;
   customer: MapCustomer;
+  onRefresh?: () => void;
 }) {
   const yoyTotal = data.yoy.reduce((a, b) => a + b.ciro, 0);
   const yoyTop = data.yoy.slice(0, 8);
@@ -422,7 +431,7 @@ function ForesightDashboard({
   return (
     <div className="p-6 space-y-5">
       {/* Header */}
-      <div className="flex items-baseline justify-between gap-4">
+      <div className="flex items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-accent font-semibold">
             <Target size={11} />
@@ -431,10 +440,21 @@ function ForesightDashboard({
           <div className="text-xl font-semibold tracking-tight mt-1">
             {customer.unvan}
           </div>
+          <div className="text-[10px] text-muted tabular-nums mt-1">
+            Üretildi: {new Date(data.generatedAt).toLocaleString("tr-TR")}
+          </div>
         </div>
-        <div className="text-[10px] text-muted tabular-nums">
-          {new Date(data.generatedAt).toLocaleString("tr-TR")}
-        </div>
+        {onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            className="inline-flex items-center gap-1.5 px-3 h-8 text-xs rounded-md border border-border bg-surface text-fg-2 hover:text-fg hover:bg-surface-2 transition-colors"
+            title="Cache'i atlat ve MSSQL'den taze çek"
+          >
+            <RefreshCw size={12} />
+            Yenile
+          </button>
+        )}
       </div>
 
       {/* KPI strip */}

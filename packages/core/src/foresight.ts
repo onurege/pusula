@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
 import { generate } from "./gemini.js";
 
@@ -409,6 +410,22 @@ export async function runForesight(
   customerId: number,
   customerLabel: string,
   windowDays = 14,
+  options: { forceRefresh?: boolean } = {},
+): Promise<ForesightResult> {
+  const cacheKey = `${Math.floor(customerId)}:${Math.floor(windowDays)}`;
+  const cached = await withCache<ForesightResult>(
+    "foresight",
+    cacheKey,
+    () => computeForesight(customerId, customerLabel, windowDays),
+    { forceRefresh: options.forceRefresh },
+  );
+  return cached.value;
+}
+
+async function computeForesight(
+  customerId: number,
+  customerLabel: string,
+  windowDays: number,
 ): Promise<ForesightResult> {
   const [events, yoy, dropped, cohort] = await Promise.all([
     getUpcomingEvents(windowDays).catch(() => [] as UpcomingEvent[]),

@@ -231,10 +231,12 @@ export async function getCustomerSales(
   id: number,
   distKod: number | null,
   days = 30,
+  options: { refresh?: boolean } = {},
 ): Promise<CustomerSales> {
   const qp = new URLSearchParams();
   if (typeof distKod === "number") qp.set("distKod", String(distKod));
   qp.set("days", String(days));
+  if (options.refresh) qp.set("refresh", "1");
   return request(`/api/map/customers/${id}/sales?${qp.toString()}`);
 }
 
@@ -292,10 +294,12 @@ export async function getCustomerForesight(
   id: number,
   label: string,
   windowDays = 14,
+  options: { refresh?: boolean } = {},
 ): Promise<ForesightResult> {
-  return request(`/api/map/customers/${id}/foresight`, {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request(`/api/map/customers/${id}/foresight${qs}`, {
     method: "POST",
-    body: JSON.stringify({ label, windowDays }),
+    body: JSON.stringify({ label, windowDays, refresh: options.refresh ?? false }),
   });
 }
 

@@ -66,6 +66,21 @@ export function getLocalDb(repoRoot: string): Database.Database {
       city_count     INTEGER NOT NULL,
       dist_count     INTEGER NOT NULL
     );
+
+    -- Generic key-value cache. Every expensive read path can stash its
+    -- result here keyed by (domain, key). Reads are O(log n) via the PK
+    -- index; writes are upserts. No TTL — invalidation is manual via the
+    -- "Yenile" affordance in the UI, mirroring the map-sync pattern.
+    CREATE TABLE IF NOT EXISTS cache_entries (
+      domain       TEXT NOT NULL,
+      key          TEXT NOT NULL,
+      payload      TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      duration_ms  INTEGER,
+      PRIMARY KEY (domain, key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_cache_entries_domain
+      ON cache_entries(domain);
   `);
 
   // Idempotent column migrations. SQLite's CREATE TABLE IF NOT EXISTS won't

@@ -33,6 +33,8 @@ import {
   runReport,
   saveReport,
   syncMapData,
+  cacheStats,
+  cachedClear,
 } from "@enroute/core";
 
 const app = new Hono();
@@ -230,7 +232,8 @@ app.post("/api/radars/:id/run", async (c) => {
     for (const [k, v] of Object.entries(body ?? {})) {
       if (typeof v === "string" || typeof v === "number") params[k] = v;
     }
-    const run = await runRadar(def, params);
+    const forceRefresh = c.req.query("refresh") === "1";
+    const run = await runRadar(def, params, { forceRefresh });
     return c.json(run);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
@@ -353,7 +356,8 @@ app.get("/api/map/customers/:id/sales", async (c) => {
     const distKod = distKodRaw ? parseInt(distKodRaw, 10) : null;
     const daysRaw = c.req.query("days");
     const days = daysRaw ? parseInt(daysRaw, 10) : 30;
-    const sales = await getCustomerSales(id, distKod, days);
+    const forceRefresh = c.req.query("refresh") === "1";
+    const sales = await getCustomerSales(id, distKod, days, { forceRefresh });
     return c.json(sales);
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
@@ -370,15 +374,37 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
     const body = (await c.req.json().catch(() => ({}))) as {
       label?: string;
       windowDays?: number;
+      refresh?: boolean;
     };
     const label = body.label?.trim() || `Müşteri #${id}`;
     const windowDays = Number.isFinite(body.windowDays)
       ? Math.max(7, Math.min(30, Math.floor(body.windowDays!)))
       : 14;
-    const result = await runForesight(id, label, windowDays);
+    const forceRefresh = body.refresh === true || c.req.query("refresh") === "1";
+    const result = await runForesight(id, label, windowDays, { forceRefresh });
     return c.json(result);
   } catch (err) {
     console.error("[/api/map/customers/:id/foresight] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Cache observability + manual wipe. GET → stats per domain; DELETE → clear.
+// Lets us wire a global "tüm cache'i temizle" affordance later if needed.
+app.get("/api/cache", (c) => {
+  try {
+    return c.json({ entries: cacheStats() });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+app.delete("/api/cache/:domain", (c) => {
+  try {
+    const domain = c.req.param("domain");
+    const cleared = cachedClear(domain);
+    return c.json({ cleared });
+  } catch (err) {
     return c.json({ error: (err as Error).message }, 500);
   }
 });
