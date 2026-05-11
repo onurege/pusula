@@ -343,8 +343,13 @@ export async function listRadars(): Promise<RadarSummary[]> {
   return data.radars;
 }
 
-export async function runRadarApi(id: string, params: Record<string, string | number> = {}): Promise<RadarRun> {
-  return request<RadarRun>(`/api/radars/${encodeURIComponent(id)}/run`, {
+export async function runRadarApi(
+  id: string,
+  params: Record<string, string | number> = {},
+  options: { refresh?: boolean } = {},
+): Promise<RadarRun> {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request<RadarRun>(`/api/radars/${encodeURIComponent(id)}/run${qs}`, {
     method: "POST",
     body: JSON.stringify(params),
   });

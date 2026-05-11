@@ -6,6 +6,7 @@ import { AnomalyCallouts } from "@/components/anomaly-callouts";
 import { KpiCard } from "@/components/kpi-card";
 import { ManagerBrief } from "@/components/manager-brief";
 import { RadarChart } from "@/components/radar-chart-client";
+import { RadarRefreshButton } from "@/components/radar-refresh-button";
 import { ResultTable } from "@/components/result-table";
 
 export const dynamic = "force-dynamic";
@@ -55,11 +56,14 @@ export default async function RadarPage({
             <span className="text-muted text-xs hidden lg:inline">· {run.description}</span>
           )}
         </div>
-        <div className="text-[11px] text-muted tabular-nums flex items-center gap-3">
-          <span>{new Date(run.generatedAt).toLocaleString("tr-TR")}</span>
-          <span className="opacity-70">
-            {Object.entries(run.params).map(([k, v]) => `${k}=${v}`).join(" · ")}
-          </span>
+        <div className="flex items-center gap-3">
+          <div className="text-[11px] text-muted tabular-nums flex items-center gap-3">
+            <span>Üretildi: {new Date(run.generatedAt).toLocaleString("tr-TR")}</span>
+            <span className="opacity-70">
+              {Object.entries(run.params).map(([k, v]) => `${k}=${v}`).join(" · ")}
+            </span>
+          </div>
+          <RadarRefreshButton radarId={run.id} params={run.params} />
         </div>
       </header>
 
