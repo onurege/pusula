@@ -87,15 +87,35 @@ export function CustomerModal({ customer, onClose }: Props) {
     }
   }
 
+  // When foresight has a result, expand the modal into a two-pane full-bleed
+  // layout (customer info on the left, dashboard on the right). Otherwise
+  // keep the centered card.
+  const expanded = foresight.kind === "ok";
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm"
+      className={
+        "fixed inset-0 z-50 flex bg-black/40 backdrop-blur-sm transition-all " +
+        (expanded ? "items-stretch justify-stretch p-4" : "items-center justify-center p-4")
+      }
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl border border-border bg-surface shadow-2xl"
+        className={
+          "relative bg-surface shadow-2xl border border-border overflow-hidden transition-all " +
+          (expanded
+            ? "w-full h-full max-w-[1600px] mx-auto rounded-2xl flex"
+            : "w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-2xl")
+        }
         onClick={(e) => e.stopPropagation()}
       >
+        <div
+          className={
+            expanded
+              ? "flex-1 max-w-[640px] overflow-y-auto border-r border-border"
+              : "contents"
+          }
+        >
         <header className="sticky top-0 z-10 bg-surface border-b border-border px-6 py-4 flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold tracking-tight truncate">{customer.unvan}</h2>
@@ -287,13 +307,18 @@ export function CustomerModal({ customer, onClose }: Props) {
                     <code className="text-xs">{foresight.message}</code>
                   </div>
                 )}
-                {foresight.kind === "ok" && (
-                  <ForesightPanel data={foresight.data} />
-                )}
+                {/* When foresight loads, the modal expands and the right pane
+                    hosts the dashboard, so no inline panel is needed here. */}
               </section>
             </>
           )}
         </div>
+        </div>
+        {expanded && foresight.kind === "ok" && (
+          <div className="flex-1 overflow-y-auto bg-bg/40">
+            <ForesightDashboard data={foresight.data} customer={customer} />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -338,130 +363,308 @@ function formatCompact(n: number): string {
   return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
 }
 
-function ForesightPanel({ data }: { data: ForesightResult }) {
-  const hasSignals =
-    data.events.length > 0 ||
-    data.yoy.length > 0 ||
-    data.dropped.length > 0 ||
-    data.cohort.length > 0;
+function ForesightDashboard({
+  data,
+  customer,
+}: {
+  data: ForesightResult;
+  customer: MapCustomer;
+}) {
+  const yoyTotal = data.yoy.reduce((a, b) => a + b.ciro, 0);
+  const yoyTop = data.yoy.slice(0, 8);
+  const yoyMax = yoyTop[0]?.ciro ?? 1;
 
   return (
-    <div className="rounded-lg border border-accent/40 bg-accent/5 p-4 space-y-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
-          Öngörü · sonraki 14 gün
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-baseline justify-between gap-4">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
+            Foresight · sonraki 14 gün
+          </div>
+          <div className="text-xl font-semibold tracking-tight mt-0.5">
+            {customer.unvan}
+          </div>
         </div>
-        {data.riskFlags.length > 0 && (
-          <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold text-bad bg-bad/15 border border-bad/30 px-1.5 py-0.5 rounded">
-            ● Risk · {data.riskFlags.length}
-          </span>
-        )}
+        <div className="text-[10px] text-muted">
+          {new Date(data.generatedAt).toLocaleString("tr-TR")}
+        </div>
       </div>
 
+      {/* KPI strip */}
+      <div className="grid grid-cols-4 gap-3">
+        <DashKpi
+          label="Risk sinyali"
+          value={data.riskFlags.length}
+          tone={data.riskFlags.length > 0 ? "bad" : "muted"}
+        />
+        <DashKpi
+          label="14 günde olay"
+          value={data.events.length}
+          tone={data.events.length > 0 ? "accent" : "muted"}
+        />
+        <DashKpi
+          label="Düşmüş kategori"
+          value={data.dropped.length}
+          tone={data.dropped.length > 0 ? "warn" : "muted"}
+        />
+        <DashKpi
+          label="Segment fırsatı"
+          value={data.cohort.length}
+          tone={data.cohort.length > 0 ? "accent" : "muted"}
+        />
+      </div>
+
+      {/* Risk banner — kept here for prominence even though inline panel had it */}
       {data.riskFlags.length > 0 && (
-        <div className="rounded-md border border-bad/40 bg-bad/10 p-3 space-y-1.5">
-          <div className="text-[10px] uppercase tracking-wider font-semibold text-bad">
+        <div className="rounded-lg border border-bad/40 bg-bad/10 p-4 space-y-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold text-bad">
+            <span className="size-2 rounded-full bg-bad animate-pulse" />
             Yüksek öncelikli risk
           </div>
-          <ul className="space-y-1">
-            {data.riskFlags.map((r, i) => (
-              <li key={i} className="text-sm leading-snug text-fg">
-                {r.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {data.brief && (
-        <div className="text-sm leading-relaxed whitespace-pre-wrap">
-          {data.brief}
-        </div>
-      )}
-
-      {data.actions.length > 0 && (
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1.5">
-            Önerilen aksiyonlar
-          </div>
           <ul className="space-y-1.5">
-            {data.actions.map((a, i) => (
-              <li key={i} className="text-sm flex gap-2">
-                <span className="text-accent font-semibold tabular-nums">{i + 1}.</span>
-                <span className="flex-1">{a}</span>
+            {data.riskFlags.map((r, i) => (
+              <li key={i} className="text-sm leading-snug">
+                <span className="font-medium">{r.urunGrubu}</span> —
+                eskiden {Math.round(r.baselineCiro).toLocaleString("tr-TR")} ₺
+                alıyordu, {r.daysSinceLast ?? "?"} gündür hiç sipariş yok
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      {hasSignals && (
-        <details className="text-xs">
-          <summary className="cursor-pointer text-muted hover:text-fg">
-            Sinyaller (kaynak veri)
-          </summary>
-          <div className="mt-2 space-y-3">
-            {data.events.length > 0 && (
-              <ForesightSignalList
-                title="Takvim"
-                items={data.events.map(
-                  (e) => `${e.date} (T+${e.daysAhead}g) — ${e.name}`,
-                )}
-              />
-            )}
-            {data.yoy.length > 0 && (
-              <ForesightSignalList
-                title="Geçen yıl bu hafta"
-                items={data.yoy.slice(0, 5).map(
-                  (y) =>
-                    `${y.urunGrubu ?? "(grup yok)"} — ${Math.round(y.ciro).toLocaleString("tr-TR")} ₺ / ${Math.round(y.miktar).toLocaleString("tr-TR")} adet`,
-                )}
-              />
-            )}
-            {data.dropped.length > 0 && (
-              <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">
-                  Düşmüş kategoriler
-                </div>
-                <ul className="space-y-0.5 list-disc pl-4 text-[11px]">
-                  {data.dropped.slice(0, 5).map((d, i) => (
-                    <li key={i} className="leading-snug">
-                      <UrgencyBadge urgency={d.urgency} />{" "}
-                      {d.urunGrubu} — eskiden{" "}
-                      {Math.round(d.baselineCiro).toLocaleString("tr-TR")} ₺,{" "}
-                      {d.daysSinceLast ?? "?"} gündür yok
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {data.cohort.length > 0 && (
-              <ForesightSignalList
-                title="Segment kıyası (aldı, bu müşteri almadı)"
-                items={data.cohort.slice(0, 5).map(
-                  (c) =>
-                    `${c.urunGrubu} — ${c.cohortBuyerCount}/${c.cohortTotalBuyers} müşteri aldı`,
-                )}
-              />
-            )}
+      {/* Brief */}
+      {data.brief && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2">
+            Yönetici brifi
           </div>
-        </details>
+          <div className="text-sm leading-relaxed whitespace-pre-wrap">
+            {data.brief}
+          </div>
+        </div>
       )}
+
+      {/* Actions — first-class block */}
+      {data.actions.length > 0 && (
+        <div className="rounded-lg border border-accent/40 bg-accent/5 p-4 space-y-3">
+          <div className="text-[10px] uppercase tracking-wider text-accent font-semibold">
+            Bu hafta yapılacak
+          </div>
+          <ol className="space-y-2.5">
+            {data.actions.map((a, i) => (
+              <li key={i} className="text-sm flex gap-3">
+                <span className="shrink-0 size-6 rounded-full bg-accent text-accent-fg text-xs font-semibold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <span className="flex-1 leading-snug pt-0.5">{a}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* Calendar timeline */}
+      {data.events.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-3">
+            Takvim · sonraki 14 gün
+          </div>
+          <ol className="space-y-2">
+            {data.events.map((e, i) => (
+              <li key={i} className="flex gap-3 items-start">
+                <div className="shrink-0 w-14 text-center">
+                  <div className="text-[10px] text-muted leading-tight">
+                    T+{e.daysAhead}g
+                  </div>
+                  <div className="text-xs font-mono">{e.date.slice(5)}</div>
+                </div>
+                <div className="flex-1 border-l border-border pl-3">
+                  <div className="text-sm font-medium leading-tight">{e.name}</div>
+                  <div className="text-[10px] text-muted uppercase tracking-wider mt-0.5">
+                    {e.kind}
+                  </div>
+                  {e.category_hints && e.category_hints.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap gap-1">
+                      {e.category_hints.slice(0, 6).map((h, j) => (
+                        <span
+                          key={j}
+                          className="text-[10px] bg-accent/10 text-accent border border-accent/20 px-1.5 py-0.5 rounded"
+                        >
+                          {h}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {/* YoY top categories with mini bars */}
+      {yoyTop.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="flex items-baseline justify-between mb-3">
+            <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+              Geçen yıl bu hafta · en üst kalemler
+            </div>
+            <div className="text-xs text-muted">
+              Toplam:{" "}
+              <span className="text-fg font-medium tabular-nums">
+                {Math.round(yoyTotal).toLocaleString("tr-TR")} ₺
+              </span>
+            </div>
+          </div>
+          <div className="space-y-2.5">
+            {yoyTop.map((y, i) => {
+              const pct = (y.ciro / yoyMax) * 100;
+              const share = yoyTotal > 0 ? (y.ciro / yoyTotal) * 100 : 0;
+              return (
+                <div key={i}>
+                  <div className="flex items-baseline justify-between text-xs mb-0.5">
+                    <span className="truncate pr-2">{y.urunGrubu ?? "(grup yok)"}</span>
+                    <span className="tabular-nums shrink-0 text-muted">
+                      <span className="text-fg font-medium">
+                        {Math.round(y.ciro).toLocaleString("tr-TR")} ₺
+                      </span>
+                      {" · "}
+                      {share.toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-bg rounded overflow-hidden">
+                    <div
+                      className="h-full bg-accent/70 rounded"
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Dropped categories table */}
+      {data.dropped.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-3">
+            Düşmüş kategoriler · re-engagement
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-muted text-[10px] uppercase tracking-wider border-b border-border">
+                  <th className="text-left font-medium pb-2 pr-2">Kategori</th>
+                  <th className="text-left font-medium pb-2 px-2">Öncelik</th>
+                  <th className="text-right font-medium pb-2 px-2">Geçmiş ciro</th>
+                  <th className="text-right font-medium pb-2 pl-2">Son sipariş</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.dropped.slice(0, 8).map((d, i) => (
+                  <tr key={i} className="border-b border-border/40 last:border-0">
+                    <td className="py-2 pr-2 truncate max-w-[200px]">{d.urunGrubu}</td>
+                    <td className="py-2 px-2">
+                      <UrgencyBadge urgency={d.urgency} />
+                    </td>
+                    <td className="py-2 px-2 text-right tabular-nums">
+                      {Math.round(d.baselineCiro).toLocaleString("tr-TR")} ₺
+                    </td>
+                    <td className="py-2 pl-2 text-right tabular-nums text-muted">
+                      {d.daysSinceLast ?? "?"} gün
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Cohort */}
+      {data.cohort.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-3">
+            Segment kıyası · aldı, bu hesap almadı
+          </div>
+          <div className="space-y-2.5">
+            {data.cohort.slice(0, 6).map((c, i) => {
+              const pen = c.cohortTotalBuyers > 0
+                ? (c.cohortBuyerCount / c.cohortTotalBuyers) * 100
+                : 0;
+              return (
+                <div key={i}>
+                  <div className="flex items-baseline justify-between text-xs mb-0.5">
+                    <span className="truncate pr-2">{c.urunGrubu}</span>
+                    <span className="tabular-nums shrink-0 text-muted">
+                      <span className="text-fg font-medium">
+                        {c.cohortBuyerCount}/{c.cohortTotalBuyers}
+                      </span>
+                      {" · "}
+                      {pen.toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-bg rounded overflow-hidden">
+                    <div
+                      className="h-full bg-good/60 rounded"
+                      style={{ width: `${Math.min(pen, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {data.events.length === 0 &&
+        data.yoy.length === 0 &&
+        data.dropped.length === 0 &&
+        data.cohort.length === 0 && (
+          <div className="rounded-lg border border-dashed border-border bg-bg/40 p-8 text-center text-sm text-muted">
+            Önümüzdeki 14 günde bu müşteri için anlamlı bir sinyal yok.
+          </div>
+        )}
     </div>
   );
 }
 
-function ForesightSignalList({ title, items }: { title: string; items: string[] }) {
+function DashKpi({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "accent" | "warn" | "bad" | "muted";
+}) {
+  const toneClass =
+    tone === "bad"
+      ? "border-bad/40 bg-bad/5"
+      : tone === "warn"
+      ? "border-warn/40 bg-warn/5"
+      : tone === "accent"
+      ? "border-accent/30 bg-accent/5"
+      : "border-border bg-bg";
+  const valueColor =
+    tone === "bad"
+      ? "text-bad"
+      : tone === "warn"
+      ? "text-warn"
+      : tone === "accent"
+      ? "text-accent"
+      : "text-muted";
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-1">
-        {title}
+    <div className={`rounded-lg border p-3 ${toneClass}`}>
+      <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+        {label}
       </div>
-      <ul className="space-y-0.5 list-disc pl-4 text-[11px]">
-        {items.map((it, i) => (
-          <li key={i} className="leading-snug">{it}</li>
-        ))}
-      </ul>
+      <div className={`text-2xl font-semibold tabular-nums leading-none mt-1.5 ${valueColor}`}>
+        {value}
+      </div>
     </div>
   );
 }
