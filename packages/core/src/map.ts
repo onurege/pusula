@@ -30,9 +30,16 @@ export type MapCustomer = {
 };
 
 /**
- * Derives a risk tier from activity recency and ciro momentum. The thresholds
- * are intentionally simple — a sales manager can override in the UI but the
- * default should never bury a HIGH tier customer.
+ * Derives a risk tier from activity recency and ciro momentum.
+ *
+ * Tier coverage is exhaustive — every {dSale, dVisit, ciro30, ciroPrev30}
+ * combination falls into exactly one tier so no customer ends up gray just
+ * because the thresholds had gaps. Earlier version had a dead zone in days
+ * 15-29 (not active enough for green, not late enough for amber) which
+ * dumped the majority of customers into "low" by accident.
+ *
+ * Thresholds are tuned for Univera distribütör scale where 500-5k ₺/ay is
+ * a normal small müşteri and ≥10k starts to count as a meaningful account.
  */
 export function computeRiskTier(input: {
   daysSinceLastSale: number | null;
@@ -41,28 +48,31 @@ export function computeRiskTier(input: {
   ciroPrev30: number;
 }): RiskTier {
   const { daysSinceLastSale: dSale, daysSinceLastVisit: dVisit, ciro30, ciroPrev30 } = input;
+  const hasAnyHistory = ciro30 > 0 || ciroPrev30 > 0 || (dSale !== null && dSale < 365);
 
-  // Never-engaged customer (no recorded sale) — not "risk", just dormant.
-  if (dSale === null) return "low";
+  // Never engaged or very old single buy → dormant (not "at risk", just gray)
+  if (dSale === null || dSale >= 180) return "low";
 
-  // High-value customer (was buying ≥ X ₺/month) going silent ≥30 days → HIGH risk.
-  if (dSale >= 30 && ciroPrev30 >= 50_000) return "high";
+  // HIGH RISK — relationship is bleeding
+  // (a) silent ≥60 days on any account with history
+  if (dSale >= 60 && hasAnyHistory) return "high";
+  // (b) silent ≥30 days on a meaningful account (≥10k prev 30d ciro)
+  if (dSale >= 30 && ciroPrev30 >= 10_000) return "high";
+  // (c) momentum collapse: ≥50% drop 30d vs prev 30d, on non-trivial baseline
+  if (ciroPrev30 >= 5_000 && ciro30 < ciroPrev30 * 0.5) return "high";
 
-  // Long silence (60+ days no sale) on any non-dormant account → HIGH.
-  if (dSale >= 60 && ciroPrev30 >= 5_000) return "high";
+  // MEDIUM — early warning
+  // (a) silent 30-59 days on any buying customer
+  if (dSale >= 30 && hasAnyHistory) return "medium";
+  // (b) long visit gap (60+ days) on a customer that does buy
+  if ((dVisit ?? 999) >= 60 && hasAnyHistory) return "medium";
+  // (c) milder momentum drop ≥30% on any buying account
+  if (ciroPrev30 >= 1_000 && ciro30 < ciroPrev30 * 0.7) return "medium";
 
-  // Big momentum drop (≥50% decline 30d vs prev 30d) on meaningful baseline.
-  if (ciroPrev30 >= 10_000 && ciro30 < ciroPrev30 * 0.5) return "high";
+  // ACTIVE — recent activity AND has ciro
+  if (dSale <= 30 && (ciro30 > 0 || ciroPrev30 > 0)) return "active";
 
-  // Stale visit (90+ days no visit) AND non-trivial baseline.
-  if ((dVisit ?? 999) >= 90 && ciroPrev30 >= 5_000) return "medium";
-
-  // Moderate silence — 30-60 days no sale, low/medium baseline.
-  if (dSale >= 30 && ciroPrev30 >= 1_000) return "medium";
-
-  // Active customer with recent sale.
-  if (dSale <= 14) return "active";
-
+  // Catch-all — usually means a tiny one-off purchase ages ago
   return "low";
 }
 
