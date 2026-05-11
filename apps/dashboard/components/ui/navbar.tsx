@@ -2,13 +2,22 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, AlertTriangle, Database, FilePlus2, FileText, Map } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  CalendarClock,
+  Database,
+  FilePlus2,
+  FileText,
+  Map,
+} from "lucide-react";
 import { cn } from "./cn";
 
 const items = [
   { href: "/", label: "Radar", icon: Activity },
   { href: "/map", label: "Harita", icon: Map },
   { href: "/risk", label: "Kayıp Riski", icon: AlertTriangle },
+  { href: "/ziyaret", label: "Ziyaret Boşluğu", icon: CalendarClock },
   { href: "/reports", label: "Raporlar", icon: FileText },
   { href: "/reports/new", label: "Yeni rapor", icon: FilePlus2 },
   { href: "/schema", label: "Şema", icon: Database },
