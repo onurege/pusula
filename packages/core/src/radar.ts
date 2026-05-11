@@ -437,7 +437,25 @@ export async function runRadar(
     () => computeRadar(def, params),
     { forceRefresh: options.forceRefresh },
   );
-  return cached.value;
+
+  // Overlay live metadata (title, description, block titles/descriptions)
+  // from the on-disk radar definition. The expensive part — block rows and
+  // brief — stays cached, but text fields are read fresh so JSON edits take
+  // effect without needing a manual cache refresh.
+  return {
+    ...cached.value,
+    title: def.title,
+    description: def.description,
+    blocks: cached.value.blocks.map((b) => {
+      const liveBlock = def.blocks.find((x) => x.id === b.id);
+      if (!liveBlock) return b;
+      return {
+        ...b,
+        title: substituteText(liveBlock.title, params) ?? b.title,
+        description: substituteText(liveBlock.description, params) ?? b.description,
+      };
+    }),
+  };
 }
 
 async function computeRadar(
