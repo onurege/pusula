@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
+import { Filter, Loader2, Search, X } from "lucide-react";
 import type { MapCustomer, MapFacets } from "@/lib/api";
 
 type Props = {
@@ -65,46 +66,59 @@ export function MapFilters({ facets, customers, count }: Props) {
 
   const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q;
 
+  const inputCls =
+    "w-full bg-surface border border-border rounded-md px-3 h-9 text-sm shadow-xs " +
+    "transition-colors focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/15 " +
+    "disabled:opacity-50 disabled:cursor-not-allowed";
+  const labelCls = "text-[10px] uppercase tracking-wider text-muted font-semibold";
+
   return (
-    <aside className="w-72 shrink-0 border-r border-border bg-surface p-4 space-y-4 overflow-y-auto">
+    <aside className="w-72 shrink-0 border-r border-border bg-surface/60 backdrop-blur p-4 space-y-5 overflow-y-auto">
       <div className="flex items-center justify-between">
-        <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted font-semibold">
+          <Filter size={11} />
           Filtreler
         </div>
         {hasFilter && (
           <button
             type="button"
             onClick={reset}
-            className="text-[11px] text-muted hover:text-fg"
+            className="inline-flex items-center gap-1 text-[11px] text-muted hover:text-fg transition-colors"
           >
-            Temizle
+            <X size={11} /> Temizle
           </button>
         )}
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-xs text-muted">Arama</label>
-        <input
-          type="text"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Müşteri ünvanı…"
-          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent"
-        />
+        <label className={labelCls}>Arama</label>
+        <div className="relative">
+          <Search
+            size={13}
+            className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
+          />
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Müşteri ünvanı…"
+            className={inputCls + " pl-8"}
+          />
+        </div>
         {hits.length > 0 && (
-          <ul className="rounded-md border border-border bg-bg overflow-hidden">
+          <ul className="rounded-md border border-border bg-surface overflow-hidden shadow-sm">
             {hits.map((c) => (
               <li key={c.id}>
                 <button
                   type="button"
                   onClick={() => pick(c)}
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-surface-2 border-b border-border/60 last:border-b-0"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--color-accent-soft)] border-b border-border/60 last:border-b-0 transition-colors"
                 >
-                  <div className="truncate">{c.unvan}</div>
+                  <div className="truncate font-medium">{c.unvan}</div>
                   {c.kisaAd && c.kisaAd !== c.unvan && (
-                    <div className="text-[11px] text-muted truncate italic">{c.kisaAd}</div>
+                    <div className="text-[11px] text-muted truncate italic mt-0.5">{c.kisaAd}</div>
                   )}
-                  <div className="text-[11px] text-muted truncate">
+                  <div className="text-[11px] text-muted truncate mt-0.5">
                     {[c.ilce, c.sehir].filter(Boolean).join(" / ")}
                     {c.distributor ? ` · ${c.distributor}` : ""}
                   </div>
@@ -114,17 +128,17 @@ export function MapFilters({ facets, customers, count }: Props) {
           </ul>
         )}
         {q.trim().length >= 2 && hits.length === 0 && (
-          <div className="text-[11px] text-muted">Eşleşme yok.</div>
+          <div className="text-[11px] text-muted italic">Eşleşme yok.</div>
         )}
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-xs text-muted">Şehir</label>
+        <label className={labelCls}>Şehir</label>
         <select
           value={sehir}
           onChange={(e) => update({ sehir: e.target.value })}
           disabled={isPending}
-          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent disabled:opacity-50"
+          className={inputCls}
         >
           <option value="">Tüm şehirler</option>
           {facets.cities.map((c) => (
@@ -134,12 +148,12 @@ export function MapFilters({ facets, customers, count }: Props) {
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-xs text-muted">Distribütör</label>
+        <label className={labelCls}>Distribütör</label>
         <select
           value={distKod}
           onChange={(e) => update({ distKod: e.target.value })}
           disabled={isPending}
-          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent disabled:opacity-50"
+          className={inputCls}
         >
           <option value="">Tüm distribütörler</option>
           {facets.distributors.map((d) => (
@@ -151,12 +165,12 @@ export function MapFilters({ facets, customers, count }: Props) {
       </div>
 
       <div className="space-y-1.5">
-        <label className="text-xs text-muted">Satış aktivitesi (son 30 gün)</label>
+        <label className={labelCls}>Satış aktivitesi (30 gün)</label>
         <select
           value={salesFilter}
           onChange={(e) => update({ salesFilter: e.target.value })}
           disabled={isPending}
-          className="w-full bg-bg border border-border rounded-md px-3 h-9 text-sm focus:outline-none focus:border-accent disabled:opacity-50"
+          className={inputCls}
         >
           <option value="">Tümü</option>
           <option value="with">Sadece satışı olanlar</option>
@@ -164,20 +178,19 @@ export function MapFilters({ facets, customers, count }: Props) {
         </select>
       </div>
 
-      <div className="pt-3 border-t border-border text-xs text-muted">
+      <div className="pt-3 border-t border-border text-xs">
         {isPending ? (
-          <span className="flex items-center gap-2">
-            <span className="size-1.5 rounded-full bg-accent animate-pulse" />
+          <span className="flex items-center gap-2 text-muted">
+            <Loader2 size={12} className="animate-spin text-accent" />
             Yükleniyor…
           </span>
         ) : (
-          <span>
-            Görüntülenen:{" "}
-            <span className="text-fg font-medium tabular-nums">
+          <div className="flex items-baseline justify-between">
+            <span className="text-muted">Görüntülenen</span>
+            <span className="text-fg font-semibold tabular-nums">
               {count.toLocaleString("tr-TR")}
-            </span>{" "}
-            müşteri
-          </span>
+            </span>
+          </div>
         )}
       </div>
     </aside>

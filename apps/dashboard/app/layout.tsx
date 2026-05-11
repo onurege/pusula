@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Enroute — DBA Agent",
-  description: "Univera verisi üzerinde Türkçe doğal dil ile rapor üret, çalıştır, paylaş.",
+  title: "Enroute Pusula",
+  description: "Saha satış için yön bulan AI asistanı — risk, fırsat ve aksiyon, tek yerde.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

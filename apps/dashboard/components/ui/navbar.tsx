@@ -20,11 +20,11 @@ export function Navbar() {
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="size-7 rounded-lg bg-accent text-accent-fg font-bold flex items-center justify-center text-sm shadow-sm group-hover:shadow-md transition-shadow">
-            E
+            EP
           </div>
           <div className="flex flex-col leading-none">
-            <span className="font-semibold tracking-tight text-[15px]">Enroute</span>
-            <span className="text-[10px] text-muted tracking-wider uppercase">DBA Agent</span>
+            <span className="font-semibold tracking-tight text-[15px]">Enroute Pusula</span>
+            
           </div>
         </Link>
         <nav className="flex items-center gap-1">

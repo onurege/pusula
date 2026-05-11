@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { AlertCircle, Eye, Save, Sparkles, Wand2 } from "lucide-react";
 import { ResultTable } from "@/components/result-table";
+import { Button } from "@/components/ui/button";
+import { Card, CardHeader } from "@/components/ui/card";
 
 type Generated = {
   sql: string;
@@ -65,91 +68,114 @@ export default function NewReportPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <Link href="/reports" className="text-sm text-muted hover:text-fg">← Kayıtlı raporlar</Link>
-        <h1 className="text-2xl font-semibold tracking-tight mt-2">Yeni rapor</h1>
-        <p className="text-muted text-sm mt-1 max-w-2xl">
-          Türkçe doğal dilde ne istediğini yaz. Sistem ilgili tabloları çıkartır, SQL yazar, çalıştırır ve kısa bir brifing üretir. Beğendiğin sonucu kaydedebilirsin.
+      <div className="space-y-2">
+        <Link href="/reports" className="text-xs text-muted hover:text-fg inline-flex items-center gap-1">
+          ← Kayıtlı raporlar
+        </Link>
+        <div className="flex items-center gap-2.5">
+          <div className="size-9 rounded-lg bg-[var(--color-accent-soft)] text-accent flex items-center justify-center">
+            <Wand2 size={18} />
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Yeni rapor</h1>
+        </div>
+        <p className="text-fg-2 text-sm max-w-2xl leading-relaxed">
+          Türkçe doğal dilde ne istediğini yaz. Sistem ilgili tabloları çıkarır, SQL yazar,
+          çalıştırır ve kısa bir brifing üretir. Beğendiğin sonucu kaydedebilirsin.
         </p>
       </div>
 
-      <section className="rounded-lg border border-border bg-surface p-5 space-y-4">
+      <Card padding="lg" className="space-y-4">
         <textarea
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={4}
           placeholder="Örn: Son 30 günde en çok ciro yapan ilk 10 distribütör"
-          className="w-full bg-bg border border-border rounded-md px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent resize-y"
+          className="w-full bg-bg border border-border rounded-md px-3 py-2.5 text-sm focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/15 resize-y transition-colors"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <button
+          <Button
+            variant="secondary"
+            size="md"
             onClick={() => generate(false)}
             disabled={busy || !prompt.trim()}
-            className="inline-flex items-center gap-2 bg-surface-2 border border-border text-fg px-4 h-10 rounded-md text-sm hover:bg-border disabled:opacity-40"
+            loading={busy && !saving}
+            iconLeft={busy && !saving ? undefined : <Eye size={14} />}
           >
             {busy && !saving ? "Üretiliyor…" : "Önizle"}
-          </button>
-          <button
+          </Button>
+          <Button
+            variant="primary"
+            size="md"
             onClick={() => generate(true)}
             disabled={busy || !prompt.trim()}
-            className="inline-flex items-center gap-2 bg-accent text-accent-fg px-4 h-10 rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-40"
+            loading={saving}
+            iconLeft={saving ? undefined : <Save size={14} />}
           >
             {saving ? "Kaydediliyor…" : "Üret + Kaydet"}
-          </button>
+          </Button>
           <div className="flex-1" />
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-1.5">
             {SAMPLES.map((s) => (
               <button
                 key={s}
                 onClick={() => setPrompt(s)}
-                className="text-xs text-muted hover:text-fg border border-border rounded-full px-3 py-1"
+                className="text-xs text-fg-2 hover:text-accent hover:bg-[var(--color-accent-soft)] bg-surface-2 border border-border rounded-full px-3 py-1 transition-colors"
               >
                 {s}
               </button>
             ))}
           </div>
         </div>
-      </section>
+      </Card>
 
       {error && (
-        <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
-          <code className="text-xs">{error}</code>
-        </div>
+        <Card tone="bad" padding="md">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={16} className="text-bad mt-0.5 shrink-0" />
+            <code className="text-xs text-fg-2 leading-relaxed">{error}</code>
+          </div>
+        </Card>
       )}
 
       {generated && (
-        <div className="space-y-6">
-          <section className="rounded-lg border border-accent/40 bg-accent/5 p-5">
-            <div className="text-xs uppercase tracking-wide text-accent font-semibold mb-2">AI Brief</div>
+        <div className="space-y-5">
+          <Card tone="accent" padding="lg">
+            <CardHeader className="flex items-center gap-1.5 text-accent">
+              <Sparkles size={11} /> AI Brief
+            </CardHeader>
             <div className="text-sm leading-relaxed whitespace-pre-wrap">{generated.brief}</div>
-          </section>
+          </Card>
 
           <section>
-            <div className="text-xs uppercase tracking-wide text-muted font-semibold mb-2">SQL</div>
-            <pre className="rounded-lg border border-border bg-surface p-4 overflow-auto text-xs font-mono leading-relaxed">
+            <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2">SQL</div>
+            <pre className="rounded-lg border border-border bg-surface p-4 overflow-auto text-[11px] font-mono leading-relaxed shadow-xs">
               {generated.sql}
             </pre>
           </section>
 
           <section>
-            <div className="text-xs uppercase tracking-wide text-muted font-semibold mb-2">
+            <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2 flex items-baseline gap-2">
               Sonuç
-              <span className="ml-2 text-muted/80 normal-case font-normal">
+              <span className="text-muted/80 normal-case font-normal tracking-normal text-[11px]">
                 · {generated.result.rowCount.toLocaleString("tr-TR")} satır
                 {generated.result.truncated ? " (kesildi)" : ""}
-                · {generated.result.durationMs}ms
+                · <span className="tabular-nums">{generated.result.durationMs}ms</span>
               </span>
             </div>
             <ResultTable rows={generated.result.rows} max={50} />
           </section>
 
           <section>
-            <div className="text-xs uppercase tracking-wide text-muted font-semibold mb-2">Bağlam — bulunan tablolar</div>
-            <ul className="space-y-1 text-sm">
+            <div className="text-[10px] uppercase tracking-wider text-muted font-semibold mb-2">
+              Bağlam — bulunan tablolar
+            </div>
+            <ul className="space-y-1.5 text-sm">
               {generated.retrieved.map((t) => (
                 <li key={t.fullName} className="flex items-start gap-3">
-                  <code className="text-xs bg-surface border border-border px-2 py-1 rounded shrink-0">{t.fullName}</code>
-                  {t.description && <span className="text-muted text-sm">{t.description}</span>}
+                  <code className="text-[10px] bg-surface-2 border border-border text-fg-2 px-2 py-1 rounded shrink-0 font-mono">
+                    {t.fullName}
+                  </code>
+                  {t.description && <span className="text-muted text-xs">{t.description}</span>}
                 </li>
               ))}
             </ul>
