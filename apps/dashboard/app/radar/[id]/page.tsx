@@ -57,12 +57,9 @@ export default async function RadarPage({
           )}
         </div>
         <div className="flex items-center gap-3">
-          <div className="text-[11px] text-muted tabular-nums flex items-center gap-3">
-            <span>Üretildi: {new Date(run.generatedAt).toLocaleString("tr-TR")}</span>
-            <span className="opacity-70">
-              {Object.entries(run.params).map(([k, v]) => `${k}=${v}`).join(" · ")}
-            </span>
-          </div>
+          <span className="text-[11px] text-muted tabular-nums">
+            Üretildi: {new Date(run.generatedAt).toLocaleString("tr-TR")}
+          </span>
           <RadarRefreshButton radarId={run.id} params={run.params} />
         </div>
       </header>
@@ -104,16 +101,13 @@ export default async function RadarPage({
         {/* Anomalies — full width altta, kompakt liste */}
         {anomalyBlock && (
           <section className="col-span-12">
-            <div className="flex items-baseline justify-between mb-2">
-              <div className="flex items-baseline gap-3">
-                <div className="text-[10px] uppercase tracking-wider text-bad font-semibold">
-                  Bugün dikkat çekenler
-                </div>
-                <span className="text-xs text-muted">
-                  {anomalyBlock.anomalies?.length ?? 0} sapma
-                </span>
+            <div className="flex items-baseline gap-3 mb-2">
+              <div className="text-[10px] uppercase tracking-wider text-bad font-semibold">
+                Bugün dikkat çekenler
               </div>
-              <span className="text-[11px] text-muted tabular-nums">{anomalyBlock.durationMs}ms</span>
+              <span className="text-xs text-muted">
+                {anomalyBlock.anomalies?.length ?? 0} sapma
+              </span>
             </div>
             {anomalyBlock.error ? (
               <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
@@ -146,12 +140,9 @@ export default async function RadarPage({
       {/* Table'lar — alt bölüm */}
       {tableBlocks.map((b) => (
         <section key={b.id} className="space-y-3">
-          <div className="flex items-baseline justify-between flex-wrap gap-2">
-            <div>
-              <h2 className="text-sm font-medium tracking-tight">{b.title}</h2>
-              {b.description && <p className="text-muted text-xs mt-0.5">{b.description}</p>}
-            </div>
-            <span className="text-[11px] text-muted tabular-nums">{b.rowCount} satır · {b.durationMs}ms</span>
+          <div>
+            <h2 className="text-sm font-medium tracking-tight">{b.title}</h2>
+            {b.description && <p className="text-muted text-xs mt-0.5">{b.description}</p>}
           </div>
           {b.error ? (
             <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
@@ -176,16 +167,11 @@ function ChartSection({
 }) {
   return (
     <section className={`col-span-12 ${colSpan} space-y-3`}>
-      <div className="flex items-baseline justify-between flex-wrap gap-2">
-        <div>
-          <h2 className="text-sm font-medium tracking-tight">{block.title}</h2>
-          {block.description && (
-            <p className="text-muted text-xs mt-0.5 line-clamp-1">{block.description}</p>
-          )}
-        </div>
-        <span className="text-[11px] text-muted tabular-nums">
-          {block.rowCount} satır · {block.durationMs}ms
-        </span>
+      <div>
+        <h2 className="text-sm font-medium tracking-tight">{block.title}</h2>
+        {block.description && (
+          <p className="text-muted text-xs mt-0.5 line-clamp-1">{block.description}</p>
+        )}
       </div>
       {block.error ? (
         <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
