@@ -2,12 +2,22 @@
 
 import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Calendar, Download, MapPin, Search } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Calendar, Download, MapPin, Search } from "lucide-react";
 import type { MapCustomer } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CustomerModal } from "@/components/customer-modal";
+
+type SortKey = "default" | "unvan" | "sehir" | "visit" | "sale" | "ciro" | "risk";
+type SortDir = "asc" | "desc";
+
+const RISK_RANK: Record<MapCustomer["riskTier"], number> = {
+  high: 0,
+  medium: 1,
+  active: 2,
+  low: 3,
+};
 
 const THRESHOLD_OPTIONS = [
   { value: 30, label: "30+ gün" },
@@ -28,6 +38,18 @@ export function VisitGapList({
   const [q, setQ] = useState("");
   const [city, setCity] = useState("");
   const [selected, setSelected] = useState<MapCustomer | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("default");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  function toggleSort(key: SortKey, defaultDir: SortDir = "desc") {
+    if (sortKey === key) {
+      // Same column: flip direction
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      setSortDir(defaultDir);
+    }
+  }
 
   const cities = useMemo(() => {
     const set = new Set<string>();
@@ -37,7 +59,7 @@ export function VisitGapList({
 
   const filtered = useMemo(() => {
     const t = q.trim().toLocaleLowerCase("tr");
-    return customers.filter((c) => {
+    const base = customers.filter((c) => {
       if (city && c.sehir !== city) return false;
       if (!t) return true;
       return (
@@ -46,7 +68,46 @@ export function VisitGapList({
         (c.distributor ?? "").toLocaleLowerCase("tr").includes(t)
       );
     });
-  }, [customers, q, city]);
+    if (sortKey === "default") return base;
+    const dir = sortDir === "asc" ? 1 : -1;
+    const sorted = [...base].sort((a, b) => {
+      let av: number | string;
+      let bv: number | string;
+      switch (sortKey) {
+        case "unvan":
+          av = a.unvan.toLocaleLowerCase("tr");
+          bv = b.unvan.toLocaleLowerCase("tr");
+          break;
+        case "sehir":
+          av = (a.sehir ?? "").toLocaleLowerCase("tr");
+          bv = (b.sehir ?? "").toLocaleLowerCase("tr");
+          break;
+        case "visit":
+          av = a.daysSinceLastVisit ?? -1;
+          bv = b.daysSinceLastVisit ?? -1;
+          break;
+        case "sale":
+          av = a.daysSinceLastSale ?? -1;
+          bv = b.daysSinceLastSale ?? -1;
+          break;
+        case "ciro":
+          av = Math.max(a.ciroPrev30 ?? 0, a.ciro30 ?? 0);
+          bv = Math.max(b.ciroPrev30 ?? 0, b.ciro30 ?? 0);
+          break;
+        case "risk":
+          av = RISK_RANK[a.riskTier];
+          bv = RISK_RANK[b.riskTier];
+          break;
+        default:
+          return 0;
+      }
+      if (typeof av === "string" && typeof bv === "string") {
+        return av.localeCompare(bv, "tr") * dir;
+      }
+      return ((av as number) - (bv as number)) * dir;
+    });
+    return sorted;
+  }, [customers, q, city, sortKey, sortDir]);
 
   function changeThreshold(v: number) {
     const sp = new URLSearchParams(params?.toString() ?? "");
@@ -146,12 +207,48 @@ export function VisitGapList({
             <thead>
               <tr className="bg-surface-2 text-[10px] uppercase tracking-wider text-muted font-semibold border-b border-border">
                 <th className="text-left py-2.5 pl-4 pr-2 w-8">#</th>
-                <th className="text-left py-2.5 px-2">Müşteri</th>
-                <th className="text-left py-2.5 px-2">Konum</th>
-                <th className="text-right py-2.5 px-2">Son ziyaret</th>
-                <th className="text-right py-2.5 px-2">Son satış</th>
-                <th className="text-right py-2.5 px-2">Geçmiş ciro</th>
-                <th className="text-left py-2.5 px-2">Risk</th>
+                <SortHeader
+                  label="Müşteri"
+                  active={sortKey === "unvan"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("unvan", "asc")}
+                  align="left"
+                />
+                <SortHeader
+                  label="Konum"
+                  active={sortKey === "sehir"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("sehir", "asc")}
+                  align="left"
+                />
+                <SortHeader
+                  label="Son ziyaret"
+                  active={sortKey === "visit"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("visit", "desc")}
+                  align="right"
+                />
+                <SortHeader
+                  label="Son satış"
+                  active={sortKey === "sale"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("sale", "desc")}
+                  align="right"
+                />
+                <SortHeader
+                  label="Geçmiş ciro"
+                  active={sortKey === "ciro"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("ciro", "desc")}
+                  align="right"
+                />
+                <SortHeader
+                  label="Risk"
+                  active={sortKey === "risk"}
+                  dir={sortDir}
+                  onClick={() => toggleSort("risk", "asc")}
+                  align="left"
+                />
                 <th className="text-right py-2.5 pl-2 pr-4 w-20">Aç</th>
               </tr>
             </thead>
@@ -216,6 +313,48 @@ export function VisitGapList({
         <CustomerModal customer={selected} onClose={() => setSelected(null)} />
       )}
     </div>
+  );
+}
+
+function SortHeader({
+  label,
+  active,
+  dir,
+  onClick,
+  align,
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onClick: () => void;
+  align: "left" | "right";
+}) {
+  const Icon = active ? (dir === "asc" ? ArrowUp : ArrowDown) : ArrowUpDown;
+  return (
+    <th
+      className={`py-2.5 px-2 select-none ${align === "right" ? "text-right" : "text-left"}`}
+    >
+      <button
+        type="button"
+        onClick={onClick}
+        className={
+          "inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold transition-colors " +
+          (active ? "text-accent" : "text-muted hover:text-fg")
+        }
+      >
+        {align === "right" ? (
+          <>
+            <Icon size={10} className={active ? "" : "opacity-40"} />
+            {label}
+          </>
+        ) : (
+          <>
+            {label}
+            <Icon size={10} className={active ? "" : "opacity-40"} />
+          </>
+        )}
+      </button>
+    </th>
   );
 }
 
