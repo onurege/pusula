@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { RadarBlockResult } from "@/lib/api";
@@ -120,34 +121,56 @@ export default async function RadarPage({
         )}
       </div>
 
-      {/* Charts — 2 col yan yana; tek chart varsa full-width */}
+      {/* Charts + AI narrative side-by-side. Narrative balances out the
+          chart's empty space and gives the page rhythmic widths. */}
       {(chartA || chartB) && (
         <div className="grid grid-cols-12 gap-4">
           {chartA && (
             <ChartSection
               block={chartA}
-              colSpan={chartB ? "lg:col-span-7" : "lg:col-span-12"}
+              colSpan={
+                chartB
+                  ? "lg:col-span-7"
+                  : chartA.narrative
+                  ? "lg:col-span-8"
+                  : "lg:col-span-12"
+              }
             />
+          )}
+          {!chartB && chartA?.narrative && (
+            <NarrativeColumn text={chartA.narrative} colSpan="lg:col-span-4" />
           )}
           {chartB && <ChartSection block={chartB} colSpan="lg:col-span-5" />}
         </div>
       )}
 
-      {/* Geri kalan chart'lar — stacked */}
+      {/* Geri kalan chart'lar — full-width stack, narrative beside each */}
       {chartRest.length > 0 && (
         <div className="grid grid-cols-12 gap-4">
           {chartRest.map((b) => (
-            <ChartSection key={b.id} block={b} colSpan="lg:col-span-12" />
+            <Fragment key={b.id}>
+              <ChartSection
+                block={b}
+                colSpan={b.narrative ? "lg:col-span-8" : "lg:col-span-12"}
+              />
+              {b.narrative && (
+                <NarrativeColumn text={b.narrative} colSpan="lg:col-span-4" />
+              )}
+            </Fragment>
           ))}
         </div>
       )}
 
-      {/* Table'lar — alt bölüm */}
+      {/* Table'lar — alt bölüm, full-width */}
       {tableBlocks.map((b) => (
         <section key={b.id} className="space-y-3">
-          <div>
-            <h2 className="text-sm font-medium tracking-tight">{b.title}</h2>
-            {b.description && <p className="text-muted text-xs mt-0.5">{b.description}</p>}
+          <div className="flex items-baseline justify-between gap-3">
+            <div>
+              <h2 className="text-base font-semibold tracking-tight">{b.title}</h2>
+              {b.description && (
+                <p className="text-muted text-xs mt-0.5 max-w-2xl">{b.description}</p>
+              )}
+            </div>
           </div>
           {b.error ? (
             <div className="rounded-md border border-bad/40 bg-bad/10 px-4 py-3 text-sm">
@@ -170,12 +193,15 @@ function ChartSection({
   block: RadarBlockResult;
   colSpan: string;
 }) {
+  // ChartSection no longer renders narrative — that's a sibling component
+  // in the same grid (NarrativeColumn) so chart and narrative sit side-by-side
+  // with proper height alignment.
   return (
     <section className={`col-span-12 ${colSpan} space-y-3`}>
       <div>
-        <h2 className="text-sm font-medium tracking-tight">{block.title}</h2>
+        <h2 className="text-base font-semibold tracking-tight">{block.title}</h2>
         {block.description && (
-          <p className="text-muted text-xs mt-0.5 line-clamp-1">{block.description}</p>
+          <p className="text-muted text-xs mt-0.5 line-clamp-2">{block.description}</p>
         )}
       </div>
       {block.error ? (
@@ -183,23 +209,38 @@ function ChartSection({
           <code className="text-xs">{block.error}</code>
         </div>
       ) : block.chart ? (
-        <div className="rounded-xl border border-border bg-surface p-3">
+        <div className="rounded-xl border border-border bg-surface shadow-xs p-3">
           <RadarChart spec={block.chart} rows={block.rows} />
         </div>
       ) : null}
-      {block.narrative && <NarrativeCard text={block.narrative} />}
+    </section>
+  );
+}
+
+function NarrativeColumn({ text, colSpan }: { text: string; colSpan: string }) {
+  return (
+    <section className={`col-span-12 ${colSpan} flex`}>
+      {/* mt-7 + height stretch keeps the card aligned with the chart card's
+          top edge (chart section has h2 + description above the visual). */}
+      <div className="rounded-xl border border-accent/40 bg-[var(--color-accent-soft)] px-5 py-4 mt-7 flex-1 flex flex-col gap-2">
+        <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-accent font-semibold">
+          <span className="size-1.5 rounded-full bg-accent" />
+          AI Analizi
+        </div>
+        <p className="text-[14px] leading-relaxed text-fg flex-1">{text}</p>
+      </div>
     </section>
   );
 }
 
 function NarrativeCard({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-accent/40 bg-accent/8 px-5 py-4">
+    <div className="rounded-xl border border-accent/40 bg-[var(--color-accent-soft)] px-5 py-4">
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-accent font-semibold mb-2">
         <span className="size-1.5 rounded-full bg-accent" />
         AI Analizi
       </div>
-      <p className="text-[14px] leading-relaxed text-fg/95">{text}</p>
+      <p className="text-[14px] leading-relaxed text-fg">{text}</p>
     </div>
   );
 }
