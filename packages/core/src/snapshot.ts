@@ -1,9 +1,16 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { SchemaSnapshot } from "./types.js";
 
 let cached: SchemaSnapshot | null = null;
 let loadingPromise: Promise<SchemaSnapshot> | null = null;
+
+// Resolve repo root from this file's own location (packages/core/src/snapshot.ts
+// → ../../.. is the repo root). cwd-based resolution broke when callers ran
+// from apps/api/ instead of the repo root.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_REPO_ROOT = path.resolve(__dirname, "../../..");
 
 /**
  * Resolve the snapshot path. Order:
@@ -36,7 +43,7 @@ export async function loadSnapshot(
   if (cached && !options.reload) return cached;
   if (loadingPromise && !options.reload) return loadingPromise;
 
-  const repoRoot = options.repoRoot ?? process.cwd();
+  const repoRoot = options.repoRoot ?? DEFAULT_REPO_ROOT;
 
   loadingPromise = (async () => {
     let lastErr: unknown = null;
