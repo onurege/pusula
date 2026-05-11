@@ -120,10 +120,15 @@ export default async function RadarPage({
         )}
       </div>
 
-      {/* Charts — 2 col yan yana */}
+      {/* Charts — 2 col yan yana; tek chart varsa full-width */}
       {(chartA || chartB) && (
         <div className="grid grid-cols-12 gap-4">
-          {chartA && <ChartSection block={chartA} colSpan="lg:col-span-7" />}
+          {chartA && (
+            <ChartSection
+              block={chartA}
+              colSpan={chartB ? "lg:col-span-7" : "lg:col-span-12"}
+            />
+          )}
           {chartB && <ChartSection block={chartB} colSpan="lg:col-span-5" />}
         </div>
       )}
