@@ -1,0 +1,82 @@
+{
+  "id": "tahsilat",
+  "title": "Tahsilat Radar",
+  "description": "Distribütör başına fatura kesimi ile saha tahsilat dengesi. Tahsilat hızı düşmüş veya açık bakiyesi büyüyen distribütörleri öne çıkarır.",
+  "tagline": "Vadesi geçen ciro ölü cirodur — kim topluyor, kim toplamıyor?",
+  "defaultParams": {
+    "days": 30,
+    "topN": 10,
+    "recent": 7,
+    "baseline": 30,
+    "minDelta": 15
+  },
+  "briefPrompt": "Sen bir distribütör finans yöneticisi asistanısın. Sana son dönemde fatura, tahsilat ve açık bakiye verisi sunulacak. 2-3 cümlelik Türkçe iş özeti yaz: hangi distribütörlerde açık bakiye en büyük, hangilerinde tahsilat oranı düşük, dikkat çeken kayıp varsa adıyla zikret. İçi boş ifade ve teknik jargon yok.",
+  "blocks": [
+    {
+      "id": "anomalies",
+      "title": "Bugün dikkat çekenler",
+      "description": "Son @recent günde tahsilat oranı (tahsilat / fatura) önceki @baseline günün ortalamasından sert sapan distribütörler.",
+      "display": "anomalies",
+      "anomalySpec": {
+        "labelColumn": "ad",
+        "currentColumn": "guncel_oran",
+        "baselineColumn": "beklenen_oran",
+        "deltaPctColumn": "degisim_pct",
+        "unit": "%",
+        "minAbsDeltaPct": 15,
+        "topN": 5,
+        "thresholds": { "warn": 15, "bad": 30 }
+      },
+      "sql": "WITH son_fatura AS (\n  SELECT f.LNGDISTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS fatura\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n),\nson_tahsilat AS (\n  SELECT m.LNGDISTKOD, ISNULL(SUM(t.DBLTUTAR), 0) AS tahsilat\n  FROM dbo.TBLPMPZIYARETDETAY  AS pd\n  INNER JOIN dbo.TBLPMPZIYARETBASLIK AS pz ON pz.LNGKOD = pd.LNGBASLIKKOD\n  INNER JOIN dbo.TBLMSDTAHSILAT AS t ON t.LNGKOD = pd.LNGBELGEKOD\n  INNER JOIN dbo.TBLMUSTERI    AS m ON m.LNGKOD = pz.LNGMUSTERIKOD\n  WHERE pz.TRHGIRIS >= DATEADD(day, -@recent, GETDATE())\n    AND pd.BYTISLEMKODU IN (100, 104, 108, 112)\n  GROUP BY m.LNGDISTKOD\n),\nonceki_fatura AS (\n  SELECT f.LNGDISTKOD,\n         ISNULL(SUM(f.DBLNETTUTAR), 0) * (CAST(@recent AS FLOAT) / @baseline) AS fatura\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -(@recent + @baseline), GETDATE())\n    AND f.TRHISLEMTARIHI <  DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n),\nonceki_tahsilat AS (\n  SELECT m.LNGDISTKOD,\n         ISNULL(SUM(t.DBLTUTAR), 0) * (CAST(@recent AS FLOAT) / @baseline) AS tahsilat\n  FROM dbo.TBLPMPZIYARETDETAY  AS pd\n  INNER JOIN dbo.TBLPMPZIYARETBASLIK AS pz ON pz.LNGKOD = pd.LNGBASLIKKOD\n  INNER JOIN dbo.TBLMSDTAHSILAT AS t ON t.LNGKOD = pd.LNGBELGEKOD\n  INNER JOIN dbo.TBLMUSTERI    AS m ON m.LNGKOD = pz.LNGMUSTERIKOD\n  WHERE pz.TRHGIRIS >= DATEADD(day, -(@recent + @baseline), GETDATE())\n    AND pz.TRHGIRIS <  DATEADD(day, -@recent, GETDATE())\n    AND pd.BYTISLEMKODU IN (100, 104, 108, 112)\n  GROUP BY m.LNGDISTKOD\n)\nSELECT TOP 20\n  d.TXTAD AS ad,\n  CASE WHEN ISNULL(sf.fatura, 0) > 0\n       THEN (ISNULL(st.tahsilat, 0) / sf.fatura) * 100\n       ELSE NULL END AS guncel_oran,\n  CASE WHEN ISNULL(of.fatura, 0) > 0\n       THEN (ISNULL(ot.tahsilat, 0) / of.fatura) * 100\n       ELSE NULL END AS beklenen_oran,\n  CASE\n    WHEN ISNULL(of.fatura, 0) > 0 AND ISNULL(sf.fatura, 0) > 0\n      THEN (\n        ((ISNULL(st.tahsilat, 0) / sf.fatura)\n         - (ISNULL(ot.tahsilat, 0) / of.fatura))\n        / NULLIF((ISNULL(ot.tahsilat, 0) / of.fatura), 0)\n      ) * 100\n    ELSE NULL\n  END AS degisim_pct\nFROM dbo.TBLDIST AS d\nLEFT JOIN son_fatura     AS sf ON sf.LNGDISTKOD = d.LNGKOD\nLEFT JOIN son_tahsilat   AS st ON st.LNGDISTKOD = d.LNGKOD\nLEFT JOIN onceki_fatura  AS of ON of.LNGDISTKOD = d.LNGKOD\nLEFT JOIN onceki_tahsilat AS ot ON ot.LNGDISTKOD = d.LNGKOD\nWHERE d.BYTDURUM = 0\n  AND ISNULL(of.fatura, 0) > 0 AND ISNULL(sf.fatura, 0) > 0\nORDER BY ABS(\n  ((ISNULL(st.tahsilat, 0) / NULLIF(sf.fatura, 0))\n   - (ISNULL(ot.tahsilat, 0) / NULLIF(of.fatura, 0)))\n) DESC"
+    },
+    {
+      "id": "kpis",
+      "title": "Genel KPI'lar",
+      "display": "kpi-row",
+      "sql": "SELECT\n  ISNULL(toplam_fatura, 0) AS toplam_fatura,\n  ISNULL(toplam_tahsilat, 0) AS toplam_tahsilat,\n  CASE WHEN ISNULL(toplam_fatura, 0) > 0\n       THEN (ISNULL(toplam_tahsilat, 0) / toplam_fatura) * 100\n       ELSE 0 END AS tahsilat_orani\nFROM (\n  SELECT\n    (SELECT ISNULL(SUM(f.DBLNETTUTAR), 0)\n     FROM dbo.TBLMSDFATURA f\n     WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n       AND f.BYTTUR = 0 AND f.BYTDURUM = 0) AS toplam_fatura,\n    (SELECT ISNULL(SUM(t.DBLTUTAR), 0)\n     FROM dbo.TBLPMPZIYARETDETAY pd\n     INNER JOIN dbo.TBLPMPZIYARETBASLIK pz ON pz.LNGKOD = pd.LNGBASLIKKOD\n     INNER JOIN dbo.TBLMSDTAHSILAT t ON t.LNGKOD = pd.LNGBELGEKOD\n     WHERE pz.TRHGIRIS >= DATEADD(day, -@days, GETDATE())\n       AND pd.BYTISLEMKODU IN (100, 104, 108, 112)) AS toplam_tahsilat\n) x",
+      "kpiMapping": [
+        {
+          "id": "toplam_fatura",
+          "label": "Toplam Fatura",
+          "valueColumn": "toplam_fatura",
+          "unit": "₺",
+          "tone": { "good": 1000000, "warn": 100000, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "toplam_tahsilat",
+          "label": "Toplam Tahsilat",
+          "valueColumn": "toplam_tahsilat",
+          "unit": "₺",
+          "tone": { "good": 1000000, "warn": 100000, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "tahsilat_orani",
+          "label": "Tahsilat Oranı",
+          "valueColumn": "tahsilat_orani",
+          "unit": "%",
+          "tone": { "good": 80, "warn": 50, "bad": 30, "direction": "asc" }
+        }
+      ]
+    },
+    {
+      "id": "open_balance",
+      "title": "En büyük açık bakiye (fatura - tahsilat)",
+      "description": "Son @days günde kesilen fatura ile aynı dönemde toplanan tahsilat arasındaki fark. Saha tahsilat (nakit/çek/senet/kk) bazında.",
+      "display": "chart",
+      "chart": {
+        "kind": "bar",
+        "xKey": "ad",
+        "yKey": "acik",
+        "orientation": "horizontal"
+      },
+      "sql": "WITH faturalar AS (\n  SELECT f.LNGDISTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS fatura\n  FROM dbo.TBLMSDFATURA f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n),\ntahsilatlar AS (\n  SELECT m.LNGDISTKOD, ISNULL(SUM(t.DBLTUTAR), 0) AS tahsilat\n  FROM dbo.TBLPMPZIYARETDETAY pd\n  INNER JOIN dbo.TBLPMPZIYARETBASLIK pz ON pz.LNGKOD = pd.LNGBASLIKKOD\n  INNER JOIN dbo.TBLMSDTAHSILAT t ON t.LNGKOD = pd.LNGBELGEKOD\n  INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = pz.LNGMUSTERIKOD\n  WHERE pz.TRHGIRIS >= DATEADD(day, -@days, GETDATE())\n    AND pd.BYTISLEMKODU IN (100, 104, 108, 112)\n  GROUP BY m.LNGDISTKOD\n)\nSELECT TOP (@topN)\n  d.TXTAD AS ad,\n  ISNULL(f.fatura, 0) AS fatura,\n  ISNULL(t.tahsilat, 0) AS tahsilat,\n  ISNULL(f.fatura, 0) - ISNULL(t.tahsilat, 0) AS acik\nFROM dbo.TBLDIST d\nLEFT JOIN faturalar f ON f.LNGDISTKOD = d.LNGKOD\nLEFT JOIN tahsilatlar t ON t.LNGDISTKOD = d.LNGKOD\nWHERE d.BYTDURUM = 0\n  AND (ISNULL(f.fatura, 0) - ISNULL(t.tahsilat, 0)) > 0\nORDER BY acik DESC"
+    },
+    {
+      "id": "tahsilat_table",
+      "title": "Distribütör başına özet",
+      "description": "Son @days günde fatura, saha tahsilatı ve tahsilat oranı. Oranı düşük olanlar yukarıda.",
+      "display": "table",
+      "sql": "WITH faturalar AS (\n  SELECT f.LNGDISTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS fatura\n  FROM dbo.TBLMSDFATURA f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n  GROUP BY f.LNGDISTKOD\n),\ntahsilatlar AS (\n  SELECT m.LNGDISTKOD, ISNULL(SUM(t.DBLTUTAR), 0) AS tahsilat\n  FROM dbo.TBLPMPZIYARETDETAY pd\n  INNER JOIN dbo.TBLPMPZIYARETBASLIK pz ON pz.LNGKOD = pd.LNGBASLIKKOD\n  INNER JOIN dbo.TBLMSDTAHSILAT t ON t.LNGKOD = pd.LNGBELGEKOD\n  INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = pz.LNGMUSTERIKOD\n  WHERE pz.TRHGIRIS >= DATEADD(day, -@days, GETDATE())\n    AND pd.BYTISLEMKODU IN (100, 104, 108, 112)\n  GROUP BY m.LNGDISTKOD\n)\nSELECT\n  d.TXTAD AS distributor,\n  ISNULL(f.fatura, 0) AS fatura_tutari,\n  ISNULL(t.tahsilat, 0) AS tahsilat_tutari,\n  ISNULL(f.fatura, 0) - ISNULL(t.tahsilat, 0) AS acik_bakiye,\n  CASE WHEN ISNULL(f.fatura, 0) > 0\n       THEN CAST((ISNULL(t.tahsilat, 0) / f.fatura) * 100 AS DECIMAL(10,1))\n       ELSE NULL END AS tahsilat_yuzdesi\nFROM dbo.TBLDIST d\nLEFT JOIN faturalar  f ON f.LNGDISTKOD = d.LNGKOD\nLEFT JOIN tahsilatlar t ON t.LNGDISTKOD = d.LNGKOD\nWHERE d.BYTDURUM = 0\n  AND ISNULL(f.fatura, 0) > 0\nORDER BY tahsilat_yuzdesi ASC"
+    }
+  ]
+}

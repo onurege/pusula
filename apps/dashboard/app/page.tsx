@@ -7,6 +7,8 @@ export const dynamic = "force-dynamic";
 
 const RADAR_GRADIENTS: Record<string, string> = {
   sales: "from-accent/20 via-accent/5 to-transparent",
+  tahsilat: "from-warn/20 via-warn/5 to-transparent",
+  temsilci: "from-good/20 via-good/5 to-transparent",
   stock: "from-good/20 via-good/5 to-transparent",
   finance: "from-bad/20 via-bad/5 to-transparent",
   executive: "from-fg/10 via-fg/3 to-transparent",

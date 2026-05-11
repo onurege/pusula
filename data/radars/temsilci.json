@@ -1,0 +1,80 @@
+{
+  "id": "temsilci",
+  "title": "Temsilci Performans",
+  "description": "Satış temsilcisi başına ciro, fatura sayısı ve tahsilat. Son 7 günü önceki dönem ortalamasıyla kıyaslar; hedefin altında kalan temsilcileri öne çıkarır.",
+  "tagline": "Bugün hangi temsilci geride? Saha yöneticisi için tek-bakışta performans.",
+  "defaultParams": {
+    "days": 30,
+    "topN": 10,
+    "recent": 7,
+    "baseline": 30,
+    "minDelta": 15
+  },
+  "briefPrompt": "Sen saha satış operasyonu yöneticisi asistanısın. Sana son dönem temsilci performans verisi sunulacak. 2-3 cümlelik Türkçe yönetici özeti yaz: en yüksek performans gösteren temsilciyi adıyla, geride kalanları somut adlarıyla zikret. İçi boş ifade yok; sayı + ad zorunlu.",
+  "blocks": [
+    {
+      "id": "anomalies",
+      "title": "Bugün dikkat çekenler",
+      "description": "Son @recent günün ciro performansı, önceki @baseline günün haftalık ortalamasıyla kıyaslanarak en sert sapan temsilciler.",
+      "display": "anomalies",
+      "anomalySpec": {
+        "labelColumn": "ad",
+        "currentColumn": "guncel",
+        "baselineColumn": "beklenen",
+        "deltaPctColumn": "degisim_pct",
+        "unit": "₺",
+        "minAbsDeltaPct": 15,
+        "topN": 5,
+        "thresholds": { "warn": 15, "bad": 30 }
+      },
+      "sql": "WITH son AS (\n  SELECT f.LNGSTKOD, ISNULL(SUM(f.DBLNETTUTAR), 0) AS guncel\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n    AND f.LNGSTKOD IS NOT NULL\n  GROUP BY f.LNGSTKOD\n),\nonceki AS (\n  SELECT f.LNGSTKOD,\n         ISNULL(SUM(f.DBLNETTUTAR), 0) * (CAST(@recent AS FLOAT) / @baseline) AS beklenen\n  FROM dbo.TBLMSDFATURA AS f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -(@recent + @baseline), GETDATE())\n    AND f.TRHISLEMTARIHI <  DATEADD(day, -@recent, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n    AND f.LNGSTKOD IS NOT NULL\n  GROUP BY f.LNGSTKOD\n)\nSELECT TOP 20\n  st.TXTSTAD AS ad,\n  ISNULL(s.guncel, 0)   AS guncel,\n  ISNULL(o.beklenen, 0) AS beklenen,\n  CASE\n    WHEN ISNULL(o.beklenen, 0) > 0\n      THEN ((ISNULL(s.guncel, 0) - o.beklenen) / o.beklenen) * 100\n    ELSE NULL\n  END AS degisim_pct\nFROM dbo.TBLSATISTEMSILCISI AS st\nLEFT JOIN son    AS s ON s.LNGSTKOD = st.LNGSTKOD\nLEFT JOIN onceki AS o ON o.LNGSTKOD = st.LNGSTKOD\nWHERE ISNULL(o.beklenen, 0) > 0\nORDER BY ABS(((ISNULL(s.guncel, 0) - o.beklenen) / o.beklenen) * 100) DESC"
+    },
+    {
+      "id": "kpis",
+      "title": "Genel KPI'lar",
+      "display": "kpi-row",
+      "sql": "SELECT\n  (SELECT ISNULL(SUM(f.DBLNETTUTAR), 0)\n   FROM dbo.TBLMSDFATURA f\n   WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n     AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n     AND f.LNGSTKOD IS NOT NULL) AS toplam_ciro,\n  (SELECT COUNT(DISTINCT f.LNGSTKOD)\n   FROM dbo.TBLMSDFATURA f\n   WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n     AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n     AND f.LNGSTKOD IS NOT NULL) AS aktif_temsilci,\n  (SELECT COUNT(*)\n   FROM dbo.TBLMSDFATURA f\n   WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n     AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n     AND f.LNGSTKOD IS NOT NULL) AS toplam_fatura",
+      "kpiMapping": [
+        {
+          "id": "toplam_ciro",
+          "label": "Toplam Ciro",
+          "valueColumn": "toplam_ciro",
+          "unit": "₺",
+          "tone": { "good": 1000000, "warn": 100000, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "aktif_temsilci",
+          "label": "Aktif Temsilci",
+          "valueColumn": "aktif_temsilci",
+          "tone": { "good": 20, "warn": 5, "bad": 0, "direction": "asc" }
+        },
+        {
+          "id": "toplam_fatura",
+          "label": "Toplam Fatura",
+          "valueColumn": "toplam_fatura",
+          "tone": { "good": 500, "warn": 50, "bad": 0, "direction": "asc" }
+        }
+      ]
+    },
+    {
+      "id": "top_reps",
+      "title": "En çok ciro yapan temsilciler",
+      "description": "Son @days günde toplam ciro en yüksek ilk @topN temsilci.",
+      "display": "chart",
+      "chart": {
+        "kind": "bar",
+        "xKey": "ad",
+        "yKey": "ciro",
+        "orientation": "horizontal"
+      },
+      "sql": "SELECT TOP (@topN)\n  st.TXTSTAD AS ad,\n  ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n  COUNT(*) AS fatura_sayisi\nFROM dbo.TBLMSDFATURA AS f\nINNER JOIN dbo.TBLSATISTEMSILCISI AS st ON st.LNGSTKOD = f.LNGSTKOD\nWHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  AND f.BYTTUR = 0 AND f.BYTDURUM = 0\nGROUP BY st.TXTSTAD\nORDER BY ciro DESC"
+    },
+    {
+      "id": "temsilci_table",
+      "title": "Tüm temsilci özeti",
+      "description": "Son @days günde ciro, fatura sayısı ve tahsilat. Ciroya göre azalan sırada.",
+      "display": "table",
+      "sql": "WITH faturalar AS (\n  SELECT f.LNGSTKOD,\n         ISNULL(SUM(f.DBLNETTUTAR), 0) AS ciro,\n         COUNT(*) AS fatura_sayisi\n  FROM dbo.TBLMSDFATURA f\n  WHERE f.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n    AND f.BYTTUR = 0 AND f.BYTDURUM = 0\n  GROUP BY f.LNGSTKOD\n),\ntahsilatlar AS (\n  SELECT t.LNGSTKOD, ISNULL(SUM(t.DBLTUTAR), 0) AS tahsilat\n  FROM dbo.TBLMSDTAHSILAT t\n  WHERE t.TRHISLEMTARIHI >= DATEADD(day, -@days, GETDATE())\n  GROUP BY t.LNGSTKOD\n)\nSELECT\n  st.TXTSTAD AS temsilci,\n  d.TXTAD    AS distributor,\n  ISNULL(f.ciro, 0) AS ciro,\n  ISNULL(f.fatura_sayisi, 0) AS fatura_sayisi,\n  ISNULL(t.tahsilat, 0) AS tahsilat\nFROM dbo.TBLSATISTEMSILCISI AS st\nLEFT JOIN dbo.TBLDIST d ON d.LNGKOD = st.LNGDISTKOD\nLEFT JOIN faturalar  f ON f.LNGSTKOD = st.LNGSTKOD\nLEFT JOIN tahsilatlar t ON t.LNGSTKOD = st.LNGSTKOD\nWHERE ISNULL(f.ciro, 0) > 0 OR ISNULL(t.tahsilat, 0) > 0\nORDER BY ciro DESC"
+    }
+  ]
+}
