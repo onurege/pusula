@@ -86,7 +86,7 @@ export function RadarChart({ spec, rows }: { spec: ChartSpec; rows: Row[] }) {
           <BarChart
             data={data}
             layout={horizontal ? "vertical" : "horizontal"}
-            margin={{ top: 8, right: 12, bottom: 8, left: horizontal ? 80 : 0 }}
+            margin={{ top: 8, right: 12, bottom: 8, left: 0 }}
           >
             <CartesianGrid stroke={GRID_STROKE} strokeDasharray="3 3" />
             {horizontal ? (
