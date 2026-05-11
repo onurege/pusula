@@ -435,29 +435,36 @@ export async function runForesight(
 
   const system = [
     "Sen Univera distribütör satış operasyonu için çalışan bir saha asistanısın.",
-    "Sana bir müşteri için 4 farklı sinyal kanalı verilecek (takvim, geçen yıl, düşmüş kategoriler, segment).",
+    "Sana bir müşteri için 4 sinyal kanalı verildi (takvim, geçen yıl, düşmüş kategoriler, segment).",
+    "Sahaya çıkacak satış temsilcisi okuyacak; senin işin OPS dilinde aksiyon yazmak, jenerik öneri DEĞİL.",
     "",
-    "Görev: bu sinyallerden nedensel bir foresight oluştur ve sahaya çıkacak satış temsilcisine 2-3 SOMUT aksiyon öner.",
+    "BRIEF (2-3 cümle):",
+    "- Bu hafta için bir NEDEN-SONUÇ hikâyesi kur.",
+    "- Sinyaldeki ÜRÜN GRUBU adlarını birebir geçir (örn. 'BİSKÜVİ', 'YAĞ', 'ŞARKÜTERİ').",
+    "  KENDİN KATEGORİ İCAT ETME ('Temel Gıda', 'Atıştırmalıklar' yasak).",
+    "- Toplam ciro varsa onu da yaz ama en az 1 ürün grubu adı + tutarı zikret.",
     "",
-    "ZORUNLU:",
-    "- Türkçe yaz, sade iş dilinde.",
-    "- Sinyallerdeki tüm adları (kategori, ürün grubu, etkinlik, gün) BİREBİR kullan.",
-    "- Sayıları ve tarihleri olduğu gibi aktar.",
-    "- Aksiyonları madde madde ver (en fazla 3 madde). Her madde: ne yapılmalı + neden (hangi sinyalden geldi).",
-    "- Sinyaller çelişiyorsa veya zayıfsa o şekilde söyle ('zayıf sinyal' / 'sadece segment kıyasından geliyor').",
+    "AKSİYONLAR (en az 2, en fazla 3):",
+    "- HER aksiyon spesifik bir SİNYALE bağlı olacak ve sinyaldeki adı/sayıyı içerecek.",
+    "- AKTİF FİİL kullan: 'yükle', 'ziyaret et', 'hatırlat', 'sun', 'göster', 'teklif et'.",
+    "  YASAK pasif fiiller: 'yapılması', 'edilmesi', 'geliştirilmesi', 'sağlanması', 'değerlendirilmesi'.",
+    "- HER aksiyonun sonuna parantez içinde kaynak: '(geçen yıl bu hafta X aldı)', '(15 May maaş günü)', '(düşmüş kategori: Y)', '(segmentin %N'i aldı)'.",
+    "- YASAK genel ifadeler: 'stok kontrolü yap', 'görünürlüğü artır', 'kampanya geliştir', 'strateji oluştur', 'potansiyeli değerlendir'.",
+    "- En az bir aksiyonda bir SAYI olsun (kg, adet, ₺, kasa, gün).",
     "",
-    "YASAK:",
-    "- 'Önemlidir', 'değerlendirilmiştir', 'genel olarak' gibi içi boş ifadeler.",
-    "- Sinyal yokken aksiyon uydurma — boşsa boş bırak.",
-    "- SQL/teknik jargon ('tablo', 'sorgu', 'segment SQL').",
+    "ÖRNEK iyi aksiyon:",
+    "- Cuma maaş günü öncesi BİSKÜVİ kategorisinde 4 koli stok yükle — geçen yıl aynı hafta 5.200 ₺ ciro buradan gelmişti (geçen yıl bu hafta BİSKÜVİ)",
+    "ÖRNEK kötü aksiyon (YAZMA):",
+    "- Maaş günü öncesinde Temel Gıda ve Atıştırmalıklarda stok kontrolü yapılması (Nedeni: harcama potansiyelinin artmasıdır)",
+    "",
+    "Hiç güçlü sinyal yoksa AKSİYONLAR bölümünü tamamen boş bırak — uydurma.",
     "",
     "Çıktı formatı (KESİN UYULACAK):",
     "BRIEF:",
-    "<2-3 cümle, müşteri için nedensel hikâye>",
-    "AKSIYONLAR:",
+    "<2-3 cümle>",
+    "AKSİYONLAR:",
     "- <aksiyon 1>",
     "- <aksiyon 2>",
-    "- <aksiyon 3 (opsiyonel)>",
   ].join("\n");
 
   let llmOut = "";
@@ -468,19 +475,47 @@ export async function runForesight(
     llmOut = "";
   }
 
-  const { brief, actions } = parseForesightOutput(llmOut);
+  const { brief, actions: rawActions } = parseForesightOutput(llmOut);
+
+  // Quality filter: drop actions that are (a) passive-voice ops fluff or
+  // (b) reference categories not present in any signal. The signals are the
+  // truth set — if an action names a kategori the data doesn't support, it's
+  // hallucinated and should not reach the rep.
+  const signalNames = new Set<string>();
+  for (const e of events) {
+    signalNames.add(e.name.toLocaleLowerCase("tr"));
+    for (const h of e.category_hints ?? []) signalNames.add(h.toLocaleLowerCase("tr"));
+  }
+  for (const y of yoy) if (y.urunGrubu) signalNames.add(y.urunGrubu.toLocaleLowerCase("tr"));
+  for (const d of dropped) signalNames.add(d.urunGrubu.toLocaleLowerCase("tr"));
+  for (const c of cohort) signalNames.add(c.urunGrubu.toLocaleLowerCase("tr"));
+
+  const passiveFluffRx =
+    /\b(yapılması|edilmesi|geliştirilmesi|sağlanması|değerlendirilmesi|olarak değerlend|göz önünde bulund|potansiyeli)/i;
+
+  const actions = rawActions.filter((a) => {
+    if (passiveFluffRx.test(a)) return false;
+    const lower = a.toLocaleLowerCase("tr");
+    // Must reference at least one signal-derived name (kategori, etkinlik, vs.)
+    const refsSignal = [...signalNames].some((n) => n.length > 2 && lower.includes(n));
+    return refsSignal;
+  });
+
   return { ...signals, brief, actions };
 }
 
 function parseForesightOutput(raw: string): { brief: string; actions: string[] } {
   if (!raw) return { brief: "", actions: [] };
-  const briefMatch = raw.match(/BRIEF:\s*([\s\S]*?)(?:AKSIYONLAR:|$)/i);
-  const actionsMatch = raw.match(/AKSIYONLAR:\s*([\s\S]*)$/i);
+  // Match either AKSIYONLAR or AKSİYONLAR (model writes both ways depending on
+  // whether dotted-I makes it through the tokenizer cleanly).
+  const aksRx = /(AKS[İI]YONLAR):/i;
+  const briefMatch = raw.match(new RegExp(`BRIEF:\\s*([\\s\\S]*?)(?:${aksRx.source}|$)`, "i"));
+  const actionsMatch = raw.match(/AKS[İI]YONLAR:\s*([\s\S]*)$/i);
   const brief = (briefMatch?.[1] ?? "").trim();
   const actionsBlock = (actionsMatch?.[1] ?? "").trim();
   const actions = actionsBlock
     .split("\n")
-    .map((l) => l.replace(/^[-*•\s]+/, "").trim())
+    .map((l) => l.replace(/^[-*•\s\d.)]+/, "").trim())
     .filter((l) => l.length > 2);
   return { brief: brief || raw.trim(), actions };
 }
