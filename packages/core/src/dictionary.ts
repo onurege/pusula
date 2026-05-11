@@ -95,6 +95,15 @@ export const KEYWORD_MAP: Record<string, string> = {
   ONCELIK: "öncelik",
   HATIR: "hatır",
   HATA: "hata",
+  // High-value retrieval keys we missed in the seed dictionary. Without
+  // these, queries like "fatura detayları" never surface TBLMSDBELGEDETAY,
+  // and "ürün marka kırılımı" can't find brand-related tables.
+  DETAY: "detay/kalem",
+  KALEM: "kalem",
+  MARKA: "marka",
+  KATEGORI: "kategori",
+  CIRO: "ciro",
+  HASILAT: "hasılat",
 };
 
 export function extractKeywords(name: string): string[] {

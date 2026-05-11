@@ -670,15 +670,30 @@ function formatVal(v: unknown): string {
  * the regex matches occurrences anywhere in the string.
  */
 function extractTableRefs(sql: string): string[] {
-  const out: string[] = [];
   const stripped = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
+
+  // CTE names declared in WITH ... AS (...) — must not be flagged as tables.
+  // Pattern: any `<ident> AS (` we see; the trailing paren-open is what
+  // distinguishes a CTE name from a column alias (`SELECT x AS y` has no paren).
+  const cteNames = new Set<string>();
+  const cteRe = /\b(\w+)\s+AS\s*\(/gi;
+  let cm: RegExpExecArray | null;
+  while ((cm = cteRe.exec(stripped)) !== null) {
+    if (cm[1]) cteNames.add(cm[1].toUpperCase());
+  }
+
+  const out = new Set<string>();
   const re = /\b(?:FROM|JOIN)\s+\[?(\w+)\]?(?:\s*\.\s*\[?(\w+)\]?)?/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(stripped)) !== null) {
     const a = m[1];
     const b = m[2];
-    if (b) out.push(`${a}.${b}`);
-    else if (a) out.push(`dbo.${a}`);
+    if (b) {
+      // schema.table — keep schema only if it's not "dbo" CTE-shadowing
+      if (!cteNames.has(b.toUpperCase())) out.add(`${a}.${b}`);
+    } else if (a && !cteNames.has(a.toUpperCase())) {
+      out.add(`dbo.${a}`);
+    }
   }
-  return out;
+  return [...out];
 }

@@ -256,7 +256,7 @@ function projectAnomalies(
       // customers" listing and ignore the actual question.
       explainPrompt:
         `Univera ERP'de \"${label}\" adlı distribütörün cirosu son dönem ${formatTrNumber(current)}${spec.unit ? " " + spec.unit : ""}, geçmiş ortalamasına göre beklenen ${formatTrNumber(baseline)}${spec.unit ? " " + spec.unit : ""} olduğu hâlde gerçekleşmesi ${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(1)}%. ` +
-        `Önce TBLDIST tablosunda TXTAD = '${label.replace(/'/g, "''")}' olan distribütörün LNGKOD'unu bul, sonra son 7 gün vs önceki 30 günün haftalık ortalamasını **müşteri grubu, ürün grubu veya marka kırılımında** karşılaştır (TBLMUSTERIGRUP / TBLURUNGRUP / ilgili marka tablosu kullanarak). Düşüş veya artışın hangi 1-2 segmentte yoğunlaştığını bul. ` +
+        `Önce TBLDIST tablosunda TXTAD = '${label.replace(/'/g, "''")}' olan distribütörün LNGKOD'unu bul, sonra son 7 gün vs önceki 30 günün haftalık ortalamasını **müşteri grubu, ürün grubu veya marka kırılımında** karşılaştır. Kullanılabilir tablolar: TBLMSDFATURA, TBLMSDBELGEDETAY, TBLURUN, TBLURUNGRUP, TBLMUSTERI, TBLMUSTERIGRUP. Detay kırılım için TBLMSDBELGEDETAY join et (LNGYIL + LNGFATURAKOD + LNGDISTKOD ile TBLMSDFATURA'ya bağlanır). Düşüş veya artışın hangi 1-2 segmentte yoğunlaştığını bul. ` +
         `Cevabını 2-3 cümlelik Türkçe yönetici diliyle ver: somut segment adlarını ve sayıları yaz (\"X kanalında %Y düşüş\"). Eğer veri segmentlere ayrılamıyorsa açıkça \"segment kırılımına ulaşılamadı\" de.`,
     });
   }
