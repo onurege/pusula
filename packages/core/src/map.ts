@@ -453,10 +453,11 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   ).run(status);
 
   // Underlying MSSQL data may have shifted — invalidate every read-through
-  // cache that reflects it (customer detail, foresight). Radar caches stay
-  // because they have their own per-radar refresh affordance.
+  // cache that reflects it (customer detail, foresight, komuta). Radar caches
+  // stay because they have their own per-radar refresh affordance.
   cachedClear("customer-detail");
   cachedClear("foresight");
+  cachedClear("komuta");
 
   return status;
 }
