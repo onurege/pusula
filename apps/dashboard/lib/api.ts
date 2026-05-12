@@ -392,6 +392,8 @@ export type KomutaUpcomingEvent = {
 export type KomutaSnapshot = {
   generatedAt: string;
   reelTL: boolean;
+  otvNet: boolean;
+  otvAvgRate: number | null;
   kpis: KomutaKpiCard[];
   regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
@@ -405,11 +407,12 @@ export type KomutaSnapshot = {
 };
 
 export async function getKomutaSnapshot(
-  options: { refresh?: boolean; reelTL?: boolean } = {},
+  options: { refresh?: boolean; reelTL?: boolean; otvNet?: boolean } = {},
 ): Promise<KomutaSnapshot> {
   const qp = new URLSearchParams();
   if (options.refresh) qp.set("refresh", "1");
   if (options.reelTL) qp.set("reel", "1");
+  if (options.otvNet) qp.set("otv", "1");
   const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
 }

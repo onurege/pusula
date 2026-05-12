@@ -9,6 +9,7 @@ import {
   yyyymmYearsAgo,
   type InflationData,
 } from "./inflation.js";
+import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -174,6 +175,10 @@ export type KomutaSnapshot = {
   generatedAt: string;
   /** True ise geçmiş değerler bugünün parasına (TÜFE arındırılmış) çevrilmiş. */
   reelTL: boolean;
+  /** True ise tüm ciro değerlerinden ÖTV (özel tüketim vergisi) düşülmüş. */
+  otvNet: boolean;
+  /** ÖTV-net modunda uygulanan ağırlıklı ortalama oran (görsel banner için). */
+  otvAvgRate: number | null;
   kpis: KomutaKpiCard[];
   regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
@@ -987,10 +992,81 @@ async function applyReelTL(
   };
 }
 
+/**
+ * ÖTV-net transformasyonu — tüm ciro değerlerinden vergi düşülür.
+ * Her ürün grubu için tax.ts'teki master üzerinden oran çıkarılır,
+ * (1 - rate) ile çarpılır. KPI'larda ve özet metriklerde matrix top
+ * gruplarından türetilen ağırlıklı ortalama oran kullanılır.
+ *
+ * YoY ratios değişmez (vergi geçmişe de uygulandığı için orantısal eşit).
+ */
+function applyOtvNet(snap: KomutaSnapshot, data: OtvData): KomutaSnapshot {
+  // Ağırlıklı ortalama oran — KPI ciro, regions, monthlyTrend, reps, channels
+  // için kullanılacak (KPI breakdown'ları matrix'in dışına çıkıyor).
+  const totalBu = snap.matrix.reduce((a, r) => a + r.buAy, 0);
+  const avgRate =
+    totalBu > 0
+      ? snap.matrix.reduce((acc, r) => acc + r.buAy * getOtvRate(r.grup, r.tier, data), 0) /
+        totalBu
+      : data.fallback;
+  const avgInv = 1 - avgRate;
+
+  return {
+    ...snap,
+    otvNet: true,
+    otvAvgRate: avgRate,
+    kpis: snap.kpis.map((k) => {
+      // Sadece ciro ve sepet vergi etkilenir. Hacim (adet), top marka payı
+      // (oran), aktif SN (sayı) değişmez.
+      if (k.id === "ciro" || k.id === "sepet") {
+        return { ...k, value: k.value * avgInv };
+      }
+      return k;
+    }),
+    regions: snap.regions.map((r) => ({
+      ...r,
+      ciro: r.ciro * avgInv,
+      ciroPrev: r.ciroPrev * avgInv,
+      // deltaPct unchanged — same factor applied to both ciro and ciroPrev
+    })),
+    monthlyTrend: snap.monthlyTrend.map((m) => ({ ...m, ciro: m.ciro * avgInv })),
+    channels: snap.channels.map((c) => ({ ...c, ciro: c.ciro * avgInv })),
+    reps: snap.reps.map((r) => ({ ...r, ciro: r.ciro * avgInv })),
+    matrix: snap.matrix.map((row) => {
+      const rate = getOtvRate(row.grup, row.tier, data);
+      const inv = 1 - rate;
+      return {
+        ...row,
+        buAy: row.buAy * inv,
+        gecenAy: row.gecenAy * inv,
+        ucAyOnce: row.ucAyOnce * inv,
+        gecenYil: row.gecenYil * inv,
+        ikiYilOnce: row.ikiYilOnce * inv,
+        // yoyPct, trend unchanged (ratio constant)
+      };
+    }),
+    portfolio: snap.portfolio.map((p) => {
+      const rate = getOtvRate(p.grup, p.tier, data);
+      const inv = 1 - rate;
+      return {
+        ...p,
+        bu: p.bu * inv,
+        oneYearAgo: p.oneYearAgo * inv,
+        twoYearsAgo: p.twoYearsAgo * inv,
+        // yoyPct, twoYrPct unchanged
+      };
+    }),
+    // heatmap: cells YoY ratios unchanged
+  };
+}
+
 export async function getKomutaSnapshot(
-  options: { forceRefresh?: boolean; reelTL?: boolean } = {},
+  options: { forceRefresh?: boolean; reelTL?: boolean; otvNet?: boolean } = {},
 ): Promise<KomutaSnapshot> {
-  const cacheKey = options.reelTL ? "reel" : "nominal";
+  const cacheKey = [
+    options.reelTL ? "reel" : "nominal",
+    options.otvNet ? "otv" : "gross",
+  ].join("-");
   const cached = await withCache<KomutaSnapshot>(
     CACHE_DOMAIN,
     cacheKey,
@@ -1036,6 +1112,8 @@ export async function getKomutaSnapshot(
       const partial: Omit<KomutaSnapshot, "brief"> = {
         generatedAt: new Date().toISOString(),
         reelTL: false,
+        otvNet: false,
+        otvAvgRate: null,
         kpis,
         regions,
         channels,
@@ -1047,12 +1125,19 @@ export async function getKomutaSnapshot(
         portfolio,
       };
       const brief = await fetchBrief(partial);
-      const nominal: KomutaSnapshot = { ...partial, brief };
+      let snap: KomutaSnapshot = { ...partial, brief };
+      // Reel TL → ÖTV-net sırası: önce TÜFE arındır, sonra vergi düş.
+      // İkisi de multiplicative olduğu için ters sıra da matematik olarak
+      // aynı sonucu verir; ama sıralama log/banner için tutarlı.
       if (options.reelTL) {
         const inflation = await loadInflation();
-        return applyReelTL(nominal, inflation);
+        snap = await applyReelTL(snap, inflation);
       }
-      return nominal;
+      if (options.otvNet) {
+        const otv = await loadOtv();
+        snap = applyOtvNet(snap, otv);
+      }
+      return snap;
     },
     { forceRefresh: options.forceRefresh },
   );
@@ -1061,7 +1146,11 @@ export async function getKomutaSnapshot(
   // dene — bu sefer bypass ile.
   if (isEmptySnapshot(cached.value) && !options.forceRefresh) {
     console.warn("[komuta] cached snapshot is empty, retrying with refresh");
-    return getKomutaSnapshot({ forceRefresh: true, reelTL: options.reelTL });
+    return getKomutaSnapshot({
+      forceRefresh: true,
+      reelTL: options.reelTL,
+      otvNet: options.otvNet,
+    });
   }
   return cached.value;
 }

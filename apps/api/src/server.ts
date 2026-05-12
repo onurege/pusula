@@ -410,7 +410,8 @@ app.get("/api/komuta", async (c) => {
   try {
     const forceRefresh = c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
-    const snap = await getKomutaSnapshot({ forceRefresh, reelTL });
+    const otvNet = c.req.query("otv") === "1";
+    const snap = await getKomutaSnapshot({ forceRefresh, reelTL, otvNet });
     return c.json(snap);
   } catch (err) {
     console.error("[/api/komuta] failed:", err);

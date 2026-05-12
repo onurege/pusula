@@ -21,16 +21,17 @@ export const metadata = {
 };
 
 type Props = {
-  searchParams: Promise<{ refresh?: string; reel?: string }>;
+  searchParams: Promise<{ refresh?: string; reel?: string; otv?: string }>;
 };
 
 export default async function KomutaPage({ searchParams }: Props) {
   const sp = await searchParams;
   const forceRefresh = sp.refresh === "1";
   const reelTL = sp.reel === "1";
+  const otvNet = sp.otv === "1";
   let snap: KomutaSnapshot;
   try {
-    snap = await getKomutaSnapshot({ refresh: forceRefresh, reelTL });
+    snap = await getKomutaSnapshot({ refresh: forceRefresh, reelTL, otvNet });
   } catch {
     notFound();
   }
@@ -41,9 +42,10 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} />
-        <FilterBar reelTL={snap.reelTL} />
+        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} otvNet={snap.otvNet} />
+        <FilterBar reelTL={snap.reelTL} otvNet={snap.otvNet} />
         {snap.reelTL && <ReelTlBanner />}
+        {snap.otvNet && <OtvNetBanner avgRate={snap.otvAvgRate} reelActive={snap.reelTL} />}
         <KpiStrip kpis={snap.kpis} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
@@ -85,8 +87,25 @@ export default async function KomutaPage({ searchParams }: Props) {
 // Components
 // ============================================================================
 
-function Header({ generatedAt, reelTL }: { generatedAt: string; reelTL: boolean }) {
+function Header({
+  generatedAt,
+  reelTL,
+  otvNet,
+}: {
+  generatedAt: string;
+  reelTL: boolean;
+  otvNet: boolean;
+}) {
   const rel = formatRelative(generatedAt);
+  const modeLabel = [
+    reelTL ? "Reel TL" : null,
+    otvNet ? "ÖTV-net" : null,
+  ].filter(Boolean).join(" + ") || "Nominal TL · Brüt";
+  const refreshHref = "/komuta?" + new URLSearchParams({
+    refresh: "1",
+    ...(reelTL ? { reel: "1" } : {}),
+    ...(otvNet ? { otv: "1" } : {}),
+  }).toString();
   return (
     <div className="header">
       <div className="brand">
@@ -100,20 +119,14 @@ function Header({ generatedAt, reelTL }: { generatedAt: string; reelTL: boolean 
         <strong>Tüm Distribütörler</strong>
         {"  ›  "}Son 30 Gün
         {"  ›  "}
-        <span style={{ color: "#d4a857" }}>
-          {reelTL ? "Reel TL · TÜFE arındırılmış" : "Nominal TL"}
-        </span>
+        <span style={{ color: "#d4a857" }}>{modeLabel}</span>
       </div>
       <div className="header-right">
         <span className="live-indicator">
           <span className="live-dot" />
           Canlı veri · {rel}
         </span>
-        <Link
-          href={reelTL ? "/komuta?refresh=1&reel=1" : "/komuta?refresh=1"}
-          className="refresh-btn"
-          prefetch={false}
-        >
+        <Link href={refreshHref} className="refresh-btn" prefetch={false}>
           ↻ Yenile
         </Link>
         <Link href="/" className="back-link">← Pusula</Link>
@@ -122,7 +135,17 @@ function Header({ generatedAt, reelTL }: { generatedAt: string; reelTL: boolean 
   );
 }
 
-function FilterBar({ reelTL }: { reelTL: boolean }) {
+function FilterBar({ reelTL, otvNet }: { reelTL: boolean; otvNet: boolean }) {
+  // Toggle'lar birbirine kombine olabilir — URL'i mevcut state üstüne ekle/çıkar
+  const reelHref = "/komuta?" + new URLSearchParams({
+    ...(reelTL ? {} : { reel: "1" }), // kapalıysa aç
+    ...(otvNet ? { otv: "1" } : {}),
+  }).toString().replace(/^$/, "");
+  const otvHref = "/komuta?" + new URLSearchParams({
+    ...(reelTL ? { reel: "1" } : {}),
+    ...(otvNet ? {} : { otv: "1" }), // kapalıysa aç
+  }).toString().replace(/^$/, "");
+
   return (
     <div className="filter-bar">
       <span className="filter-chip active">Bölge: Tümü <span className="caret">▼</span></span>
@@ -133,19 +156,21 @@ function FilterBar({ reelTL }: { reelTL: boolean }) {
       <span className="filter-spacer" />
       <div className="toggle-group">
         <Link
-          href={reelTL ? "/komuta" : "/komuta?reel=1"}
+          href={reelHref === "/komuta?" ? "/komuta" : reelHref}
           className={`toggle toggle-link${reelTL ? " on" : ""}`}
           title="Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir"
           prefetch={false}
         >
           <span className="switch" /> Reel TL (TÜFE)
         </Link>
-        <span
-          className="toggle"
-          title="Ürün başına ÖTV oranı master tablosu gerekir — v2'de eklenecek"
+        <Link
+          href={otvHref === "/komuta?" ? "/komuta" : otvHref}
+          className={`toggle toggle-link${otvNet ? " on" : ""}`}
+          title="Tüm ciro değerlerinden ÖTV (Özel Tüketim Vergisi) düşülmüş net görünüm"
+          prefetch={false}
         >
           <span className="switch" /> ÖTV-net görünüm
-        </span>
+        </Link>
         <span
           className="toggle on"
           title="Takvim hizalı kıyas — calendar/tr-2026.json üzerinden"
@@ -219,6 +244,36 @@ function ReelTlBanner() {
       </div>
       <Link href="/komuta" className="reel-banner-cta" prefetch={false}>
         Nominal TL'ye dön →
+      </Link>
+    </div>
+  );
+}
+
+function OtvNetBanner({
+  avgRate,
+  reelActive,
+}: {
+  avgRate: number | null;
+  reelActive: boolean;
+}) {
+  const ratePct = avgRate != null ? (avgRate * 100).toFixed(0) : "?";
+  return (
+    <div className="otv-banner">
+      <div className="otv-banner-icon">🧾</div>
+      <div className="otv-banner-text">
+        <strong>ÖTV-net görünümü aktif</strong> · Tüm ciro değerlerinden ÖTV
+        (Özel Tüketim Vergisi) düşüldü.{" "}
+        <span style={{ color: "#8b949e" }}>
+          Ürün grubu bazında oran uygulandı; KPI ve özet metrikler için ağırlıklı
+          ortalama <strong style={{ color: "#56d364" }}>%{ratePct}</strong>.
+        </span>
+      </div>
+      <Link
+        href={reelActive ? "/komuta?reel=1" : "/komuta"}
+        className="otv-banner-cta"
+        prefetch={false}
+      >
+        Brüt görünüme dön →
       </Link>
     </div>
   );
@@ -1136,6 +1191,27 @@ const KOMUTA_CSS = `
   text-decoration: none;
 }
 .komuta-root .reel-banner-cta:hover { background: rgba(192, 132, 252, 0.28); }
+
+/* ÖTV-net banner (toggle aktif olduğunda) */
+.komuta-root .otv-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 16px; margin-bottom: 14px;
+  background: linear-gradient(90deg, rgba(63, 185, 80, 0.12) 0%, rgba(63, 185, 80, 0.04) 100%);
+  border: 1px solid rgba(63, 185, 80, 0.3);
+  border-left: 3px solid #3fb950;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.komuta-root .otv-banner-icon { font-size: 16px; flex-shrink: 0; }
+.komuta-root .otv-banner-text { flex: 1; color: #c9d1d9; line-height: 1.5; }
+.komuta-root .otv-banner-text strong { color: #e6edf3; font-weight: 600; }
+.komuta-root .otv-banner-cta {
+  flex-shrink: 0; padding: 5px 12px;
+  background: rgba(63, 185, 80, 0.18); border: 1px solid rgba(63, 185, 80, 0.4);
+  border-radius: 5px; font-size: 11px; color: #56d364; font-weight: 500;
+  text-decoration: none;
+}
+.komuta-root .otv-banner-cta:hover { background: rgba(63, 185, 80, 0.28); }
 
 /* KPI STRIP */
 .komuta-root .kpi-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
