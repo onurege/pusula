@@ -1061,7 +1061,7 @@ export async function getKomutaSnapshot(
   // dene — bu sefer bypass ile.
   if (isEmptySnapshot(cached.value) && !options.forceRefresh) {
     console.warn("[komuta] cached snapshot is empty, retrying with refresh");
-    return getKomutaSnapshot({ forceRefresh: true });
+    return getKomutaSnapshot({ forceRefresh: true, reelTL: options.reelTL });
   }
   return cached.value;
 }

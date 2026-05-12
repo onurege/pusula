@@ -43,6 +43,7 @@ export default async function KomutaPage({ searchParams }: Props) {
       <div className="komuta-root">
         <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} />
         <FilterBar reelTL={snap.reelTL} />
+        {snap.reelTL && <ReelTlBanner />}
         <KpiStrip kpis={snap.kpis} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
@@ -203,6 +204,25 @@ function formatKpi(k: KomutaKpiCard): string {
 }
 
 // -- CALENDAR BANNER ---------------------------------------------------------
+
+function ReelTlBanner() {
+  return (
+    <div className="reel-banner">
+      <div className="reel-banner-icon">📈</div>
+      <div className="reel-banner-text">
+        <strong>Reel TL görünümü aktif</strong> · Geçmiş değerler TÜFE
+        multiplier'ı ile bugünün parasına çevrildi.{" "}
+        <span style={{ color: "#8b949e" }}>
+          YoY ve 2-yıllık % değerleri reel kıyasla yeniden hesaplandı —
+          enflasyon arındırılmış gerçek büyüme.
+        </span>
+      </div>
+      <Link href="/komuta" className="reel-banner-cta" prefetch={false}>
+        Nominal TL'ye dön →
+      </Link>
+    </div>
+  );
+}
 
 function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
   return (
@@ -1093,7 +1113,29 @@ const KOMUTA_CSS = `
   flex-shrink: 0; padding: 5px 12px;
   background: rgba(212, 168, 87, 0.18); border: 1px solid rgba(212, 168, 87, 0.4);
   border-radius: 5px; font-size: 11px; color: #d4a857; cursor: pointer; font-weight: 500;
+  text-decoration: none;
 }
+
+/* REEL TL banner (toggle aktif olduğunda) */
+.komuta-root .reel-banner {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 16px; margin-bottom: 14px;
+  background: linear-gradient(90deg, rgba(192, 132, 252, 0.14) 0%, rgba(192, 132, 252, 0.04) 100%);
+  border: 1px solid rgba(192, 132, 252, 0.35);
+  border-left: 3px solid #c084fc;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.komuta-root .reel-banner-icon { font-size: 16px; flex-shrink: 0; }
+.komuta-root .reel-banner-text { flex: 1; color: #c9d1d9; line-height: 1.5; }
+.komuta-root .reel-banner-text strong { color: #e6edf3; font-weight: 600; }
+.komuta-root .reel-banner-cta {
+  flex-shrink: 0; padding: 5px 12px;
+  background: rgba(192, 132, 252, 0.18); border: 1px solid rgba(192, 132, 252, 0.4);
+  border-radius: 5px; font-size: 11px; color: #c084fc; font-weight: 500;
+  text-decoration: none;
+}
+.komuta-root .reel-banner-cta:hover { background: rgba(192, 132, 252, 0.28); }
 
 /* KPI STRIP */
 .komuta-root .kpi-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 14px; }
