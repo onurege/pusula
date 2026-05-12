@@ -1096,10 +1096,9 @@ const KOMUTA_CSS = `
 .komuta-root .map-panel { position: relative; }
 .komuta-root .map-svg { width: 100%; height: 360px; display: block; }
 .komuta-root .map-legend {
-  position: absolute; bottom: 50px; left: 16px;
-  background: rgba(13, 17, 23, 0.85); backdrop-filter: blur(8px);
-  border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px;
-  font-size: 10.5px; display: flex; gap: 12px; flex-wrap: wrap;
+  margin-top: 8px; padding: 8px 12px;
+  background: rgba(13, 17, 23, 0.4); border: 1px solid #21262d; border-radius: 6px;
+  font-size: 10.5px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
 }
 .komuta-root .map-panel .legend-item { display: flex; align-items: center; gap: 5px; color: #c9d1d9; }
 .komuta-root .map-panel .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
