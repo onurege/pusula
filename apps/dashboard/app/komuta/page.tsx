@@ -46,7 +46,7 @@ export default async function KomutaPage({ searchParams }: Props) {
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
         <div className="main-grid">
-          <CityRanking cities={snap.cities} />
+          <TurkeyMap cities={snap.cities} />
           <ChannelMix
             channels={snap.channels}
             monthly={snap.monthlyTrend}
@@ -205,43 +205,233 @@ function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
   );
 }
 
-// -- CITY RANKING (haritanın yerine ranked liste) ----------------------------
+// -- TURKEY MAP (mockup'tan port edildi, blob'lar gerçek veriden) -----------
 
-function CityRanking({ cities }: { cities: KomutaCityRow[] }) {
-  const max = Math.max(1, ...cities.map((c) => c.ciro));
+/**
+ * Şehir adı → SVG xy koordinatı (viewBox 0 0 600 320).
+ * Major TR şehirleri + KKTC kapsanır. Normalize edilmiş büyük harf isimlerle
+ * arama yapılır (trUpper). Bilinmeyen şehirler haritada görünmez ama altta
+ * "X şehir haritada · Y diğer" not'una eklenir.
+ */
+const CITY_POSITIONS: Record<string, { x: number; y: number }> = {
+  ISTANBUL: { x: 150, y: 115 },
+  ANKARA: { x: 290, y: 155 },
+  IZMIR: { x: 105, y: 180 },
+  ANTALYA: { x: 215, y: 225 },
+  BURSA: { x: 175, y: 130 },
+  ADANA: { x: 345, y: 205 },
+  KONYA: { x: 270, y: 195 },
+  GAZIANTEP: { x: 395, y: 205 },
+  KAYSERI: { x: 335, y: 168 },
+  MERSIN: { x: 315, y: 218 },
+  DIYARBAKIR: { x: 455, y: 200 },
+  ESKISEHIR: { x: 240, y: 145 },
+  SAMSUN: { x: 365, y: 105 },
+  TRABZON: { x: 440, y: 110 },
+  DENIZLI: { x: 160, y: 205 },
+  MALATYA: { x: 415, y: 175 },
+  ERZURUM: { x: 480, y: 145 },
+  SIVAS: { x: 375, y: 145 },
+  MANISA: { x: 130, y: 170 },
+  SAKARYA: { x: 195, y: 130 },
+  BALIKESIR: { x: 135, y: 148 },
+  TEKIRDAG: { x: 130, y: 105 },
+  AYDIN: { x: 115, y: 198 },
+  HATAY: { x: 375, y: 230 },
+  SANLIURFA: { x: 425, y: 215 },
+  MUGLA: { x: 165, y: 220 },
+  BODRUM: { x: 145, y: 222 },
+  EDIRNE: { x: 102, y: 95 },
+  CANAKKALE: { x: 100, y: 130 },
+  ZONGULDAK: { x: 240, y: 105 },
+  ORDU: { x: 405, y: 105 },
+  KARS: { x: 510, y: 130 },
+  VAN: { x: 510, y: 175 },
+  KAHRAMANMARAS: { x: 380, y: 190 },
+  CORUM: { x: 320, y: 130 },
+  AFYONKARAHISAR: { x: 220, y: 175 },
+  AFYON: { x: 220, y: 175 },
+  ISPARTA: { x: 235, y: 200 },
+  RIZE: { x: 470, y: 105 },
+  YOZGAT: { x: 330, y: 150 },
+  KKTC: { x: 290, y: 285 },
+  LEFKOSA: { x: 290, y: 285 },
+  "LEFKOŞA": { x: 290, y: 285 },
+  GAZIMAGUSA: { x: 290, y: 285 },
+};
+
+const CITY_ALIASES: Record<string, string> = {
+  "ISTANBUL AVRUPA": "ISTANBUL",
+  "ISTANBUL ANADOLU": "ISTANBUL",
+  "ISTANBUL ASIA": "ISTANBUL",
+  "ISTANBUL EUROPE": "ISTANBUL",
+};
+
+function trUpper(s: string): string {
+  return s.replace(/i/g, "İ").replace(/ı/g, "I").toUpperCase();
+}
+
+function normalizeForLookup(s: string): string {
+  return trUpper(s.trim())
+    .replace(/İ/g, "I")
+    .replace(/Ş/g, "S")
+    .replace(/Ç/g, "C")
+    .replace(/Ğ/g, "G")
+    .replace(/Ü/g, "U")
+    .replace(/Ö/g, "O");
+}
+
+function findCityPosition(name: string): { x: number; y: number } | null {
+  const norm = normalizeForLookup(name);
+  if (CITY_POSITIONS[norm]) return CITY_POSITIONS[norm];
+  const aliased = CITY_ALIASES[norm];
+  if (aliased && CITY_POSITIONS[aliased]) return CITY_POSITIONS[aliased];
+  // Try first word (e.g. "ANTALYA / KEPEZ" → "ANTALYA")
+  const first = norm.split(/[\s\/]/)[0];
+  if (first && CITY_POSITIONS[first]) return CITY_POSITIONS[first];
+  return null;
+}
+
+type Placed = KomutaCityRow & { x: number; y: number };
+
+function blobTone(deltaPct: number | null): "hot" | "medium" | "muted" | "cool" {
+  if (deltaPct == null) return "muted";
+  if (deltaPct >= 15) return "hot";
+  if (deltaPct >= 5) return "medium";
+  if (deltaPct >= -5) return "muted";
+  return "cool";
+}
+
+function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
+  const placed: Placed[] = [];
+  const unplaced: KomutaCityRow[] = [];
+  for (const c of cities) {
+    const pos = findCityPosition(c.sehir);
+    if (pos) placed.push({ ...c, ...pos });
+    else unplaced.push(c);
+  }
+
+  const maxCiro = Math.max(1, ...placed.map((p) => p.ciro));
+
   return (
-    <div className="panel">
+    <div className="panel map-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🗺️</span> Şehir Performansı · 30 gün · YoY
+          <span className="icon">🗺️</span> Türkiye + KKTC · Şehir × YoY
         </div>
-        <div className="panel-meta">{cities.length} şehir</div>
+        <div className="panel-meta">
+          {placed.length} şehir haritada
+          {unplaced.length > 0 && ` · ${unplaced.length} liste dışı`}
+        </div>
       </div>
-      {cities.length === 0 ? (
-        <div className="empty-note">Şehir verisi yok.</div>
-      ) : (
-        <div className="city-list">
-          {cities.slice(0, 12).map((c) => {
-            const w = Math.max(2, (c.ciro / max) * 100);
-            const tone =
-              c.deltaPct == null ? "flat"
-                : c.deltaPct >= 15 ? "hot"
-                : c.deltaPct >= 5 ? "warm"
-                : c.deltaPct >= -5 ? "flat"
-                : "cool";
+
+      <svg className="map-svg" viewBox="0 0 600 320" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <radialGradient id="komuta-hot" cx="50%" cy="50%">
+            <stop offset="0%" stopColor="#3fb950" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#3fb950" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="komuta-medium" cx="50%" cy="50%">
+            <stop offset="0%" stopColor="#d4a857" stopOpacity="0.75" />
+            <stop offset="100%" stopColor="#d4a857" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="komuta-muted" cx="50%" cy="50%">
+            <stop offset="0%" stopColor="#8b949e" stopOpacity="0.5" />
+            <stop offset="100%" stopColor="#8b949e" stopOpacity="0" />
+          </radialGradient>
+          <radialGradient id="komuta-cool" cx="50%" cy="50%">
+            <stop offset="0%" stopColor="#f85149" stopOpacity="0.65" />
+            <stop offset="100%" stopColor="#f85149" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+
+        {/* Türkiye ana kara parçası (stilize, mockup'tan) */}
+        <path
+          d="M 50,140 Q 60,110 100,100 L 180,90 Q 240,85 290,95 L 360,90 Q 420,85 480,100 L 540,120 Q 555,140 550,170 L 540,210 Q 510,235 460,235 L 380,240 Q 320,245 260,240 L 180,235 Q 110,230 70,210 Q 45,180 50,140 Z"
+          fill="#161b22"
+          stroke="#30363d"
+          strokeWidth="1.2"
+        />
+        {/* KKTC */}
+        <ellipse cx="290" cy="285" rx="32" ry="10" fill="#161b22" stroke="#30363d" strokeWidth="1" />
+        <text x="290" y="287" textAnchor="middle" fill="#6e7681" fontSize="9" fontWeight="500">
+          KKTC
+        </text>
+
+        {/* Şehir blob'ları — büyükten küçüğe (üst üste binerse büyük arkada) */}
+        {[...placed]
+          .sort((a, b) => b.ciro - a.ciro)
+          .map((c) => {
+            const tone = blobTone(c.deltaPct);
+            const ratio = Math.sqrt(c.ciro / maxCiro);
+            const blobR = Math.max(12, 14 + ratio * 36);
+            const dotR = c.ciro >= maxCiro * 0.3 ? 5 : 3.5;
+            const isAnomaly = tone === "cool";
+            const fontWeight = c.ciro >= maxCiro * 0.4 ? 600 : 500;
+            const fontSize = c.ciro >= maxCiro * 0.4 ? 11 : 9.5;
+            const labelColor =
+              tone === "hot" ? "#56d364"
+                : tone === "medium" ? "#d4a857"
+                : tone === "cool" ? "#f85149"
+                : "#c9d1d9";
+            const dotColor =
+              tone === "hot" ? "#3fb950"
+                : tone === "medium" ? "#d4a857"
+                : tone === "cool" ? "#f85149"
+                : "#8b949e";
             return (
-              <div key={c.sehir} className="city-row">
-                <div className="city-name">{c.sehir}</div>
-                <div className="city-bar-wrap">
-                  <div className={`city-bar tone-${tone}`} style={{ width: `${w}%` }} />
-                </div>
-                <div className="city-num">{formatCompact(c.ciro)} ₺</div>
-                <div className={`city-delta delta-${tone}`}>
-                  {c.deltaPct == null ? "—" : `${c.deltaPct >= 0 ? "+" : ""}%${c.deltaPct.toFixed(0)}`}
-                </div>
-              </div>
+              <g key={c.sehir}>
+                <circle cx={c.x} cy={c.y} r={blobR} fill={`url(#komuta-${tone})`} />
+                <circle cx={c.x} cy={c.y} r={dotR} fill={dotColor} />
+                <text
+                  x={c.x + dotR + 6}
+                  y={c.y + 2}
+                  fill="#e6edf3"
+                  fontSize={fontSize}
+                  fontWeight={fontWeight}
+                >
+                  {c.sehir}
+                </text>
+                {c.deltaPct != null && (
+                  <text
+                    x={c.x + dotR + 6}
+                    y={c.y + 13}
+                    fill={labelColor}
+                    fontSize={fontSize - 1.5}
+                    fontWeight={isAnomaly || tone === "hot" ? 600 : 500}
+                  >
+                    {isAnomaly && "⚡ "}
+                    {c.deltaPct >= 0 ? "+" : ""}%{c.deltaPct.toFixed(0)} YoY
+                  </text>
+                )}
+              </g>
             );
           })}
+      </svg>
+
+      <div className="map-legend">
+        <div className="legend-item">
+          <span className="legend-dot" style={{ background: "#3fb950" }} /> YoY +%15+
+        </div>
+        <div className="legend-item">
+          <span className="legend-dot" style={{ background: "#d4a857" }} /> +%5 ile +%15
+        </div>
+        <div className="legend-item">
+          <span className="legend-dot" style={{ background: "#8b949e" }} /> ±%5
+        </div>
+        <div className="legend-item">
+          <span className="legend-dot" style={{ background: "#f85149" }} /> Anomali
+        </div>
+      </div>
+
+      {unplaced.length > 0 && (
+        <div className="map-unplaced-note">
+          Haritada yer almayan şehirler:{" "}
+          {unplaced
+            .slice(0, 6)
+            .map((u) => `${u.sehir} (${formatCompact(u.ciro)} ₺)`)
+            .join(" · ")}
+          {unplaced.length > 6 && ` … +${unplaced.length - 6}`}
         </div>
       )}
     </div>
@@ -893,25 +1083,22 @@ const KOMUTA_CSS = `
 .komuta-root .panel-meta { font-size: 11px; color: #8b949e; }
 .komuta-root .empty-note { color: #6e7681; font-size: 12px; padding: 20px 0; text-align: center; }
 
-/* CITY RANKING (haritanın yerine) */
-.komuta-root .city-list { display: flex; flex-direction: column; gap: 6px; }
-.komuta-root .city-row {
-  display: grid; grid-template-columns: 110px 1fr 80px 50px; gap: 12px;
-  align-items: center; padding: 6px 0; font-size: 12px;
+/* TURKEY MAP */
+.komuta-root .map-panel { position: relative; }
+.komuta-root .map-svg { width: 100%; height: 360px; display: block; }
+.komuta-root .map-legend {
+  position: absolute; bottom: 50px; left: 16px;
+  background: rgba(13, 17, 23, 0.85); backdrop-filter: blur(8px);
+  border: 1px solid #30363d; border-radius: 6px; padding: 8px 10px;
+  font-size: 10.5px; display: flex; gap: 12px; flex-wrap: wrap;
 }
-.komuta-root .city-name { color: #e6edf3; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.komuta-root .city-bar-wrap { background: #21262d; height: 8px; border-radius: 4px; overflow: hidden; }
-.komuta-root .city-bar { height: 100%; border-radius: 4px; transition: width 0.3s; }
-.komuta-root .city-bar.tone-hot { background: linear-gradient(90deg, #3fb950, #56d364); }
-.komuta-root .city-bar.tone-warm { background: linear-gradient(90deg, #d4a857, #f0c674); }
-.komuta-root .city-bar.tone-flat { background: linear-gradient(90deg, #8b949e, #b0b8c1); }
-.komuta-root .city-bar.tone-cool { background: linear-gradient(90deg, #f85149, #da3633); }
-.komuta-root .city-num { color: #c9d1d9; text-align: right; font-feature-settings: "tnum"; font-size: 11px; }
-.komuta-root .city-delta { text-align: right; font-size: 11px; font-feature-settings: "tnum"; font-weight: 600; }
-.komuta-root .delta-hot { color: #56d364; }
-.komuta-root .delta-warm { color: #d4a857; }
-.komuta-root .delta-flat { color: #8b949e; }
-.komuta-root .delta-cool { color: #f85149; }
+.komuta-root .map-panel .legend-item { display: flex; align-items: center; gap: 5px; color: #c9d1d9; }
+.komuta-root .map-panel .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.komuta-root .map-unplaced-note {
+  margin-top: 12px; padding: 8px 12px;
+  background: rgba(139, 148, 158, 0.05); border: 1px solid #21262d;
+  border-radius: 6px; font-size: 11px; color: #8b949e; line-height: 1.5;
+}
 
 /* DONUT + TREND */
 .komuta-root .donut-wrap { display: flex; align-items: center; gap: 18px; margin-bottom: 12px; }
