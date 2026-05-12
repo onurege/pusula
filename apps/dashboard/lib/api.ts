@@ -313,8 +313,8 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
-export type KomutaCityRow = {
-  sehir: string;
+export type KomutaRegionRow = {
+  bolge: string;
   ciro: number;
   ciroPrev: number;
   deltaPct: number | null;
@@ -350,15 +350,15 @@ export type KomutaMatrixRow = {
 };
 
 export type KomutaHeatmapCell = {
-  sehir: string;
+  bolge: string;
   grup: string;
   yoyPct: number | null;
   bucket: "fire" | "hot" | "warm" | "flat" | "cool" | "cold";
 };
 
 export type KomutaHeatmapRow = {
-  sehir: string;
-  noktaSayisi: number;
+  bolge: string;
+  distSayisi: number;
   cells: KomutaHeatmapCell[];
   rowAvgPct: number | null;
 };
@@ -392,7 +392,7 @@ export type KomutaUpcomingEvent = {
 export type KomutaSnapshot = {
   generatedAt: string;
   kpis: KomutaKpiCard[];
-  cities: KomutaCityRow[];
+  regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
   monthlyTrend: KomutaMonthlyBar[];
   upcomingEvent: KomutaUpcomingEvent | null;

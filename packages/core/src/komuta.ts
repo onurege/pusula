@@ -86,8 +86,8 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
-export type KomutaCityRow = {
-  sehir: string;
+export type KomutaRegionRow = {
+  bolge: string;
   ciro: number;
   ciroPrev: number;
   deltaPct: number | null;
@@ -123,15 +123,15 @@ export type KomutaMatrixRow = {
 };
 
 export type KomutaHeatmapCell = {
-  sehir: string;
+  bolge: string;
   grup: string;
   yoyPct: number | null;
   bucket: "fire" | "hot" | "warm" | "flat" | "cool" | "cold";
 };
 
 export type KomutaHeatmapRow = {
-  sehir: string;
-  noktaSayisi: number;
+  bolge: string;
+  distSayisi: number;
   cells: KomutaHeatmapCell[];
   rowAvgPct: number | null;
 };
@@ -165,7 +165,7 @@ export type KomutaUpcomingEvent = {
 export type KomutaSnapshot = {
   generatedAt: string;
   kpis: KomutaKpiCard[];
-  cities: KomutaCityRow[];
+  regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
   monthlyTrend: KomutaMonthlyBar[];
   upcomingEvent: KomutaUpcomingEvent | null;
@@ -319,40 +319,48 @@ async function fetchKpis(): Promise<KomutaKpiCard[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Şehir bazlı ciro + YoY (harita için)
+// Bölge bazlı ciro + YoY (harita için)
+//
+// TBLDIST.TXTGRUP → TBLDISTGRUP.TXTKOD üzerinden distribütör bölgesini çekiyor.
+// Bu mockup'taki "İstanbul Avrupa / Anadolu / Marmara / Ege ..." gibi gerçek
+// dağıtım bölgesi ayrımına denk düşer; şehir kullanmaktan daha doğru çünkü
+// distribütör network'ü zaten bölgeye atanmış.
 // ---------------------------------------------------------------------------
 
-async function fetchCities(): Promise<KomutaCityRow[]> {
+async function fetchRegions(): Promise<KomutaRegionRow[]> {
   const sql = `
     WITH son AS (
       SELECT
-        LTRIM(RTRIM(m.TXTSEHIR)) AS sehir,
-        SUM(f.DBLNETTUTAR)       AS ciro
+        dg.TXTKOD          AS bolgeKod,
+        dg.TXTAD           AS bolge,
+        SUM(f.DBLNETTUTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
-      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      INNER JOIN dbo.TBLDIST d      ON d.LNGKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND d.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
-        AND m.TXTSEHIR IS NOT NULL AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
-      GROUP BY LTRIM(RTRIM(m.TXTSEHIR))
+      GROUP BY dg.TXTKOD, dg.TXTAD
     ),
     onceki AS (
       SELECT
-        LTRIM(RTRIM(m.TXTSEHIR)) AS sehir,
-        SUM(f.DBLNETTUTAR)       AS ciro
+        dg.TXTKOD          AS bolgeKod,
+        SUM(f.DBLNETTUTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
-      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      INNER JOIN dbo.TBLDIST d      ON d.LNGKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND d.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -395, GETDATE())
         AND f.TRHISLEMTARIHI <  DATEADD(day, -365, GETDATE())
-        AND m.TXTSEHIR IS NOT NULL AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
-      GROUP BY LTRIM(RTRIM(m.TXTSEHIR))
+      GROUP BY dg.TXTKOD
     )
     SELECT TOP 15
-      s.sehir,
+      s.bolge,
       ISNULL(s.ciro, 0)  AS ciro,
       ISNULL(o.ciro, 0)  AS ciroPrev
     FROM son s
-    LEFT JOIN onceki o ON o.sehir = s.sehir
+    LEFT JOIN onceki o ON o.bolgeKod = s.bolgeKod
     ORDER BY s.ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 50, timeoutMs: 60_000 });
@@ -361,7 +369,7 @@ async function fetchCities(): Promise<KomutaCityRow[]> {
     const ciroPrev = Number(r.ciroPrev ?? 0);
     const deltaPct = ciroPrev > 0 ? ((ciro - ciroPrev) / ciroPrev) * 100 : null;
     return {
-      sehir: String(r.sehir ?? ""),
+      bolge: String(r.bolge ?? ""),
       ciro,
       ciroPrev,
       deltaPct,
@@ -567,7 +575,7 @@ async function fetchMatrix(): Promise<KomutaMatrixRow[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Şehir × Grup Heatmap (top 8 şehir × top 6 grup)
+// Bölge × Grup Heatmap (top 8 bölge × top 6 grup)
 // ---------------------------------------------------------------------------
 
 function heatmapBucket(yoyPct: number | null): KomutaHeatmapCell["bucket"] {
@@ -581,35 +589,42 @@ function heatmapBucket(yoyPct: number | null): KomutaHeatmapCell["bucket"] {
 }
 
 async function fetchHeatmap(): Promise<KomutaHeatmapRow[]> {
-  // Top şehirler ve top gruplar tespit edilir, sonra pivot
+  // Top bölgeler ve top gruplar tespit edilir, sonra pivot.
+  // dist_grup CTE: distribütör → bölge eşlemesi (TBLDIST.TXTGRUP → TBLDISTGRUP.TXTKOD)
   const sql = `
-    WITH top_sehir AS (
+    WITH dist_grup AS (
+      SELECT d.LNGKOD AS distKod, dg.TXTKOD AS bolgeKod, dg.TXTAD AS bolge
+      FROM dbo.TBLDIST d
+      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+      WHERE d.BYTDURUM = 0
+    ),
+    top_bolge AS (
       SELECT TOP 8
-        LTRIM(RTRIM(m.TXTSEHIR)) AS sehir,
-        COUNT(DISTINCT m.LNGKOD) AS noktaSayisi,
-        SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro
-      FROM dbo.TBLMSDFATURA f
-      INNER JOIN dbo.TBLMSDBELGEDETAY d
-        ON d.LNGYIL = f.LNGYIL
-       AND d.LNGFATURAKOD = f.LNGBELGEKOD
-       AND d.LNGDISTKOD = f.LNGDISTKOD
-      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+        dg.bolge,
+        dg.bolgeKod,
+        COUNT(DISTINCT dg.distKod)        AS distSayisi,
+        SUM(dd.DBLNETFIYAT * dd.DBLMIKTAR) AS ciro
+      FROM dist_grup dg
+      INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg.distKod
+      INNER JOIN dbo.TBLMSDBELGEDETAY dd
+        ON dd.LNGYIL = f.LNGYIL
+       AND dd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND dd.LNGDISTKOD = f.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
-        AND m.TXTSEHIR IS NOT NULL AND LTRIM(RTRIM(m.TXTSEHIR)) <> ''
-      GROUP BY LTRIM(RTRIM(m.TXTSEHIR))
+      GROUP BY dg.bolge, dg.bolgeKod
       ORDER BY ciro DESC
     ),
     top_grup AS (
       SELECT TOP 6
         COALESCE(g.TXTAD, u.TXTAD) AS grup,
-        SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro
+        SUM(dd.DBLNETFIYAT * dd.DBLMIKTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
-      INNER JOIN dbo.TBLMSDBELGEDETAY d
-        ON d.LNGYIL = f.LNGYIL
-       AND d.LNGFATURAKOD = f.LNGBELGEKOD
-       AND d.LNGDISTKOD = f.LNGDISTKOD
-      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+      INNER JOIN dbo.TBLMSDBELGEDETAY dd
+        ON dd.LNGYIL = f.LNGYIL
+       AND dd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND dd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
@@ -619,76 +634,75 @@ async function fetchHeatmap(): Promise<KomutaHeatmapRow[]> {
       ORDER BY ciro DESC
     )
     SELECT
-      ts.sehir,
-      ts.noktaSayisi,
+      tb.bolge,
+      tb.distSayisi,
       tg.grup,
       ISNULL((
-        SELECT SUM(d.DBLNETFIYAT * d.DBLMIKTAR)
-        FROM dbo.TBLMSDFATURA f
-        INNER JOIN dbo.TBLMSDBELGEDETAY d
-          ON d.LNGYIL = f.LNGYIL AND d.LNGFATURAKOD = f.LNGBELGEKOD AND d.LNGDISTKOD = f.LNGDISTKOD
-        INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+        SELECT SUM(dd.DBLNETFIYAT * dd.DBLMIKTAR)
+        FROM dist_grup dg2
+        INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
+        INNER JOIN dbo.TBLMSDBELGEDETAY dd
+          ON dd.LNGYIL = f.LNGYIL AND dd.LNGFATURAKOD = f.LNGBELGEKOD AND dd.LNGDISTKOD = f.LNGDISTKOD
+        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
         LEFT JOIN dbo.TBLURUNGRUP g
           ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
         WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
           AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
-          AND LTRIM(RTRIM(m.TXTSEHIR)) = ts.sehir
+          AND dg2.bolgeKod = tb.bolgeKod
           AND COALESCE(g.TXTAD, u.TXTAD) = tg.grup
       ), 0) AS son,
       ISNULL((
-        SELECT SUM(d.DBLNETFIYAT * d.DBLMIKTAR)
-        FROM dbo.TBLMSDFATURA f
-        INNER JOIN dbo.TBLMSDBELGEDETAY d
-          ON d.LNGYIL = f.LNGYIL AND d.LNGFATURAKOD = f.LNGBELGEKOD AND d.LNGDISTKOD = f.LNGDISTKOD
-        INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+        SELECT SUM(dd.DBLNETFIYAT * dd.DBLMIKTAR)
+        FROM dist_grup dg2
+        INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
+        INNER JOIN dbo.TBLMSDBELGEDETAY dd
+          ON dd.LNGYIL = f.LNGYIL AND dd.LNGFATURAKOD = f.LNGBELGEKOD AND dd.LNGDISTKOD = f.LNGDISTKOD
+        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
         LEFT JOIN dbo.TBLURUNGRUP g
           ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
         WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
           AND f.TRHISLEMTARIHI >= DATEADD(day, -395, GETDATE())
           AND f.TRHISLEMTARIHI <  DATEADD(day, -365, GETDATE())
-          AND LTRIM(RTRIM(m.TXTSEHIR)) = ts.sehir
+          AND dg2.bolgeKod = tb.bolgeKod
           AND COALESCE(g.TXTAD, u.TXTAD) = tg.grup
       ), 0) AS onceki
-    FROM top_sehir ts
+    FROM top_bolge tb
     CROSS JOIN top_grup tg
-    ORDER BY ts.ciro DESC, tg.ciro DESC
+    ORDER BY tb.ciro DESC, tg.ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 100, timeoutMs: 120_000 });
 
-  // Pivot by sehir
-  const bySehir: Map<string, KomutaHeatmapRow> = new Map();
+  // Pivot by bolge
+  const byBolge: Map<string, KomutaHeatmapRow> = new Map();
   for (const r of out.rows) {
-    const sehir = String(r.sehir ?? "");
+    const bolge = String(r.bolge ?? "");
     const grup = String(r.grup ?? "");
     const son = Number(r.son ?? 0);
     const onceki = Number(r.onceki ?? 0);
     const yoy = onceki > 0 ? ((son - onceki) / onceki) * 100 : null;
-    if (!bySehir.has(sehir)) {
-      bySehir.set(sehir, {
-        sehir,
-        noktaSayisi: Number(r.noktaSayisi ?? 0),
+    if (!byBolge.has(bolge)) {
+      byBolge.set(bolge, {
+        bolge,
+        distSayisi: Number(r.distSayisi ?? 0),
         cells: [],
         rowAvgPct: null,
       });
     }
-    bySehir.get(sehir)!.cells.push({
-      sehir,
+    byBolge.get(bolge)!.cells.push({
+      bolge,
       grup,
       yoyPct: yoy,
       bucket: heatmapBucket(yoy),
     });
   }
-  // Row averages
-  for (const row of bySehir.values()) {
+  for (const row of byBolge.values()) {
     const valid = row.cells.filter((c) => c.yoyPct != null);
     row.rowAvgPct =
       valid.length > 0
         ? valid.reduce((a, c) => a + (c.yoyPct ?? 0), 0) / valid.length
         : null;
   }
-  return [...bySehir.values()];
+  return [...byBolge.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -806,11 +820,11 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
     .map((m) => `${m.grup} (${formatCompact(m.buAy)} ₺${m.yoyPct != null ? `, %${m.yoyPct.toFixed(0)} YoY` : ""})`)
     .join(", ");
   const dropGroups = snap.matrix.filter((m) => (m.yoyPct ?? 0) < -5);
-  const sortedCities = snap.cities
+  const sortedRegions = snap.regions
     .filter((c) => c.deltaPct != null)
     .sort((a, b) => (b.deltaPct ?? 0) - (a.deltaPct ?? 0));
-  const topCity = sortedCities[0];
-  const bottomCity = sortedCities[sortedCities.length - 1];
+  const topRegion = sortedRegions[0];
+  const bottomRegion = sortedRegions[sortedRegions.length - 1];
 
   const system = [
     "Sen Univera distribütör operasyonu için CEO/Satış Direktörü sabah brifi yazan bir analistsin.",
@@ -830,8 +844,8 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
     `Birim hacim: ${hacimKpi ? hacimKpi.value.toLocaleString("tr-TR") : "?"} adet.`,
     `Top 3 ürün grubu: ${topGroups}.`,
     `Top 3 temsilci: ${topReps}.`,
-    `En çok büyüyen şehir: ${topCity ? `${topCity.sehir} (%${topCity.deltaPct?.toFixed(1)})` : "veri yok"}.`,
-    `En çok küçülen şehir: ${bottomCity ? `${bottomCity.sehir} (%${bottomCity.deltaPct?.toFixed(1)})` : "veri yok"}.`,
+    `En çok büyüyen bölge: ${topRegion ? `${topRegion.bolge} (%${topRegion.deltaPct?.toFixed(1)})` : "veri yok"}.`,
+    `En çok küçülen bölge: ${bottomRegion ? `${bottomRegion.bolge} (%${bottomRegion.deltaPct?.toFixed(1)})` : "veri yok"}.`,
     dropGroups.length > 0
       ? `Düşen gruplar: ${dropGroups.map((d) => `${d.grup} (%${d.yoyPct?.toFixed(0)})`).join(", ")}.`
       : "Önemli düşen grup yok.",
@@ -866,7 +880,7 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
 function isEmptySnapshot(s: KomutaSnapshot): boolean {
   return (
     s.kpis.length === 0 &&
-    s.cities.length === 0 &&
+    s.regions.length === 0 &&
     s.matrix.length === 0 &&
     s.reps.length === 0 &&
     s.portfolio.length === 0
@@ -881,15 +895,15 @@ export async function getKomutaSnapshot(
     "default",
     async () => {
       // Tüm sorgular paraleldir; iletim süresi max(her bir sorgu) olur.
-      const [kpis, cities, channels, monthlyTrend, upcomingEvent, matrix, heatmap, reps, portfolio] =
+      const [kpis, regions, channels, monthlyTrend, upcomingEvent, matrix, heatmap, reps, portfolio] =
         await Promise.all([
           fetchKpis().catch((e) => {
             console.error("[komuta kpis]", e);
             return [] as KomutaKpiCard[];
           }),
-          fetchCities().catch((e) => {
-            console.error("[komuta cities]", e);
-            return [] as KomutaCityRow[];
+          fetchRegions().catch((e) => {
+            console.error("[komuta regions]", e);
+            return [] as KomutaRegionRow[];
           }),
           fetchChannels().catch((e) => {
             console.error("[komuta channels]", e);
@@ -921,7 +935,7 @@ export async function getKomutaSnapshot(
       const partial: Omit<KomutaSnapshot, "brief"> = {
         generatedAt: new Date().toISOString(),
         kpis,
-        cities,
+        regions,
         channels,
         monthlyTrend,
         upcomingEvent,

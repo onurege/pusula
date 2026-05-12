@@ -2,12 +2,12 @@ import { Fragment } from "react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import type {
-  KomutaCityRow,
   KomutaHeatmapRow,
   KomutaKpiCard,
   KomutaMatrixRow,
   KomutaMonthlyBar,
   KomutaPortfolioRow,
+  KomutaRegionRow,
   KomutaRep,
   KomutaSnapshot,
   KomutaUpcomingEvent,
@@ -46,7 +46,7 @@ export default async function KomutaPage({ searchParams }: Props) {
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
         <div className="main-grid">
-          <TurkeyMap cities={snap.cities} />
+          <TurkeyMap regions={snap.regions} />
           <ChannelMix
             channels={snap.channels}
             monthly={snap.monthlyTrend}
@@ -57,7 +57,7 @@ export default async function KomutaPage({ searchParams }: Props) {
 
         <div className="battle-grid">
           {snap.upcomingEvent ? (
-            <UpcomingPanel event={snap.upcomingEvent} cities={snap.cities} />
+            <UpcomingPanel event={snap.upcomingEvent} regions={snap.regions} />
           ) : (
             <UpcomingEmpty />
           )}
@@ -205,66 +205,58 @@ function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
   );
 }
 
-// -- TURKEY MAP (mockup'tan port edildi, blob'lar gerçek veriden) -----------
+// -- TURKEY MAP (bölge bazlı, TBLDISTGRUP üzerinden) ------------------------
 
 /**
- * Şehir adı → SVG xy koordinatı (viewBox 0 0 600 320).
- * Major TR şehirleri + KKTC kapsanır. Normalize edilmiş büyük harf isimlerle
- * arama yapılır (trUpper). Bilinmeyen şehirler haritada görünmez ama altta
- * "X şehir haritada · Y diğer" not'una eklenir.
+ * Distribütör bölgesi adı → SVG xy koordinatı (viewBox 0 0 600 320).
+ *
+ * TBLDISTGRUP.TXTAD'leri çeşitli yazılışlarda gelebilir; normalize edip
+ * (büyük harf + diacritic strip) arama yapılır. Bilinmeyen bölgeler haritada
+ * görünmez ama altta "Liste dışı" notuna girer.
+ *
+ * Yeni bölge adı eklemek için: bu objeye satır ekle, kod değişmesine gerek
+ * yok. Anahtar normalize-uppercase (TR I→I, Ş→S, vs.).
  */
-const CITY_POSITIONS: Record<string, { x: number; y: number }> = {
-  ISTANBUL: { x: 150, y: 115 },
-  ANKARA: { x: 290, y: 155 },
-  IZMIR: { x: 105, y: 180 },
-  ANTALYA: { x: 215, y: 225 },
-  BURSA: { x: 175, y: 130 },
-  ADANA: { x: 345, y: 205 },
-  KONYA: { x: 270, y: 195 },
-  GAZIANTEP: { x: 395, y: 205 },
-  KAYSERI: { x: 335, y: 168 },
-  MERSIN: { x: 315, y: 218 },
-  DIYARBAKIR: { x: 455, y: 200 },
-  ESKISEHIR: { x: 240, y: 145 },
-  SAMSUN: { x: 365, y: 105 },
-  TRABZON: { x: 440, y: 110 },
-  DENIZLI: { x: 160, y: 205 },
-  MALATYA: { x: 415, y: 175 },
-  ERZURUM: { x: 480, y: 145 },
-  SIVAS: { x: 375, y: 145 },
-  MANISA: { x: 130, y: 170 },
-  SAKARYA: { x: 195, y: 130 },
-  BALIKESIR: { x: 135, y: 148 },
-  TEKIRDAG: { x: 130, y: 105 },
-  AYDIN: { x: 115, y: 198 },
-  HATAY: { x: 375, y: 230 },
-  SANLIURFA: { x: 425, y: 215 },
-  MUGLA: { x: 165, y: 220 },
-  BODRUM: { x: 145, y: 222 },
-  EDIRNE: { x: 102, y: 95 },
-  CANAKKALE: { x: 100, y: 130 },
-  ZONGULDAK: { x: 240, y: 105 },
-  ORDU: { x: 405, y: 105 },
-  KARS: { x: 510, y: 130 },
-  VAN: { x: 510, y: 175 },
-  KAHRAMANMARAS: { x: 380, y: 190 },
-  CORUM: { x: 320, y: 130 },
-  AFYONKARAHISAR: { x: 220, y: 175 },
-  AFYON: { x: 220, y: 175 },
-  ISPARTA: { x: 235, y: 200 },
-  RIZE: { x: 470, y: 105 },
-  YOZGAT: { x: 330, y: 150 },
-  KKTC: { x: 290, y: 285 },
-  LEFKOSA: { x: 290, y: 285 },
-  "LEFKOŞA": { x: 290, y: 285 },
-  GAZIMAGUSA: { x: 290, y: 285 },
-};
-
-const CITY_ALIASES: Record<string, string> = {
-  "ISTANBUL AVRUPA": "ISTANBUL",
-  "ISTANBUL ANADOLU": "ISTANBUL",
-  "ISTANBUL ASIA": "ISTANBUL",
-  "ISTANBUL EUROPE": "ISTANBUL",
+const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
+  // İstanbul ve çevresi
+  "ISTANBUL": { x: 150, y: 115 },
+  "ISTANBUL AVRUPA": { x: 130, y: 110 },
+  "ISTANBUL ANADOLU": { x: 175, y: 118 },
+  "ISTANBUL 1": { x: 130, y: 110 },
+  "ISTANBUL 2": { x: 175, y: 118 },
+  // Marmara
+  "MARMARA": { x: 195, y: 135 },
+  "TRAKYA": { x: 110, y: 105 },
+  "BURSA": { x: 175, y: 135 },
+  // Ege
+  "EGE": { x: 115, y: 180 },
+  "IZMIR": { x: 105, y: 180 },
+  "EGE/IZMIR": { x: 110, y: 180 },
+  "EGE IZMIR": { x: 110, y: 180 },
+  // Akdeniz
+  "AKDENIZ": { x: 235, y: 220 },
+  "AKDENIZ/ANTALYA": { x: 220, y: 222 },
+  "AKDENIZ ANTALYA": { x: 220, y: 222 },
+  "ANTALYA": { x: 215, y: 225 },
+  // İç Anadolu / Ankara
+  "ANKARA": { x: 290, y: 155 },
+  "IC ANADOLU": { x: 305, y: 175 },
+  "IC ANADOLU/ANKARA": { x: 290, y: 158 },
+  "IC ANADOLU ANKARA": { x: 290, y: 158 },
+  // Karadeniz
+  "KARADENIZ": { x: 380, y: 105 },
+  "DOGU KARADENIZ": { x: 450, y: 105 },
+  "BATI KARADENIZ": { x: 290, y: 105 },
+  // Doğu / Güneydoğu
+  "DOGU": { x: 480, y: 150 },
+  "DOGU ANADOLU": { x: 480, y: 150 },
+  "GUNEYDOGU": { x: 425, y: 215 },
+  "GUNEYDOGU ANADOLU": { x: 425, y: 215 },
+  // KKTC
+  "KKTC": { x: 290, y: 285 },
+  "LEFKOSA": { x: 290, y: 285 },
+  "GAZIMAGUSA": { x: 290, y: 285 },
+  "KIBRIS": { x: 290, y: 285 },
 };
 
 function trUpper(s: string): string {
@@ -281,18 +273,21 @@ function normalizeForLookup(s: string): string {
     .replace(/Ö/g, "O");
 }
 
-function findCityPosition(name: string): { x: number; y: number } | null {
+function findRegionPosition(name: string): { x: number; y: number } | null {
   const norm = normalizeForLookup(name);
-  if (CITY_POSITIONS[norm]) return CITY_POSITIONS[norm];
-  const aliased = CITY_ALIASES[norm];
-  if (aliased && CITY_POSITIONS[aliased]) return CITY_POSITIONS[aliased];
-  // Try first word (e.g. "ANTALYA / KEPEZ" → "ANTALYA")
-  const first = norm.split(/[\s\/]/)[0];
-  if (first && CITY_POSITIONS[first]) return CITY_POSITIONS[first];
+  if (REGION_POSITIONS[norm]) return REGION_POSITIONS[norm];
+  // Birden fazla kelimeyle isim varsa ilk eşleşeni bulmaya çalış
+  const tokens = norm.split(/[\s\/\-_]+/).filter(Boolean);
+  for (let i = tokens.length; i > 0; i--) {
+    const prefix = tokens.slice(0, i).join(" ");
+    if (REGION_POSITIONS[prefix]) return REGION_POSITIONS[prefix];
+  }
+  // Tek kelime denemesi (örn. "İSTANBUL AVRUPA YAKASI" → "ISTANBUL")
+  if (tokens[0] && REGION_POSITIONS[tokens[0]]) return REGION_POSITIONS[tokens[0]];
   return null;
 }
 
-type Placed = KomutaCityRow & { x: number; y: number };
+type Placed = KomutaRegionRow & { x: number; y: number };
 
 function blobTone(deltaPct: number | null): "hot" | "medium" | "muted" | "cool" {
   if (deltaPct == null) return "muted";
@@ -302,11 +297,11 @@ function blobTone(deltaPct: number | null): "hot" | "medium" | "muted" | "cool" 
   return "cool";
 }
 
-function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
+function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
   const placed: Placed[] = [];
-  const unplaced: KomutaCityRow[] = [];
-  for (const c of cities) {
-    const pos = findCityPosition(c.sehir);
+  const unplaced: KomutaRegionRow[] = [];
+  for (const c of regions) {
+    const pos = findRegionPosition(c.bolge);
     if (pos) placed.push({ ...c, ...pos });
     else unplaced.push(c);
   }
@@ -317,10 +312,10 @@ function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
     <div className="panel map-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🗺️</span> Türkiye + KKTC · Şehir × YoY
+          <span className="icon">🗺️</span> Türkiye + KKTC · Bölge × YoY
         </div>
         <div className="panel-meta">
-          {placed.length} şehir haritada
+          {placed.length} bölge haritada
           {unplaced.length > 0 && ` · ${unplaced.length} liste dışı`}
         </div>
       </div>
@@ -358,7 +353,7 @@ function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
           KKTC
         </text>
 
-        {/* Şehir blob'ları — büyükten küçüğe (üst üste binerse büyük arkada) */}
+        {/* Bölge blob'ları — büyükten küçüğe (üst üste binerse büyük arkada) */}
         {[...placed]
           .sort((a, b) => b.ciro - a.ciro)
           .map((c) => {
@@ -380,7 +375,7 @@ function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
                 : tone === "cool" ? "#f85149"
                 : "#8b949e";
             return (
-              <g key={c.sehir}>
+              <g key={c.bolge}>
                 <circle cx={c.x} cy={c.y} r={blobR} fill={`url(#komuta-${tone})`} />
                 <circle cx={c.x} cy={c.y} r={dotR} fill={dotColor} />
                 <text
@@ -390,7 +385,7 @@ function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
                   fontSize={fontSize}
                   fontWeight={fontWeight}
                 >
-                  {c.sehir}
+                  {c.bolge}
                 </text>
                 {c.deltaPct != null && (
                   <text
@@ -426,10 +421,10 @@ function TurkeyMap({ cities }: { cities: KomutaCityRow[] }) {
 
       {unplaced.length > 0 && (
         <div className="map-unplaced-note">
-          Haritada yer almayan şehirler:{" "}
+          Haritada yer almayan bölgeler:{" "}
           {unplaced
             .slice(0, 6)
-            .map((u) => `${u.sehir} (${formatCompact(u.ciro)} ₺)`)
+            .map((u) => `${u.bolge} (${formatCompact(u.ciro)} ₺)`)
             .join(" · ")}
           {unplaced.length > 6 && ` … +${unplaced.length - 6}`}
         </div>
@@ -598,16 +593,16 @@ function CalendarShred({ monthly }: { monthly: KomutaMonthlyBar[] }) {
 
 function UpcomingPanel({
   event,
-  cities,
+  regions,
 }: {
   event: KomutaUpcomingEvent;
-  cities: KomutaCityRow[];
+  regions: KomutaRegionRow[];
 }) {
   const dateStr = new Date(event.date).toLocaleDateString("tr-TR", {
     day: "2-digit",
     month: "long",
   });
-  const topGrowingCity = [...cities]
+  const topGrowing = [...regions]
     .filter((c) => c.deltaPct != null)
     .sort((a, b) => (b.deltaPct ?? 0) - (a.deltaPct ?? 0))[0];
 
@@ -618,16 +613,16 @@ function UpcomingPanel({
       <div className="upcoming-date">{dateStr} · {event.daysAhead} gün kaldı</div>
 
       <div className="upcoming-stat-grid">
-        {topGrowingCity && topGrowingCity.deltaPct != null && (
+        {topGrowing && topGrowing.deltaPct != null && (
           <div className="upcoming-stat-row">
-            <span className="lbl">En çok büyüyen: {topGrowingCity.sehir}</span>
-            <span className="val">+%{topGrowingCity.deltaPct.toFixed(0)} YoY</span>
+            <span className="lbl">En çok büyüyen: {topGrowing.bolge}</span>
+            <span className="val">+%{topGrowing.deltaPct.toFixed(0)} YoY</span>
           </div>
         )}
-        {cities.length > 0 && (
+        {regions.length > 0 && (
           <div className="upcoming-stat-row">
-            <span className="lbl">Toplam aktif şehir</span>
-            <span className="val">{cities.length}</span>
+            <span className="lbl">Toplam aktif bölge</span>
+            <span className="val">{regions.length}</span>
           </div>
         )}
         <div className="upcoming-stat-row">
@@ -639,8 +634,8 @@ function UpcomingPanel({
       <div className="upcoming-action-row">
         Sahanın <span className="hi">{event.daysAhead} gün</span> içinde sezon planını
         hazırlaması gerekiyor.
-        {topGrowingCity && (
-          <> Geçen sezonun en çok büyüyen şehri: <span className="hi">{topGrowingCity.sehir}</span>.</>
+        {topGrowing && (
+          <> Geçen sezonun en çok büyüyen bölgesi: <span className="hi">{topGrowing.bolge}</span>.</>
         )}
       </div>
 
@@ -728,26 +723,26 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
     <div className="panel heatmap-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🔥</span> Şehir × Ürün Grubu · YoY Değişim Heatmap
+          <span className="icon">🔥</span> Bölge × Ürün Grubu · YoY Değişim Heatmap
         </div>
         <div className="panel-meta">Son 30g vs Geçen yıl aynı 30g</div>
       </div>
       <div
         className="heatmap-grid"
         style={{
-          gridTemplateColumns: `160px repeat(${grupHeaders.length}, 1fr) 80px`,
+          gridTemplateColumns: `180px repeat(${grupHeaders.length}, 1fr) 80px`,
         }}
       >
-        <div className="h-head">Şehir</div>
+        <div className="h-head">Bölge</div>
         {grupHeaders.map((g) => (
           <div key={g} className="h-head" title={g}>{truncate(g, 12)}</div>
         ))}
-        <div className="h-head right">Şehir Ort.</div>
+        <div className="h-head right">Bölge Ort.</div>
 
         {heatmap.map((row) => (
-          <Fragment key={row.sehir}>
+          <Fragment key={row.bolge}>
             <div className="h-region">
-              {row.sehir} <span className="reg-sub">{row.noktaSayisi} müşteri</span>
+              {row.bolge} <span className="reg-sub">{row.distSayisi} distribütör</span>
             </div>
             {row.cells.map((cell, i) => (
               <div key={i} className={`h-cell ${cell.bucket}`}>
