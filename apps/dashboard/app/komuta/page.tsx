@@ -218,16 +218,16 @@ function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
  * yok. Anahtar normalize-uppercase (TR I→I, Ş→S, vs.).
  */
 const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
-  // İstanbul ve çevresi
-  "ISTANBUL": { x: 150, y: 115 },
-  "ISTANBUL AVRUPA": { x: 130, y: 110 },
-  "ISTANBUL ANADOLU": { x: 175, y: 118 },
-  "ISTANBUL 1": { x: 130, y: 110 },
-  "ISTANBUL 2": { x: 175, y: 118 },
-  // Marmara
-  "MARMARA": { x: 195, y: 135 },
-  "TRAKYA": { x: 110, y: 105 },
-  "BURSA": { x: 175, y: 135 },
+  // İstanbul ve çevresi — sol üst köşeye taşındı
+  "ISTANBUL": { x: 130, y: 100 },
+  "ISTANBUL AVRUPA": { x: 110, y: 95 },
+  "ISTANBUL ANADOLU": { x: 150, y: 100 },
+  "ISTANBUL 1": { x: 110, y: 95 },
+  "ISTANBUL 2": { x: 150, y: 100 },
+  // Marmara — Istanbul'un peşinde (biraz sağ ve aşağı)
+  "MARMARA": { x: 195, y: 120 },
+  "TRAKYA": { x: 90, y: 100 },
+  "BURSA": { x: 175, y: 140 },
   // Ege
   "EGE": { x: 115, y: 180 },
   "IZMIR": { x: 105, y: 180 },
@@ -238,11 +238,12 @@ const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
   "AKDENIZ/ANTALYA": { x: 220, y: 222 },
   "AKDENIZ ANTALYA": { x: 220, y: 222 },
   "ANTALYA": { x: 215, y: 225 },
-  // İç Anadolu / Ankara
-  "ANKARA": { x: 290, y: 155 },
-  "IC ANADOLU": { x: 305, y: 175 },
-  "IC ANADOLU/ANKARA": { x: 290, y: 158 },
-  "IC ANADOLU ANKARA": { x: 290, y: 158 },
+  // İç Anadolu / Ankara — haritanın tam ortası
+  "ANKARA": { x: 300, y: 160 },
+  "IC ANADOLU": { x: 300, y: 160 },
+  "ORTA ANADOLU": { x: 300, y: 160 },
+  "IC ANADOLU/ANKARA": { x: 300, y: 160 },
+  "IC ANADOLU ANKARA": { x: 300, y: 160 },
   // Karadeniz
   "KARADENIZ": { x: 380, y: 105 },
   "DOGU KARADENIZ": { x: 450, y: 105 },
@@ -254,13 +255,13 @@ const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
   "GUNEY DOGU ANADOLU": { x: 425, y: 215 },
   "GUNEYDOGU": { x: 425, y: 215 },
   "GUNEYDOGU ANADOLU": { x: 425, y: 215 },
-  // İstanbul varyantları
-  "IST-ASYA": { x: 175, y: 118 },
-  "IST ASYA": { x: 175, y: 118 },
-  "IST-AVRUPA": { x: 130, y: 110 },
-  "IST AVRUPA": { x: 130, y: 110 },
-  "AVRUPA": { x: 130, y: 110 },
-  "ASYA": { x: 175, y: 118 },
+  // İstanbul varyantları (DB'de IST-AVRUPA, IST-ASYA, AVRUPA gibi gelebilir)
+  "IST-ASYA": { x: 150, y: 100 },
+  "IST ASYA": { x: 150, y: 100 },
+  "IST-AVRUPA": { x: 110, y: 95 },
+  "IST AVRUPA": { x: 110, y: 95 },
+  "AVRUPA": { x: 110, y: 95 },
+  "ASYA": { x: 150, y: 100 },
   // KKTC
   "KKTC": { x: 290, y: 285 },
   "LEFKOSA": { x: 290, y: 285 },
