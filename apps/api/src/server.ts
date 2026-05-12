@@ -17,6 +17,7 @@ import {
   closePool,
   formatRetrievalForPrompt,
   getCustomerSales,
+  getKomutaSnapshot,
   getMapFacets,
   getRadarDefinition,
   getReport,
@@ -399,6 +400,19 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
     return c.json(result);
   } catch (err) {
     console.error("[/api/map/customers/:id/foresight] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Komuta Köprüsü — CEO/Satış Direktörü ekranı için tek atışta tüm agregat.
+// Pahalı (8 paralel SQL + Gemini brief); cache'lenir, "Yenile" ile invalidate.
+app.get("/api/komuta", async (c) => {
+  try {
+    const forceRefresh = c.req.query("refresh") === "1";
+    const snap = await getKomutaSnapshot({ forceRefresh });
+    return c.json(snap);
+  } catch (err) {
+    console.error("[/api/komuta] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
   }
 });

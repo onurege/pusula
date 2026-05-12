@@ -301,6 +301,111 @@ export type ForesightResult = {
   actions: string[];
 };
 
+// Komuta Köprüsü types ------------------------------------------------------
+
+export type KomutaKpiCard = {
+  id: string;
+  label: string;
+  value: number;
+  format: "currency" | "count" | "percent" | "compact";
+  unit?: string;
+  delta?: number;
+  deltaSub?: string;
+};
+
+export type KomutaCityRow = {
+  sehir: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
+export type KomutaChannelSlice = {
+  name: string;
+  ciro: number;
+  pct: number;
+  color: string;
+};
+
+export type KomutaMonthlyBar = {
+  yyyymm: string;
+  ay: string;
+  ciro: number;
+  isRamazan: boolean;
+  isCurrent: boolean;
+};
+
+export type KomutaMatrixRow = {
+  grup: string;
+  buAy: number;
+  gecenAy: number;
+  ucAyOnce: number;
+  gecenYil: number;
+  ikiYilOnce: number;
+  yoyPct: number | null;
+  trend: "rocket" | "up" | "flat" | "down";
+};
+
+export type KomutaHeatmapCell = {
+  sehir: string;
+  grup: string;
+  yoyPct: number | null;
+  bucket: "fire" | "hot" | "warm" | "flat" | "cool" | "cold";
+};
+
+export type KomutaHeatmapRow = {
+  sehir: string;
+  noktaSayisi: number;
+  cells: KomutaHeatmapCell[];
+  rowAvgPct: number | null;
+};
+
+export type KomutaRep = {
+  ad: string;
+  distributor: string | null;
+  ciro: number;
+  faturaSayisi: number;
+  rank: number;
+};
+
+export type KomutaPortfolioRow = {
+  grup: string;
+  bu: number;
+  oneYearAgo: number;
+  twoYearsAgo: number;
+  yoyPct: number | null;
+  twoYrPct: number | null;
+};
+
+export type KomutaUpcomingEvent = {
+  name: string;
+  date: string;
+  daysAhead: number;
+  kind: string;
+  yoyImpact?: number;
+};
+
+export type KomutaSnapshot = {
+  generatedAt: string;
+  kpis: KomutaKpiCard[];
+  cities: KomutaCityRow[];
+  channels: KomutaChannelSlice[];
+  monthlyTrend: KomutaMonthlyBar[];
+  upcomingEvent: KomutaUpcomingEvent | null;
+  matrix: KomutaMatrixRow[];
+  heatmap: KomutaHeatmapRow[];
+  reps: KomutaRep[];
+  portfolio: KomutaPortfolioRow[];
+  brief?: string;
+};
+
+export async function getKomutaSnapshot(
+  options: { refresh?: boolean } = {},
+): Promise<KomutaSnapshot> {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request<KomutaSnapshot>(`/api/komuta${qs}`);
+}
+
 export async function getCustomerForesight(
   id: number,
   label: string,

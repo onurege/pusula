@@ -12,3 +12,4 @@ export * from "./radar.js";
 export * from "./map.js";
 export * from "./foresight.js";
 export * from "./cache.js";
+export * from "./komuta.js";
