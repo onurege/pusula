@@ -247,11 +247,20 @@ const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
   "KARADENIZ": { x: 380, y: 105 },
   "DOGU KARADENIZ": { x: 450, y: 105 },
   "BATI KARADENIZ": { x: 290, y: 105 },
-  // Doğu / Güneydoğu
+  // Doğu / Güneydoğu — TR karakter strip sonrası alternatif yazılışlar
   "DOGU": { x: 480, y: 150 },
   "DOGU ANADOLU": { x: 480, y: 150 },
+  "GUNEY DOGU": { x: 425, y: 215 },
+  "GUNEY DOGU ANADOLU": { x: 425, y: 215 },
   "GUNEYDOGU": { x: 425, y: 215 },
   "GUNEYDOGU ANADOLU": { x: 425, y: 215 },
+  // İstanbul varyantları
+  "IST-ASYA": { x: 175, y: 118 },
+  "IST ASYA": { x: 175, y: 118 },
+  "IST-AVRUPA": { x: 130, y: 110 },
+  "IST AVRUPA": { x: 130, y: 110 },
+  "AVRUPA": { x: 130, y: 110 },
+  "ASYA": { x: 175, y: 118 },
   // KKTC
   "KKTC": { x: 290, y: 285 },
   "LEFKOSA": { x: 290, y: 285 },
