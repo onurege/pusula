@@ -1,6 +1,14 @@
 import { withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
 import { generate } from "./gemini.js";
+import {
+  currentYyyymm,
+  getMultiplier,
+  loadInflation,
+  yyyymmDaysAgo,
+  yyyymmYearsAgo,
+  type InflationData,
+} from "./inflation.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -164,6 +172,8 @@ export type KomutaUpcomingEvent = {
 
 export type KomutaSnapshot = {
   generatedAt: string;
+  /** True ise geçmiş değerler bugünün parasına (TÜFE arındırılmış) çevrilmiş. */
+  reelTL: boolean;
   kpis: KomutaKpiCard[];
   regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
@@ -887,12 +897,103 @@ function isEmptySnapshot(s: KomutaSnapshot): boolean {
   );
 }
 
-export async function getKomutaSnapshot(
-  options: { forceRefresh?: boolean } = {},
+/**
+ * Geçmiş değerleri (gecenAy, ucAyOnce, gecenYil, ikiYilOnce, ciroPrev,
+ * portfolio.oneYearAgo, portfolio.twoYearsAgo, monthlyTrend) TÜFE multiplier
+ * ile bugünün parasına çevirir + YoY/2yr%'leri buna göre yeniden hesaplar.
+ *
+ * Nominal değerlerden inflation-adjusted (Reel TL) snapshot üretir.
+ */
+async function applyReelTL(
+  snap: KomutaSnapshot,
+  inflation: InflationData,
 ): Promise<KomutaSnapshot> {
+  const now = currentYyyymm();
+  const mGecenAy = getMultiplier(yyyymmDaysAgo(45), now, inflation);
+  const m3AyOnce = getMultiplier(yyyymmDaysAgo(105), now, inflation);
+  const mGecenYil = getMultiplier(yyyymmYearsAgo(1), now, inflation);
+  const m2YilOnce = getMultiplier(yyyymmYearsAgo(2), now, inflation);
+
+  return {
+    ...snap,
+    reelTL: true,
+    regions: snap.regions.map((r) => {
+      const ciroPrevReel = r.ciroPrev * mGecenYil;
+      return {
+        ...r,
+        ciroPrev: ciroPrevReel,
+        deltaPct: ciroPrevReel > 0 ? ((r.ciro - ciroPrevReel) / ciroPrevReel) * 100 : null,
+      };
+    }),
+    monthlyTrend: snap.monthlyTrend.map((m) => {
+      const mult = getMultiplier(m.yyyymm, now, inflation);
+      return { ...m, ciro: m.ciro * mult };
+    }),
+    matrix: snap.matrix.map((row) => {
+      const buAy = row.buAy;
+      const gecenYil = row.gecenYil * mGecenYil;
+      const yoyPct = gecenYil > 0 ? ((buAy - gecenYil) / gecenYil) * 100 : null;
+      let trend: KomutaMatrixRow["trend"] = "flat";
+      if (yoyPct != null) {
+        if (yoyPct >= 30) trend = "rocket";
+        else if (yoyPct >= 5) trend = "up";
+        else if (yoyPct <= -5) trend = "down";
+      }
+      return {
+        ...row,
+        gecenAy: row.gecenAy * mGecenAy,
+        ucAyOnce: row.ucAyOnce * m3AyOnce,
+        gecenYil,
+        ikiYilOnce: row.ikiYilOnce * m2YilOnce,
+        yoyPct,
+        trend,
+      };
+    }),
+    heatmap: snap.heatmap.map((row) => {
+      const cells = row.cells.map((cell) => {
+        // Heatmap cell yoyPct'i nominal hesaplanmıştı; YoY oranı kendisi reel olmalı.
+        // Çünkü cell yoyPct'i (son - onceki) / onceki ham hesabı; reel'de onceki inflate edilir.
+        if (cell.yoyPct == null) return cell;
+        // YoY = (son - onceki) / onceki
+        // Nominal: y = (s - p) / p → s/p - 1
+        // Reel: y' = (s - p*m) / (p*m) = s/(p*m) - 1
+        // Reel y' = (1 + y) / m - 1
+        const nominalRatio = 1 + cell.yoyPct / 100;
+        const reelYoy = (nominalRatio / mGecenYil - 1) * 100;
+        return {
+          ...cell,
+          yoyPct: reelYoy,
+          bucket: heatmapBucket(reelYoy),
+        };
+      });
+      const valid = cells.filter((c) => c.yoyPct != null);
+      const rowAvg =
+        valid.length > 0
+          ? valid.reduce((a, c) => a + (c.yoyPct ?? 0), 0) / valid.length
+          : null;
+      return { ...row, cells, rowAvgPct: rowAvg };
+    }),
+    portfolio: snap.portfolio.map((p) => {
+      const oneYearReel = p.oneYearAgo * mGecenYil;
+      const twoYearReel = p.twoYearsAgo * m2YilOnce;
+      return {
+        ...p,
+        oneYearAgo: oneYearReel,
+        twoYearsAgo: twoYearReel,
+        yoyPct: oneYearReel > 0 ? ((p.bu - oneYearReel) / oneYearReel) * 100 : null,
+        twoYrPct: twoYearReel > 0 ? ((p.bu - twoYearReel) / twoYearReel) * 100 : null,
+      };
+    }),
+  };
+}
+
+export async function getKomutaSnapshot(
+  options: { forceRefresh?: boolean; reelTL?: boolean } = {},
+): Promise<KomutaSnapshot> {
+  const cacheKey = options.reelTL ? "reel" : "nominal";
   const cached = await withCache<KomutaSnapshot>(
     CACHE_DOMAIN,
-    "default",
+    cacheKey,
     async () => {
       // Tüm sorgular paraleldir; iletim süresi max(her bir sorgu) olur.
       const [kpis, regions, channels, monthlyTrend, upcomingEvent, matrix, heatmap, reps, portfolio] =
@@ -934,6 +1035,7 @@ export async function getKomutaSnapshot(
 
       const partial: Omit<KomutaSnapshot, "brief"> = {
         generatedAt: new Date().toISOString(),
+        reelTL: false,
         kpis,
         regions,
         channels,
@@ -945,7 +1047,12 @@ export async function getKomutaSnapshot(
         portfolio,
       };
       const brief = await fetchBrief(partial);
-      return { ...partial, brief };
+      const nominal: KomutaSnapshot = { ...partial, brief };
+      if (options.reelTL) {
+        const inflation = await loadInflation();
+        return applyReelTL(nominal, inflation);
+      }
+      return nominal;
     },
     { forceRefresh: options.forceRefresh },
   );

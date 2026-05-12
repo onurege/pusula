@@ -21,15 +21,16 @@ export const metadata = {
 };
 
 type Props = {
-  searchParams: Promise<{ refresh?: string }>;
+  searchParams: Promise<{ refresh?: string; reel?: string }>;
 };
 
 export default async function KomutaPage({ searchParams }: Props) {
   const sp = await searchParams;
   const forceRefresh = sp.refresh === "1";
+  const reelTL = sp.reel === "1";
   let snap: KomutaSnapshot;
   try {
-    snap = await getKomutaSnapshot({ refresh: forceRefresh });
+    snap = await getKomutaSnapshot({ refresh: forceRefresh, reelTL });
   } catch {
     notFound();
   }
@@ -40,8 +41,8 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} />
-        <FilterBar />
+        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} />
+        <FilterBar reelTL={snap.reelTL} />
         <KpiStrip kpis={snap.kpis} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
@@ -83,7 +84,7 @@ export default async function KomutaPage({ searchParams }: Props) {
 // Components
 // ============================================================================
 
-function Header({ generatedAt }: { generatedAt: string }) {
+function Header({ generatedAt, reelTL }: { generatedAt: string; reelTL: boolean }) {
   const rel = formatRelative(generatedAt);
   return (
     <div className="header">
@@ -97,14 +98,21 @@ function Header({ generatedAt }: { generatedAt: string }) {
       <div className="breadcrumb">
         <strong>Tüm Distribütörler</strong>
         {"  ›  "}Son 30 Gün
-        {"  ›  "}<span style={{ color: "#d4a857" }}>Tüm Ürünler</span>
+        {"  ›  "}
+        <span style={{ color: "#d4a857" }}>
+          {reelTL ? "Reel TL · TÜFE arındırılmış" : "Nominal TL"}
+        </span>
       </div>
       <div className="header-right">
         <span className="live-indicator">
           <span className="live-dot" />
           Canlı veri · {rel}
         </span>
-        <Link href="/komuta?refresh=1" className="refresh-btn" prefetch={false}>
+        <Link
+          href={reelTL ? "/komuta?refresh=1&reel=1" : "/komuta?refresh=1"}
+          className="refresh-btn"
+          prefetch={false}
+        >
           ↻ Yenile
         </Link>
         <Link href="/" className="back-link">← Pusula</Link>
@@ -113,7 +121,7 @@ function Header({ generatedAt }: { generatedAt: string }) {
   );
 }
 
-function FilterBar() {
+function FilterBar({ reelTL }: { reelTL: boolean }) {
   return (
     <div className="filter-bar">
       <span className="filter-chip active">Bölge: Tümü <span className="caret">▼</span></span>
@@ -123,13 +131,24 @@ function FilterBar() {
       <span className="filter-chip">Karşılaştır: Geçen Yıl Aynı Dönem <span className="caret">▼</span></span>
       <span className="filter-spacer" />
       <div className="toggle-group">
-        <span className="toggle" title="TÜFE arındırma için bir endeks entegrasyonu gerekir — v2'de eklenecek">
+        <Link
+          href={reelTL ? "/komuta" : "/komuta?reel=1"}
+          className={`toggle toggle-link${reelTL ? " on" : ""}`}
+          title="Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir"
+          prefetch={false}
+        >
           <span className="switch" /> Reel TL (TÜFE)
-        </span>
-        <span className="toggle" title="Ürün başına ÖTV oranı master tablosu gerekir — v2'de eklenecek">
+        </Link>
+        <span
+          className="toggle"
+          title="Ürün başına ÖTV oranı master tablosu gerekir — v2'de eklenecek"
+        >
           <span className="switch" /> ÖTV-net görünüm
         </span>
-        <span className="toggle on" title="Takvim hizalı kıyas — calendar/tr-2026.json üzerinden">
+        <span
+          className="toggle on"
+          title="Takvim hizalı kıyas — calendar/tr-2026.json üzerinden"
+        >
           <span className="switch" /> Takvim hizalı
         </span>
       </div>
@@ -1050,6 +1069,8 @@ const KOMUTA_CSS = `
   border-radius: 6px; font-size: 11px; color: #8b949e; cursor: help;
 }
 .komuta-root .toggle.on { background: rgba(212, 168, 87, 0.12); border-color: rgba(212, 168, 87, 0.4); color: #d4a857; }
+.komuta-root .toggle-link { text-decoration: none; cursor: pointer; }
+.komuta-root .toggle-link:hover { border-color: rgba(212, 168, 87, 0.6); }
 .komuta-root .switch { width: 26px; height: 14px; background: #30363d; border-radius: 999px; position: relative; flex-shrink: 0; }
 .komuta-root .switch::after { content: ''; position: absolute; width: 10px; height: 10px; background: #8b949e; border-radius: 50%; top: 2px; left: 2px; transition: 0.2s; }
 .komuta-root .toggle.on .switch { background: #d4a857; }

@@ -13,3 +13,4 @@ export * from "./map.js";
 export * from "./foresight.js";
 export * from "./cache.js";
 export * from "./komuta.js";
+export * from "./inflation.js";

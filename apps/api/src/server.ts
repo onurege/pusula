@@ -409,7 +409,8 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
 app.get("/api/komuta", async (c) => {
   try {
     const forceRefresh = c.req.query("refresh") === "1";
-    const snap = await getKomutaSnapshot({ forceRefresh });
+    const reelTL = c.req.query("reel") === "1";
+    const snap = await getKomutaSnapshot({ forceRefresh, reelTL });
     return c.json(snap);
   } catch (err) {
     console.error("[/api/komuta] failed:", err);

@@ -391,6 +391,7 @@ export type KomutaUpcomingEvent = {
 
 export type KomutaSnapshot = {
   generatedAt: string;
+  reelTL: boolean;
   kpis: KomutaKpiCard[];
   regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
@@ -404,9 +405,12 @@ export type KomutaSnapshot = {
 };
 
 export async function getKomutaSnapshot(
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; reelTL?: boolean } = {},
 ): Promise<KomutaSnapshot> {
-  const qs = options.refresh ? "?refresh=1" : "";
+  const qp = new URLSearchParams();
+  if (options.refresh) qp.set("refresh", "1");
+  if (options.reelTL) qp.set("reel", "1");
+  const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
 }
 
