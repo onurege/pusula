@@ -6,6 +6,7 @@ import {
   Activity,
   AlertTriangle,
   CalendarClock,
+  Compass,
   Database,
   FilePlus2,
   FileText,
@@ -18,6 +19,7 @@ const items = [
   { href: "/map", label: "Harita", icon: Map },
   { href: "/risk", label: "Kayıp Riski", icon: AlertTriangle },
   { href: "/ziyaret", label: "Ziyaret Boşluğu", icon: CalendarClock },
+  { href: "/komuta", label: "Komuta Köprüsü", icon: Compass },
   { href: "/reports", label: "Raporlar", icon: FileText },
   { href: "/reports/new", label: "Yeni rapor", icon: FilePlus2 },
   { href: "/schema", label: "Şema", icon: Database },
@@ -25,6 +27,10 @@ const items = [
 
 export function Navbar() {
   const pathname = usePathname() ?? "/";
+  // Komuta Köprüsü is an immersive executive view — it renders its own dark
+  // command bar at the top. Suppress the global indigo/light navbar so the
+  // page can fill the viewport without visual clash.
+  if (pathname.startsWith("/komuta")) return null;
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
