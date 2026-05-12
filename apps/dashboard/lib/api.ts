@@ -335,8 +335,11 @@ export type KomutaMonthlyBar = {
   isCurrent: boolean;
 };
 
+export type ProductTier = "luxury" | "premium" | "core" | "value";
+
 export type KomutaMatrixRow = {
   grup: string;
+  tier: ProductTier;
   buAy: number;
   gecenAy: number;
   ucAyOnce: number;
@@ -370,6 +373,7 @@ export type KomutaRep = {
 
 export type KomutaPortfolioRow = {
   grup: string;
+  tier: ProductTier;
   bu: number;
   oneYearAgo: number;
   twoYearsAgo: number;

@@ -21,6 +21,61 @@ import { generate } from "./gemini.js";
 
 const CACHE_DOMAIN = "komuta";
 
+// ---------------------------------------------------------------------------
+// Product tier classifier (data/brands/tier-classification.json'dan)
+// ---------------------------------------------------------------------------
+
+type TierMaster = {
+  tiers: Partial<Record<"luxury" | "premium" | "core", string[]>>;
+};
+
+let tierMasterCache: TierMaster | null = null;
+
+async function loadTierMaster(): Promise<TierMaster> {
+  if (tierMasterCache) return tierMasterCache;
+  try {
+    const path = await import("node:path");
+    const fs = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const repoRoot = path.resolve(__dirname, "../../..");
+    const raw = await fs.readFile(
+      path.join(repoRoot, "data/brands/tier-classification.json"),
+      "utf-8",
+    );
+    tierMasterCache = JSON.parse(raw) as TierMaster;
+  } catch (err) {
+    console.warn("[komuta] tier master yüklenemedi, varsayılan 'value':", err);
+    tierMasterCache = { tiers: {} };
+  }
+  return tierMasterCache;
+}
+
+/**
+ * Ürün grubu / ürün adından tier sınıflandırır.
+ * Lüks > Premium > Core sırasında kontrol; eşleşme bulunmazsa 'value'.
+ *
+ * Eşleşme substring (case-insensitive, Türkçe karakter dönüşümlü).
+ */
+export function classifyTier(name: string, master: TierMaster): ProductTier {
+  if (!name) return "value";
+  const upper = trUpper(name);
+  for (const tier of ["luxury", "premium", "core"] as const) {
+    const patterns = master.tiers[tier] ?? [];
+    for (const p of patterns) {
+      if (upper.includes(trUpper(p))) return tier;
+    }
+  }
+  return "value";
+}
+
+function trUpper(s: string): string {
+  return s
+    .replace(/i/g, "İ")
+    .replace(/ı/g, "I")
+    .toUpperCase();
+}
+
 export type KomutaKpiCard = {
   id: string;
   label: string;
@@ -53,8 +108,11 @@ export type KomutaMonthlyBar = {
   isCurrent: boolean;
 };
 
+export type ProductTier = "luxury" | "premium" | "core" | "value";
+
 export type KomutaMatrixRow = {
   grup: string;
+  tier: ProductTier;
   buAy: number;
   gecenAy: number;
   ucAyOnce: number;
@@ -88,6 +146,7 @@ export type KomutaRep = {
 
 export type KomutaPortfolioRow = {
   grup: string;
+  tier: ProductTier;
   bu: number;
   oneYearAgo: number;
   twoYearsAgo: number;
@@ -481,7 +540,9 @@ async function fetchMatrix(): Promise<KomutaMatrixRow[]> {
     ORDER BY gr.ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 10, timeoutMs: 90_000 });
+  const tierMaster = await loadTierMaster();
   return out.rows.map((r) => {
+    const grup = String(r.grup ?? "");
     const bu = Number(r.bu_ay ?? 0);
     const gecenYil = Number(r.gecen_yil ?? 0);
     const yoyPct = gecenYil > 0 ? ((bu - gecenYil) / gecenYil) * 100 : null;
@@ -492,7 +553,8 @@ async function fetchMatrix(): Promise<KomutaMatrixRow[]> {
       else if (yoyPct <= -5) trend = "down";
     }
     return {
-      grup: String(r.grup ?? ""),
+      grup,
+      tier: classifyTier(grup, tierMaster),
       buAy: bu,
       gecenAy: Number(r.gecen_ay ?? 0),
       ucAyOnce: Number(r.uc_ay_once ?? 0),
@@ -710,12 +772,15 @@ async function fetchPortfolio(): Promise<KomutaPortfolioRow[]> {
     ORDER BY t.ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 15, timeoutMs: 90_000 });
+  const tierMaster = await loadTierMaster();
   return out.rows.map((r) => {
+    const grup = String(r.grup ?? "");
     const bu = Number(r.bu ?? 0);
     const oneY = Number(r.one_y ?? 0);
     const twoY = Number(r.two_y ?? 0);
     return {
-      grup: String(r.grup ?? ""),
+      grup,
+      tier: classifyTier(grup, tierMaster),
       bu,
       oneYearAgo: oneY,
       twoYearsAgo: twoY,

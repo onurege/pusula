@@ -11,6 +11,7 @@ import type {
   KomutaRep,
   KomutaSnapshot,
   KomutaUpcomingEvent,
+  ProductTier,
 } from "@/lib/api";
 import { getKomutaSnapshot } from "@/lib/api";
 
@@ -502,7 +503,10 @@ function MatrixPanel({ matrix }: { matrix: KomutaMatrixRow[] }) {
           <tbody>
             {matrix.map((row) => (
               <tr key={row.grup}>
-                <td title={row.grup}>{truncate(row.grup, 28)}</td>
+                <td title={row.grup}>
+                  {truncate(row.grup, 28)}
+                  <TierBadge tier={row.tier} />
+                </td>
                 <td className="matrix-cell-current">{formatCompact(row.buAy)} ₺</td>
                 <td>{formatCompact(row.gecenAy)} ₺</td>
                 <td>{formatCompact(row.ucAyOnce)} ₺</td>
@@ -645,7 +649,10 @@ function PortfolioPanel({ portfolio }: { portfolio: KomutaPortfolioRow[] }) {
               const declining = p.yoyPct != null && p.yoyPct < 0;
               return (
                 <tr key={p.grup}>
-                  <td title={p.grup}>{truncate(p.grup, 26)}</td>
+                  <td title={p.grup}>
+                    {truncate(p.grup, 26)}
+                    <TierBadge tier={p.tier} />
+                  </td>
                   <td className="current">{formatCompact(p.bu)} ₺</td>
                   <td className="right">{formatCompact(p.oneYearAgo)} ₺</td>
                   <td className="right">{formatCompact(p.twoYearsAgo)} ₺</td>
@@ -734,6 +741,12 @@ function trendEmoji(t: KomutaMatrixRow["trend"]): string {
   if (t === "up") return "📈";
   if (t === "down") return "📉";
   return "📊";
+}
+
+function TierBadge({ tier }: { tier: ProductTier }) {
+  if (tier === "value") return null;
+  const label = tier === "luxury" ? "LUX" : tier === "premium" ? "PREM" : "CORE";
+  return <span className={`tier-badge tier-${tier}`}>{label}</span>;
 }
 
 function formatRelative(iso: string): string {
@@ -1028,6 +1041,29 @@ const KOMUTA_CSS = `
 .komuta-root .bp-2yspark .bar { width: 4px; background: #d4a857; border-radius: 1px; opacity: 0.7; }
 .komuta-root .bp-2yspark .bar.last { opacity: 1; background: linear-gradient(180deg, #f0c674, #d4a857); }
 .komuta-root .bp-2yspark .bar.last.declining { background: linear-gradient(180deg, #f85149, #da3633); }
+
+/* TIER BADGES (PREM / LUX / CORE) */
+.komuta-root .tier-badge {
+  display: inline-block; font-size: 9px; padding: 1px 5px; border-radius: 3px;
+  margin-left: 6px; vertical-align: middle; font-weight: 600;
+  letter-spacing: 0.3px; text-transform: uppercase;
+  border: 1px solid;
+}
+.komuta-root .tier-luxury {
+  background: rgba(192, 132, 252, 0.12);
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.35);
+}
+.komuta-root .tier-premium {
+  background: rgba(212, 168, 87, 0.15);
+  color: #d4a857;
+  border-color: rgba(212, 168, 87, 0.35);
+}
+.komuta-root .tier-core {
+  background: rgba(88, 166, 255, 0.12);
+  color: #58a6ff;
+  border-color: rgba(88, 166, 255, 0.3);
+}
 
 /* AI INSIGHT */
 .komuta-root .ai-insight {
