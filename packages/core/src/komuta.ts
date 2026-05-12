@@ -793,6 +793,21 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
 // Orchestrator
 // ---------------------------------------------------------------------------
 
+/**
+ * Detects a fundamentally-empty snapshot — most/all SQL fetchers failed.
+ * Used to skip caching so the next load triggers a fresh attempt instead
+ * of serving stale emptiness.
+ */
+function isEmptySnapshot(s: KomutaSnapshot): boolean {
+  return (
+    s.kpis.length === 0 &&
+    s.cities.length === 0 &&
+    s.matrix.length === 0 &&
+    s.reps.length === 0 &&
+    s.portfolio.length === 0
+  );
+}
+
 export async function getKomutaSnapshot(
   options: { forceRefresh?: boolean } = {},
 ): Promise<KomutaSnapshot> {
@@ -855,6 +870,13 @@ export async function getKomutaSnapshot(
     },
     { forceRefresh: options.forceRefresh },
   );
+  // Eğer cache'ten dönen snapshot temel olarak boşsa (tüm SQL'ler initial
+  // attempt'te başarısız olmuş ve yanlışlıkla cache'lenmiş), bir kez daha
+  // dene — bu sefer bypass ile.
+  if (isEmptySnapshot(cached.value) && !options.forceRefresh) {
+    console.warn("[komuta] cached snapshot is empty, retrying with refresh");
+    return getKomutaSnapshot({ forceRefresh: true });
+  }
   return cached.value;
 }
 

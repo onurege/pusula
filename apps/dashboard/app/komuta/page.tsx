@@ -19,10 +19,16 @@ export const metadata = {
   title: "Komuta Köprüsü · UNIQUE AI Reports",
 };
 
-export default async function KomutaPage() {
+type Props = {
+  searchParams: Promise<{ refresh?: string }>;
+};
+
+export default async function KomutaPage({ searchParams }: Props) {
+  const sp = await searchParams;
+  const forceRefresh = sp.refresh === "1";
   let snap: KomutaSnapshot;
   try {
-    snap = await getKomutaSnapshot();
+    snap = await getKomutaSnapshot({ refresh: forceRefresh });
   } catch {
     notFound();
   }
@@ -97,6 +103,9 @@ function Header({ generatedAt }: { generatedAt: string }) {
           <span className="live-dot" />
           Canlı veri · {rel}
         </span>
+        <Link href="/komuta?refresh=1" className="refresh-btn" prefetch={false}>
+          ↻ Yenile
+        </Link>
         <Link href="/" className="back-link">← Pusula</Link>
       </div>
     </div>
@@ -781,6 +790,14 @@ const KOMUTA_CSS = `
 .komuta-root .live-dot { width: 6px; height: 6px; background: #3fb950; border-radius: 50%; animation: komuta-pulse 2s infinite; }
 .komuta-root .back-link { color: #8b949e; text-decoration: none; font-size: 11px; }
 .komuta-root .back-link:hover { color: #d4a857; }
+.komuta-root .refresh-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 4px 10px; background: rgba(212, 168, 87, 0.12);
+  border: 1px solid rgba(212, 168, 87, 0.3); border-radius: 6px;
+  font-size: 11px; color: #d4a857; text-decoration: none;
+  cursor: pointer;
+}
+.komuta-root .refresh-btn:hover { background: rgba(212, 168, 87, 0.2); }
 @keyframes komuta-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* FILTER BAR */
