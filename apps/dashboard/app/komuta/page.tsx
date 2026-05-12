@@ -218,16 +218,16 @@ function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
  * yok. Anahtar normalize-uppercase (TR I→I, Ş→S, vs.).
  */
 const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
-  // İstanbul ve çevresi — sol üst köşeye taşındı
-  "ISTANBUL": { x: 130, y: 100 },
-  "ISTANBUL AVRUPA": { x: 110, y: 95 },
-  "ISTANBUL ANADOLU": { x: 150, y: 100 },
-  "ISTANBUL 1": { x: 110, y: 95 },
-  "ISTANBUL 2": { x: 150, y: 100 },
-  // Marmara — Istanbul'un peşinde (biraz sağ ve aşağı)
-  "MARMARA": { x: 195, y: 120 },
-  "TRAKYA": { x: 90, y: 100 },
-  "BURSA": { x: 175, y: 140 },
+  // İstanbul ve çevresi — sol üst köşede, üst üste binmemek için biraz açıldı
+  "ISTANBUL": { x: 120, y: 100 },
+  "ISTANBUL AVRUPA": { x: 95, y: 100 },
+  "ISTANBUL ANADOLU": { x: 155, y: 110 },
+  "ISTANBUL 1": { x: 95, y: 100 },
+  "ISTANBUL 2": { x: 155, y: 110 },
+  // Marmara — Istanbul'un sağı/altı, ayrı bir blob hissi
+  "MARMARA": { x: 220, y: 130 },
+  "TRAKYA": { x: 80, y: 95 },
+  "BURSA": { x: 175, y: 145 },
   // Ege
   "EGE": { x: 115, y: 180 },
   "IZMIR": { x: 105, y: 180 },
@@ -256,17 +256,18 @@ const REGION_POSITIONS: Record<string, { x: number; y: number }> = {
   "GUNEYDOGU": { x: 425, y: 215 },
   "GUNEYDOGU ANADOLU": { x: 425, y: 215 },
   // İstanbul varyantları (DB'de IST-AVRUPA, IST-ASYA, AVRUPA gibi gelebilir)
-  "IST-ASYA": { x: 150, y: 100 },
-  "IST ASYA": { x: 150, y: 100 },
-  "IST-AVRUPA": { x: 110, y: 95 },
-  "IST AVRUPA": { x: 110, y: 95 },
-  "AVRUPA": { x: 110, y: 95 },
-  "ASYA": { x: 150, y: 100 },
-  // KKTC
-  "KKTC": { x: 290, y: 285 },
-  "LEFKOSA": { x: 290, y: 285 },
-  "GAZIMAGUSA": { x: 290, y: 285 },
-  "KIBRIS": { x: 290, y: 285 },
+  "IST-ASYA": { x: 155, y: 110 },
+  "IST ASYA": { x: 155, y: 110 },
+  "IST-AVRUPA": { x: 95, y: 100 },
+  "IST AVRUPA": { x: 95, y: 100 },
+  "AVRUPA": { x: 95, y: 100 },
+  "ASYA": { x: 155, y: 110 },
+  "MARMARA (ISTANBUL DISI)": { x: 220, y: 130 },
+  // KKTC — KKTC ve KIBRIS aynı bölge ama ayrı blob'lar olarak stagger
+  "KKTC": { x: 275, y: 285 },
+  "LEFKOSA": { x: 275, y: 285 },
+  "GAZIMAGUSA": { x: 310, y: 285 },
+  "KIBRIS": { x: 310, y: 285 },
 };
 
 function trUpper(s: string): string {
@@ -333,19 +334,23 @@ function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
       <svg className="map-svg" viewBox="0 0 600 320" preserveAspectRatio="xMidYMid meet">
         <defs>
           <radialGradient id="komuta-hot" cx="50%" cy="50%">
-            <stop offset="0%" stopColor="#3fb950" stopOpacity="0.85" />
+            <stop offset="0%" stopColor="#3fb950" stopOpacity="0.55" />
+            <stop offset="60%" stopColor="#3fb950" stopOpacity="0.15" />
             <stop offset="100%" stopColor="#3fb950" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="komuta-medium" cx="50%" cy="50%">
-            <stop offset="0%" stopColor="#d4a857" stopOpacity="0.75" />
+            <stop offset="0%" stopColor="#d4a857" stopOpacity="0.5" />
+            <stop offset="60%" stopColor="#d4a857" stopOpacity="0.12" />
             <stop offset="100%" stopColor="#d4a857" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="komuta-muted" cx="50%" cy="50%">
-            <stop offset="0%" stopColor="#8b949e" stopOpacity="0.5" />
+            <stop offset="0%" stopColor="#8b949e" stopOpacity="0.35" />
+            <stop offset="60%" stopColor="#8b949e" stopOpacity="0.08" />
             <stop offset="100%" stopColor="#8b949e" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="komuta-cool" cx="50%" cy="50%">
-            <stop offset="0%" stopColor="#f85149" stopOpacity="0.65" />
+            <stop offset="0%" stopColor="#f85149" stopOpacity="0.45" />
+            <stop offset="60%" stopColor="#f85149" stopOpacity="0.12" />
             <stop offset="100%" stopColor="#f85149" stopOpacity="0" />
           </radialGradient>
         </defs>
@@ -369,11 +374,13 @@ function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
           .map((c) => {
             const tone = blobTone(c.deltaPct);
             const ratio = Math.sqrt(c.ciro / maxCiro);
-            const blobR = Math.max(12, 14 + ratio * 36);
-            const dotR = c.ciro >= maxCiro * 0.3 ? 5 : 3.5;
+            // Blob: glow halesi küçültüldü (50px → 26px max) — yan yana
+            // bölgelerin renkleri birbirine karışmasın diye.
+            const blobR = Math.max(10, 11 + ratio * 15);
+            const dotR = c.ciro >= maxCiro * 0.3 ? 4.5 : 3;
             const isAnomaly = tone === "cool";
             const fontWeight = c.ciro >= maxCiro * 0.4 ? 600 : 500;
-            const fontSize = c.ciro >= maxCiro * 0.4 ? 11 : 9.5;
+            const fontSize = c.ciro >= maxCiro * 0.4 ? 10.5 : 9;
             const labelColor =
               tone === "hot" ? "#56d364"
                 : tone === "medium" ? "#d4a857"
