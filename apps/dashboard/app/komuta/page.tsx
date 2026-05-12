@@ -420,13 +420,27 @@ function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
       </div>
 
       {unplaced.length > 0 && (
-        <div className="map-unplaced-note">
-          Haritada yer almayan bölgeler:{" "}
-          {unplaced
-            .slice(0, 6)
-            .map((u) => `${u.bolge} (${formatCompact(u.ciro)} ₺)`)
-            .join(" · ")}
-          {unplaced.length > 6 && ` … +${unplaced.length - 6}`}
+        <div className="map-unplaced-pills">
+          <div className="map-unplaced-label">
+            Haritada konumlandırılmamış bölgeler · {unplaced.length}
+          </div>
+          <div className="map-unplaced-row">
+            {unplaced.map((u) => {
+              const tone = blobTone(u.deltaPct);
+              return (
+                <span key={u.bolge} className={`unplaced-pill tone-${tone}`}>
+                  <span className="unplaced-dot" />
+                  <span className="unplaced-name" title={u.bolge}>{u.bolge}</span>
+                  <span className="unplaced-num">{formatCompact(u.ciro)} ₺</span>
+                  {u.deltaPct != null && (
+                    <span className="unplaced-delta">
+                      {u.deltaPct >= 0 ? "+" : ""}%{u.deltaPct.toFixed(0)}
+                    </span>
+                  )}
+                </span>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -1089,10 +1103,57 @@ const KOMUTA_CSS = `
 }
 .komuta-root .map-panel .legend-item { display: flex; align-items: center; gap: 5px; color: #c9d1d9; }
 .komuta-root .map-panel .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
-.komuta-root .map-unplaced-note {
-  margin-top: 12px; padding: 8px 12px;
-  background: rgba(139, 148, 158, 0.05); border: 1px solid #21262d;
-  border-radius: 6px; font-size: 11px; color: #8b949e; line-height: 1.5;
+.komuta-root .map-unplaced-pills {
+  margin-top: 12px; padding: 10px 12px;
+  background: rgba(139, 148, 158, 0.04); border: 1px solid #21262d;
+  border-radius: 6px;
+}
+.komuta-root .map-unplaced-label {
+  font-size: 10px; color: #8b949e; text-transform: uppercase;
+  letter-spacing: 0.6px; font-weight: 600; margin-bottom: 8px;
+}
+.komuta-root .map-unplaced-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.komuta-root .unplaced-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px;
+  background: rgba(13, 17, 23, 0.6); border: 1px solid #30363d;
+  font-size: 11px; color: #c9d1d9;
+  max-width: 100%; min-width: 0;
+}
+.komuta-root .unplaced-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.komuta-root .unplaced-pill.tone-hot .unplaced-dot { background: #3fb950; }
+.komuta-root .unplaced-pill.tone-medium .unplaced-dot { background: #d4a857; }
+.komuta-root .unplaced-pill.tone-muted .unplaced-dot { background: #8b949e; }
+.komuta-root .unplaced-pill.tone-cool .unplaced-dot { background: #f85149; }
+.komuta-root .unplaced-pill.tone-hot { border-color: rgba(63, 185, 80, 0.3); }
+.komuta-root .unplaced-pill.tone-medium { border-color: rgba(212, 168, 87, 0.3); }
+.komuta-root .unplaced-pill.tone-cool { border-color: rgba(248, 81, 73, 0.3); }
+.komuta-root .unplaced-name {
+  font-weight: 500; max-width: 180px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.komuta-root .unplaced-num {
+  color: #e6edf3; font-weight: 600; font-feature-settings: "tnum"; font-size: 10.5px;
+}
+.komuta-root .unplaced-delta {
+  font-feature-settings: "tnum"; font-weight: 600; font-size: 10.5px;
+  padding: 1px 5px; border-radius: 3px;
+}
+.komuta-root .unplaced-pill.tone-hot .unplaced-delta {
+  background: rgba(63, 185, 80, 0.15); color: #56d364;
+}
+.komuta-root .unplaced-pill.tone-medium .unplaced-delta {
+  background: rgba(212, 168, 87, 0.15); color: #d4a857;
+}
+.komuta-root .unplaced-pill.tone-muted .unplaced-delta {
+  background: rgba(139, 148, 158, 0.15); color: #8b949e;
+}
+.komuta-root .unplaced-pill.tone-cool .unplaced-delta {
+  background: rgba(248, 81, 73, 0.15); color: #f85149;
 }
 
 /* DONUT + TREND */
