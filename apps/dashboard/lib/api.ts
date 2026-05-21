@@ -179,7 +179,32 @@ export async function explainOnRadar(
   });
 }
 
+/** @deprecated Eski 4-tier model. Yeni UI `RiskTierV2` kullanır. */
 export type RiskTier = "high" | "medium" | "low" | "active";
+
+/** Composite Risk Score tier'ları (0..100 skoru bucket'lar). */
+export type RiskTierV2 =
+  | "healthy"
+  | "watch"
+  | "risk"
+  | "critical"
+  | "unknown";
+
+export type RiskComponentKey =
+  | "momentum"
+  | "behavioral"
+  | "payment"
+  | "engagement";
+
+export type CustomerRiskScore = {
+  /** 0..100 ya da yetersiz veri için null. */
+  score: number | null;
+  tier: RiskTierV2;
+  /** Her bileşen 0..100 veya hesap edilemediyse null. */
+  components: Record<RiskComponentKey, number | null>;
+  /** UI'da kart altında bullet listesi olarak gösterilen kısa açıklamalar. */
+  reasons: string[];
+};
 
 export type MapCustomer = {
   id: number;
@@ -190,6 +215,7 @@ export type MapCustomer = {
   sehir: string | null;
   ilce: string | null;
   distributor: string | null;
+  bolge: string | null;
   lat: number;
   lng: number;
   hasSales: boolean;
@@ -197,25 +223,78 @@ export type MapCustomer = {
   daysSinceLastVisit: number | null;
   ciro30: number;
   ciroPrev30: number;
+  /** @deprecated Eski 4-tier alan. Yeni UI `riskScore.tier` kullanır. */
   riskTier: RiskTier;
+  /** Composite Risk Score — 0..100 + bileşenler + sebepler. */
+  riskScore: CustomerRiskScore;
 };
 
 export async function listMapCustomers(params: {
   sehir?: string;
   distKod?: number;
+  bolge?: string;
+  region?: string;
   salesFilter?: "with" | "without";
+  /** @deprecated Yeni UI `tier` kullanır. */
   riskTier?: RiskTier;
+  /** Composite Risk Score tier filter. */
+  tier?: RiskTierV2;
   minDaysSinceVisit?: number;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
   if (params.sehir) qp.set("sehir", params.sehir);
   if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
+  if (params.bolge) qp.set("bolge", params.bolge);
+  if (params.region) qp.set("region", params.region);
   if (params.salesFilter) qp.set("salesFilter", params.salesFilter);
   if (params.riskTier) qp.set("riskTier", params.riskTier);
+  if (params.tier) qp.set("tier", params.tier);
   if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
+}
+
+// -- BÖLGE BAZLI GÖRÜNÜM ---------------------------------------------------
+
+export type MapRegion = {
+  bolge: string;
+  musteriSayisi: number;
+  /** @deprecated Eski 4-tier dağılımı. UI cutover sonrası kaldırılır. */
+  high: number;
+  medium: number;
+  active: number;
+  low: number;
+  /** Composite Risk Score tier dağılımı — yeni model. */
+  critical: number;
+  risk: number;
+  watch: number;
+  healthy: number;
+  unknown: number;
+  lat: number;
+  lng: number;
+  ciro30: number;
+  color: string;
+  provinces: string[];
+};
+
+export async function listMapRegions(params: {
+  sehir?: string;
+  distKod?: number;
+  salesFilter?: "with" | "without";
+  /** @deprecated Yeni UI `tier` kullanır. */
+  riskTier?: RiskTier;
+  tier?: RiskTierV2;
+  minDaysSinceVisit?: number;
+} = {}): Promise<{ count: number; regions: MapRegion[] }> {
+  const qp = new URLSearchParams();
+  if (params.sehir) qp.set("sehir", params.sehir);
+  if (typeof params.distKod === "number") qp.set("distKod", String(params.distKod));
+  if (params.salesFilter) qp.set("salesFilter", params.salesFilter);
+  if (params.riskTier) qp.set("riskTier", params.riskTier);
+  if (params.tier) qp.set("tier", params.tier);
+  if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
+  return request(`/api/map/regions?${qp.toString()}`);
 }
 
 export type CustomerSales = {
@@ -314,10 +393,17 @@ export type KomutaKpiCard = {
 };
 
 export type KomutaRegionRow = {
+  /** Klasik 7 bölge + Kıbrıs (Marmara/Ege/Akdeniz/İç Anadolu/Karadeniz/
+   *  Doğu Anadolu/Güneydoğu Anadolu/Kıbrıs) — backend müşteri şehri →
+   *  master JSON ile bu adlardan birine map eder. */
   bolge: string;
   ciro: number;
   ciroPrev: number;
   deltaPct: number | null;
+  /** Master JSON'dan gelen bölge rengi — /map sayfası ile aynı palette. */
+  color: string;
+  /** Bu bölgeye agrege edilen Pernod şehirlerinin listesi (debug/tooltip). */
+  sehirler: string[];
 };
 
 export type KomutaChannelSlice = {
@@ -327,12 +413,21 @@ export type KomutaChannelSlice = {
   color: string;
 };
 
+export type KomutaChannelMonthlyRow = {
+  yyyymm: string;
+  ay: string;
+  kanal: string;
+  ciro: number;
+};
+
 export type KomutaMonthlyBar = {
   yyyymm: string;
   ay: string;
   ciro: number;
+  ciroPrev: number | null;
   isRamazan: boolean;
   isCurrent: boolean;
+  isSummer: boolean;
 };
 
 export type ProductTier = "luxury" | "premium" | "core" | "value";
@@ -371,6 +466,14 @@ export type KomutaRep = {
   rank: number;
 };
 
+export type KomutaTopDist = {
+  ad: string;
+  bolge: string | null;
+  ciro: number;
+  faturaSayisi: number;
+  rank: number;
+};
+
 export type KomutaPortfolioRow = {
   grup: string;
   tier: ProductTier;
@@ -389,32 +492,89 @@ export type KomutaUpcomingEvent = {
   yoyImpact?: number;
 };
 
+/** TL (currency, ₺) ya da 9LE (9-Liter-Equivalent volume). Tüm value alanları
+ *  bu birimde gelir; snapshot.unit alanı UI'da suffix formatlamasını sürer. */
+export type ValueUnit = "tl" | "9le";
+
 export type KomutaSnapshot = {
   generatedAt: string;
   reelTL: boolean;
   otvNet: boolean;
   otvAvgRate: number | null;
+  demoDate: string | null;
+  /** Snapshot'taki tüm value'ların birimi — UI suffix'i bundan beslenir. */
+  unit: ValueUnit;
   kpis: KomutaKpiCard[];
   regions: KomutaRegionRow[];
   channels: KomutaChannelSlice[];
+  channelMonthly: KomutaChannelMonthlyRow[];
+  /** Pernod Müşteri Tipi (TBLMUSTERIEKSAHA saha 8) × 12 ay stacked breakdown. */
+  channelByType: KomutaChannelMonthlyRow[];
   monthlyTrend: KomutaMonthlyBar[];
   upcomingEvent: KomutaUpcomingEvent | null;
   matrix: KomutaMatrixRow[];
   heatmap: KomutaHeatmapRow[];
   reps: KomutaRep[];
+  topDists: KomutaTopDist[];
   portfolio: KomutaPortfolioRow[];
   brief?: string;
 };
 
 export async function getKomutaSnapshot(
-  options: { refresh?: boolean; reelTL?: boolean; otvNet?: boolean } = {},
+  options: {
+    refresh?: boolean;
+    reelTL?: boolean;
+    otvNet?: boolean;
+    unit?: ValueUnit;
+  } = {},
 ): Promise<KomutaSnapshot> {
   const qp = new URLSearchParams();
   if (options.refresh) qp.set("refresh", "1");
   if (options.reelTL) qp.set("reel", "1");
   if (options.otvNet) qp.set("otv", "1");
+  if (options.unit === "9le") qp.set("unit", "9le");
   const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
+}
+
+// -- FINANS AGENTı ---------------------------------------------------------
+
+export type FinanceFactor = {
+  ad: string;
+  buDonem: number;
+  gecenYil: number;
+  delta: number;
+  yoyPct: number | null;
+  contributionPct: number;
+};
+
+export type FinanceFacts = {
+  region: string;
+  buDonem: number;
+  gecenYil: number;
+  delta: number;
+  yoyPct: number | null;
+  distFactors: FinanceFactor[];
+  channelFactors: FinanceFactor[];
+  productFactors: FinanceFactor[];
+  customers: { aktifBu: number; aktifGecen: number; kaybedilen: number };
+};
+
+export type FinanceAnalysis = {
+  region: string;
+  generatedAt: string;
+  facts: FinanceFacts;
+  markdown: string;
+};
+
+export async function getFinanceAnalysis(
+  region: string,
+  options: { refresh?: boolean } = {},
+): Promise<FinanceAnalysis> {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request<FinanceAnalysis>(
+    `/api/komuta/finance/${encodeURIComponent(region)}${qs}`,
+  );
 }
 
 export async function getCustomerForesight(

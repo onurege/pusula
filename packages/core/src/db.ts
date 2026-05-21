@@ -1,4 +1,5 @@
 import sql from "mssql";
+import { sqlNow, isDemoMode } from "./now.js";
 
 let pool: sql.ConnectionPool | null = null;
 
@@ -86,11 +87,25 @@ export type RunResult = {
   durationMs: number;
 };
 
+/**
+ * Demo modunda SQL içindeki `GETDATE()` literalini sabit demo tarihiyle
+ * değiştirir. Böylece Gemini'nin ürettiği SQL'ler dahil her sorgu otomatik
+ * olarak demo "bugün"e bağlanır. Canlıda no-op (string olduğu gibi döner).
+ *
+ * Kelime sınırı (\b) ile sadece `GETDATE()` çağrısını yakalar, false-positive
+ * yapmamak için açılış parantezi de zorunlu.
+ */
+function applyDemoDate(query: string): string {
+  if (!isDemoMode()) return query;
+  return query.replace(/\bGETDATE\s*\(\s*\)/gi, sqlNow());
+}
+
 export async function runReadOnly(
   query: string,
   options: RunOptions = {},
 ): Promise<RunResult> {
   assertReadOnly(query);
+  const finalQuery = applyDemoDate(query);
   const limit = options.limit ?? 1000;
   const timeoutMs = options.timeoutMs ?? 30_000;
 
@@ -100,7 +115,7 @@ export async function runReadOnly(
   (request as unknown as { timeout: number }).timeout = timeoutMs;
 
   const started = Date.now();
-  const result = await request.query(query);
+  const result = await request.query(finalQuery);
   const durationMs = Date.now() - started;
 
   const all = (result.recordset ?? []) as Record<string, unknown>[];

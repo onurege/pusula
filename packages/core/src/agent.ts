@@ -75,9 +75,11 @@ UNIVERA KURALLARI (her sorguda uygula):
    -- ürün grubunun adı: g.TXTAD
    \`\`\`
 7. **TBLMSDBELGEDETAY tutar kolonları:** \`DBLFATURANETFIYAT\` YOKTUR.
-   Mevcut olanlar: \`DBLNETFIYAT\` (iskontolu birim fiyat), \`DBLBIRIMFIYAT\`
-   (ham birim fiyat), \`DBLMIKTAR\`. Ürün bazlı ciro:
-   \`SUM(TBLMSDBELGEDETAY.DBLNETFIYAT * TBLMSDBELGEDETAY.DBLMIKTAR)\`.
+   Mevcut olanlar: \`DBLNETFIYAT\` (satır net toplamı — iskonto/KDV/ÖTV
+   sonrası, miktar HARİÇ değil DAHİL), \`DBLBIRIMFIYAT\` (birim brüt fiyat),
+   \`DBLMIKTAR\` (adet). Ürün bazlı NET ciro: \`SUM(DBLNETFIYAT)\` (zaten
+   satır toplamı — miktarla çarpma! brüt ciro için \`SUM(DBLBIRIMFIYAT *
+   DBLMIKTAR)\` kullan).
 
 HAZIR SORGU TARİFLERİ (kullanıcı talebine göre uyarla, kolon adlarını
 değiştirme):
@@ -86,7 +88,7 @@ A) Müşterinin son N gün **ürün grubu kırılımı**:
    \`\`\`sql
    SELECT TOP 5
      g.TXTAD AS UrunGrubu,
-     SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS Ciro,
+     SUM(d.DBLNETFIYAT) AS Ciro,
      SUM(d.DBLMIKTAR) AS Miktar
    FROM dbo.TBLMSDFATURA f
    INNER JOIN dbo.TBLMSDBELGEDETAY d

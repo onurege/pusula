@@ -1,6 +1,7 @@
 import { runReadOnly } from "./db.js";
 import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
+import { loadRegionMaster, normalizeProvince } from "./tr-regions.js";
 
 export type RiskTier = "high" | "medium" | "low" | "active";
 
@@ -13,6 +14,9 @@ export type MapCustomer = {
   sehir: string | null;
   ilce: string | null;
   distributor: string | null;
+  /** Bölge — TBLDISTGRUP.TXTAD üzerinden distribütörden türetilir. Sync
+   *  sırasında doldurulur; region-bazlı harita görünümünde kullanılır. */
+  bolge: string | null;
   lat: number;
   lng: number;
   /** True if this customer has at least one approved sales invoice in the
@@ -25,8 +29,12 @@ export type MapCustomer = {
   /** 30-day ciro and the prior 30-day ciro — feed momentum view. */
   ciro30: number;
   ciroPrev30: number;
-  /** Risk tier computed at sync time. See computeRiskTier(). */
+  /** @deprecated Tek-tier eski model. Yeni UI `riskScore.tier` kullanır.
+   *  Sync hâlâ doldurur; geriye dönük uyumluluk için bir süre kalır. */
   riskTier: RiskTier;
+  /** Composite Risk Score (0..100) + bileşen kırılımı + sebepler.
+   *  Sync zamanı `computeCustomerRiskScore` ile hesaplanır. */
+  riskScore: CustomerRiskScore;
 };
 
 /**
@@ -130,14 +138,385 @@ export function describeRiskReason(input: {
   return "Düşük öncelik";
 }
 
+// ---------------------------------------------------------------------------
+// Composite Risk Score (yeni model — 0..100, 4 bileşenli, açıklanabilir)
+// ---------------------------------------------------------------------------
+//
+// Eski `riskTier` tek bir eşik zincirine dayanıyordu; yeni model her müşteriye
+// ayrıştırılabilir bir 0..100 skor + bileşen kırılımı + kullanıcıya gösterilen
+// kısa sebep listesi üretir. Dış sinyal yok; tüm girdiler mevcut MSSQL'den
+// (sync zamanı toplanan) read-only verilerden.
+//
+// Bileşen ağırlıkları:
+//   momentum 0.40, behavioral 0.30, payment 0.20, engagement 0.10
+//
+// MVP-B (mevcut durum): `payment = null`. Üç bileşen üzerinden normalize
+// edilir (toplam ağırlık 0.80'e bölünüp 100'e ölçeklenir). Kullanıcıya
+// reason'da açıkça belirtilir.
+
+export type RiskTierV2 =
+  | "healthy"
+  | "watch"
+  | "risk"
+  | "critical"
+  | "unknown";
+
+export type RiskComponentKey =
+  | "momentum"
+  | "behavioral"
+  | "payment"
+  | "engagement";
+
+export type CustomerRiskScore = {
+  /** 0..100 ya da yetersiz veri için null. */
+  score: number | null;
+  tier: RiskTierV2;
+  /** Her bileşen 0..100 veya hesap edilemediyse null. */
+  components: Record<RiskComponentKey, number | null>;
+  /** UI'da kart altında bullet listesi olarak gösterilen kısa açıklamalar. */
+  reasons: string[];
+};
+
+export type CustomerRiskScoreInput = {
+  daysSinceLastSale: number | null;
+  daysSinceLastVisit: number | null;
+  ciro30: number;
+  ciroPrev30: number;
+  /** Son 90 günün toplam cirosu (3 ile bölünüp aylık baseline elde edilir). */
+  ciroT90: number;
+  /** -395..-365g penceresi (geçen yıl aynı 30g). */
+  ciroYoy30d: number;
+  fatura30: number;
+  faturaPrev30: number;
+  faturaT90: number;
+  /** Son 30g distinct ürün grubu sayısı (sepet çeşitliliği). */
+  urunGrup30: number;
+  /** -60..-30g penceresi için aynı sinyal. */
+  urunGrupPrev30: number;
+  /** Son 90 gündeki ziyaret sayısı — beklenen cadence'i türetir. */
+  ziyaret90: number;
+};
+
+/** Baseline cironun "anlamlı" sayılması için minimum eşik. Altındaki değerler
+ *  "no signal" — yeni müşteri / dormant olduğu için skoru bozmamalı. */
+const RISK_BASELINE_MIN = 1000; // TL
+
+const RISK_WEIGHTS: Record<RiskComponentKey, number> = {
+  momentum: 0.40,
+  behavioral: 0.30,
+  payment: 0.20,
+  engagement: 0.10,
+};
+
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function linearMap(
+  x: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+): number {
+  if (x1 === x0) return y0;
+  return y0 + ((y1 - y0) * (x - x0)) / (x1 - x0);
+}
+
+function fmtTl(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M ₺`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)}K ₺`;
+  return `${Math.round(n)} ₺`;
+}
+
+function computeMomentum(input: CustomerRiskScoreInput): number | null {
+  const { ciro30, ciroPrev30, ciroT90, ciroYoy30d, daysSinceLastSale } = input;
+  const t90Monthly = ciroT90 / 3;
+
+  const hasPrev = ciroPrev30 >= RISK_BASELINE_MIN;
+  const hasT90 = t90Monthly >= RISK_BASELINE_MIN;
+  const hasYoy = ciroYoy30d >= RISK_BASELINE_MIN;
+  const hasCiro30 = ciro30 >= RISK_BASELINE_MIN;
+
+  if (!hasPrev && !hasT90 && !hasYoy && !hasCiro30) return null;
+  // Sağlam ciro var ama hiç baseline yok → yeni-ve-sağlıklı müşteri
+  if (!hasPrev && !hasT90 && !hasYoy) return 0;
+
+  // Mevcut baseline'lardan ağırlıklı ortalama "ciro düşüş oranı" (0..1)
+  const parts: Array<[number, number]> = [];
+  if (hasPrev) {
+    const drop = Math.max(0, (ciroPrev30 - ciro30) / Math.max(ciroPrev30, 1));
+    parts.push([drop, 0.45]);
+  }
+  if (hasT90) {
+    const drop = Math.max(0, (t90Monthly - ciro30) / Math.max(t90Monthly, 1));
+    parts.push([drop, 0.35]);
+  }
+  if (hasYoy) {
+    const drop = Math.max(0, (ciroYoy30d - ciro30) / Math.max(ciroYoy30d, 1));
+    parts.push([drop, 0.20]);
+  }
+  const wSum = parts.reduce((a, [, w]) => a + w, 0);
+  const rawDrop = parts.reduce((a, [v, w]) => a + v * w, 0) / wSum;
+
+  // Sessizlik factor'u — uzun sessizlik düşüşü amplify eder (max 1.5x)
+  const silence = clamp((daysSinceLastSale ?? 0) / 60, 0, 1.5);
+  return clamp(100 * rawDrop * (0.6 + 0.4 * silence), 0, 100);
+}
+
+function computeBehavioral(input: CustomerRiskScoreInput): number | null {
+  const { daysSinceLastSale, fatura30, faturaPrev30, urunGrup30, urunGrupPrev30 } =
+    input;
+
+  // (A) Sessizlik bileşeni — her zaman üretilebilir
+  let silenceC: number;
+  if (daysSinceLastSale === null) {
+    silenceC = 100; // hiç sipariş kaydı yok
+  } else if (daysSinceLastSale < 14) {
+    silenceC = 0;
+  } else if (daysSinceLastSale < 30) {
+    silenceC = linearMap(daysSinceLastSale, 14, 30, 0, 40);
+  } else if (daysSinceLastSale < 60) {
+    silenceC = linearMap(daysSinceLastSale, 30, 60, 40, 75);
+  } else if (daysSinceLastSale < 120) {
+    silenceC = linearMap(daysSinceLastSale, 60, 120, 75, 95);
+  } else {
+    silenceC = 100;
+  }
+
+  // (B) Sipariş frekansı düşüşü
+  const freqDrop =
+    faturaPrev30 > 0
+      ? clamp(1 - fatura30 / faturaPrev30, 0, 1) * 100
+      : fatura30 > 0
+        ? 0
+        : null;
+
+  // (C) Sepet daralması (kategori çeşitliliği düşüşü)
+  const basketShrink =
+    urunGrupPrev30 > 0
+      ? clamp(1 - urunGrup30 / urunGrupPrev30, 0, 1) * 100
+      : null;
+
+  const parts: Array<[number, number]> = [[silenceC, 0.50]];
+  if (freqDrop !== null) parts.push([freqDrop, 0.30]);
+  if (basketShrink !== null) parts.push([basketShrink, 0.20]);
+  const wSum = parts.reduce((a, [, w]) => a + w, 0);
+  return parts.reduce((a, [v, w]) => a + v * w, 0) / wSum;
+}
+
+function computeEngagement(input: CustomerRiskScoreInput): number | null {
+  const { daysSinceLastVisit, ziyaret90, fatura30 } = input;
+  if (daysSinceLastVisit === null) {
+    // Hiç ziyaret yok — sağlam satış varsa anomali (70), yoksa sinyal yok
+    return fatura30 > 0 ? 70 : null;
+  }
+  // Müşterinin beklenen ritmi — son 90g'de kaç ziyaret olduğuna göre adapte
+  const expectedCadence = ziyaret90 >= 6 ? 15 : ziyaret90 >= 3 ? 30 : 60;
+  const lag = daysSinceLastVisit / expectedCadence;
+  if (lag <= 1.0) return 0;
+  if (lag <= 1.5) return linearMap(lag, 1.0, 1.5, 0, 30);
+  if (lag <= 2.5) return linearMap(lag, 1.5, 2.5, 30, 70);
+  if (lag <= 4.0) return linearMap(lag, 2.5, 4.0, 70, 95);
+  return 100;
+}
+
+function tierForScore(score: number): RiskTierV2 {
+  if (score < 30) return "healthy";
+  if (score < 55) return "watch";
+  if (score < 75) return "risk";
+  return "critical";
+}
+
+/**
+ * Müşterinin 0..100 kompozit risk skoru + bileşen kırılımı + sebep listesi.
+ * Saf fonksiyon — sync zamanı tek pas hesaplanır, sonuçlar SQLite'a yazılır.
+ *
+ * `payment` MVP'de daima null (Univera'da güvenilir vade/bakiye sinyali yok);
+ * mevcut bileşenler kalan ağırlıkla normalize edilir.
+ *
+ * Tarihsel sinyal yoksa (hiç sipariş, hiç ziyaret, hiç ciro) `unknown` tier
+ * döner — bu müşteriyi otomatik kritik göstermek yerine "yetersiz veri"
+ * etiketi ile UI'da gri kalır.
+ */
+export function computeCustomerRiskScore(
+  input: CustomerRiskScoreInput,
+): CustomerRiskScore {
+  // Global "hiç sinyal yok" kapısı. Dormant / hiç onboard edilmemiş müşteriler
+  // (TEST kayıtları, eski tabelalar) bu kapıdan unknown'a düşer — eğer geçmiş
+  // bir aktivite işareti varsa (eski satış, eski ziyaret, T90 cirosu) hesaba
+  // gireriz.
+  const hasAnyHistory =
+    input.daysSinceLastSale !== null ||
+    input.daysSinceLastVisit !== null ||
+    input.ciroT90 > 0 ||
+    input.ciroYoy30d > 0 ||
+    input.faturaT90 > 0 ||
+    input.ziyaret90 > 0;
+
+  if (!hasAnyHistory) {
+    return {
+      score: null,
+      tier: "unknown",
+      components: {
+        momentum: null,
+        behavioral: null,
+        payment: null,
+        engagement: null,
+      },
+      reasons: [
+        "Bu müşteri için yeterli geçmiş yok — son satış, son ziyaret veya 90g ciro kaydı bulunamadı.",
+      ],
+    };
+  }
+
+  const components: Record<RiskComponentKey, number | null> = {
+    momentum: computeMomentum(input),
+    behavioral: computeBehavioral(input),
+    payment: null, // MVP-B
+    engagement: computeEngagement(input),
+  };
+
+  const presentKeys = (Object.keys(components) as RiskComponentKey[]).filter(
+    (k) => components[k] !== null,
+  );
+  const wSum = presentKeys.reduce((a, k) => a + RISK_WEIGHTS[k], 0);
+
+  if (wSum === 0) {
+    return {
+      score: null,
+      tier: "unknown",
+      components,
+      reasons: ["Yeterli veri yok — skor hesaplanamadı."],
+    };
+  }
+
+  const weighted = presentKeys.reduce(
+    (a, k) => a + RISK_WEIGHTS[k] * (components[k] as number),
+    0,
+  );
+  const score = Math.round(weighted / wSum);
+  return {
+    score,
+    tier: tierForScore(score),
+    components,
+    reasons: buildRiskReasons(input, components),
+  };
+}
+
+function buildRiskReasons(
+  input: CustomerRiskScoreInput,
+  components: Record<RiskComponentKey, number | null>,
+): string[] {
+  // Bileşenleri katkı büyüklüğüne göre sırala (weight × value), payment hariç
+  const contribs = (Object.keys(components) as RiskComponentKey[])
+    .filter((k) => k !== "payment" && components[k] !== null)
+    .map((k) => ({
+      k,
+      contrib: RISK_WEIGHTS[k] * (components[k] as number),
+    }))
+    .sort((a, b) => b.contrib - a.contrib);
+
+  const reasons: string[] = [];
+  for (const { k } of contribs.slice(0, 3)) {
+    const r = reasonForComponent(k, input);
+    if (r) reasons.push(r);
+  }
+
+  // MVP-B notu — her zaman ekle ki kullanıcı eksik bileşeni bilsin
+  reasons.push(
+    "Ödeme/vade verisi mevcut değil — skor satış, davranış ve etkileşim ile hesaplandı.",
+  );
+  return reasons;
+}
+
+function reasonForComponent(
+  k: RiskComponentKey,
+  input: CustomerRiskScoreInput,
+): string | null {
+  switch (k) {
+    case "momentum": {
+      const { ciro30, ciroPrev30, ciroT90, ciroYoy30d } = input;
+      const t90Monthly = ciroT90 / 3;
+      const candidates: Array<{ label: string; drop: number; base: number }> = [];
+      if (ciroPrev30 >= RISK_BASELINE_MIN) {
+        candidates.push({
+          label: "önceki 30g",
+          drop: (ciroPrev30 - ciro30) / Math.max(ciroPrev30, 1),
+          base: ciroPrev30,
+        });
+      }
+      if (t90Monthly >= RISK_BASELINE_MIN) {
+        candidates.push({
+          label: "90g aylık baseline",
+          drop: (t90Monthly - ciro30) / Math.max(t90Monthly, 1),
+          base: t90Monthly,
+        });
+      }
+      if (ciroYoy30d >= RISK_BASELINE_MIN) {
+        candidates.push({
+          label: "geçen yıl aynı dönem",
+          drop: (ciroYoy30d - ciro30) / Math.max(ciroYoy30d, 1),
+          base: ciroYoy30d,
+        });
+      }
+      const meaningful = candidates
+        .filter((c) => c.drop > 0.1)
+        .sort((a, b) => b.drop - a.drop);
+      const top = meaningful[0];
+      if (!top) return null;
+      return `Son 30g ciro ${top.label}'a göre %${Math.round(top.drop * 100)} düştü (${fmtTl(top.base)} → ${fmtTl(ciro30)})`;
+    }
+    case "behavioral": {
+      const {
+        daysSinceLastSale,
+        fatura30,
+        faturaPrev30,
+        urunGrup30,
+        urunGrupPrev30,
+      } = input;
+      if (daysSinceLastSale === null) return "Hiç sipariş kaydı yok.";
+      if (daysSinceLastSale >= 30) {
+        return `${daysSinceLastSale} gündür sipariş yok.`;
+      }
+      if (faturaPrev30 > 0 && fatura30 / faturaPrev30 < 0.5) {
+        return `Sipariş frekansı düştü: önceki 30g ${faturaPrev30} fatura → son 30g ${fatura30}.`;
+      }
+      if (urunGrupPrev30 > 0 && urunGrup30 / urunGrupPrev30 < 0.5) {
+        return `Sepet daraldı: önceki 30g ${urunGrupPrev30} kategori → son 30g ${urunGrup30}.`;
+      }
+      return null;
+    }
+    case "engagement": {
+      const { daysSinceLastVisit, ziyaret90 } = input;
+      if (daysSinceLastVisit === null) return "Hiç ziyaret kaydı yok.";
+      const expectedCadence = ziyaret90 >= 6 ? 15 : ziyaret90 >= 3 ? 30 : 60;
+      if (daysSinceLastVisit / expectedCadence > 1.3) {
+        return `Beklenen ritim ${expectedCadence}g, ${daysSinceLastVisit} gündür ziyaret yok.`;
+      }
+      return null;
+    }
+    case "payment":
+      return null; // MVP-B'de aktif değil
+  }
+}
+
 export type MapCustomerFilters = {
   sehir?: string;
   distKod?: number;
+  /** TBLDISTGRUP-bazlı bölge filtresi (legacy). */
+  bolge?: string;
+  /** Klasik 7 bölge filtresi (drill-down için). "Marmara", "Ege"... — server
+   *  bunu kapsadığı il listesine açar ve sehir IN (...) ile filtreler. */
+  region?: string;
   /** "with" → only customers with recent sales, "without" → only silent
    *  customers, undefined → no filter. */
   salesFilter?: "with" | "without";
-  /** Filter by risk tier. Useful for the "kayıp riski" view. */
+  /** @deprecated Eski 4-tier filter (`risk_tier` kolonu). Yeni UI `tier`
+   *  kullanır; her ikisi de aynı anda geçirilirse `tier` öncelikli. */
   riskTier?: RiskTier;
+  /** Composite Risk Score tier filter (`risk_tier_v2` kolonu). */
+  tier?: RiskTierV2;
   /** Show only customers not visited for ≥ N days. */
   minDaysSinceVisit?: number;
   limit?: number;
@@ -164,10 +543,10 @@ export type MapSyncStatus = {
  * Filter combinations are applied in JavaScript here too — at pilot
  * scale the cached set is at most a few thousand rows so it's fine.
  */
-export function listMapCustomers(
+export async function listMapCustomers(
   repoRoot: string,
   filters: MapCustomerFilters = {},
-): MapCustomer[] {
+): Promise<MapCustomer[]> {
   const db = getLocalDb(repoRoot);
   const limit = Math.min(Math.max(filters.limit ?? 5000, 1), 50_000);
 
@@ -176,6 +555,32 @@ export function listMapCustomers(
   if (filters.sehir) {
     where.push("sehir = @sehir");
     params.sehir = filters.sehir;
+  }
+  if (filters.bolge) {
+    where.push("bolge = @bolge");
+    params.bolge = filters.bolge;
+  }
+  if (filters.region) {
+    // Klasik bölge → kapsanan il listesi → sehir IN (...). DB'deki sehir
+    // değerleri normalize değilse (örn. "İstanbul" vs "ISTANBUL") UPPER ile
+    // normalize ettiriyoruz; biraz daha pahalı ama doğru.
+    const master = await loadRegionMaster();
+    const info = master.byRegion.get(filters.region);
+    if (info && info.provinces.length > 0) {
+      const placeholders: string[] = [];
+      info.provinces.forEach((p, i) => {
+        const key = `region_p${i}`;
+        placeholders.push(`@${key}`);
+        params[key] = p;
+      });
+      // Normalize DB sehir → match upper + diacritic strip karakter setiyle
+      // (SQLite COLLATE NOCASE Türkçe diakritik için tam doğru değildir).
+      where.push(
+        `UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(sehir,
+          'İ','I'),'ı','I'),'Ş','S'),'ş','S'),'Ğ','G'),'ğ','G'),'Ü','U'),'ü','U'))
+         IN (${placeholders.join(",")})`,
+      );
+    }
   }
   if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
     where.push("dist_kod = @distKod");
@@ -187,7 +592,12 @@ export function listMapCustomers(
     where.push("has_sales = 0");
   }
 
-  if (filters.riskTier) {
+  // Yeni tier filter (composite Risk Score) varsa onu kullan; yoksa eski
+  // riskTier üzerinden filtrele. UI cutover sonrası riskTier kaldırılır.
+  if (filters.tier) {
+    where.push("risk_tier_v2 = @tier");
+    params.tier = filters.tier;
+  } else if (filters.riskTier) {
     where.push("risk_tier = @riskTier");
     params.riskTier = filters.riskTier;
   }
@@ -199,12 +609,16 @@ export function listMapCustomers(
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
     SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd, adres, sehir,
-           ilce, distributor, lat, lng, has_sales AS hasSales,
+           ilce, distributor, bolge, lat, lng, has_sales AS hasSales,
            days_since_last_sale  AS daysSinceLastSale,
            days_since_last_visit AS daysSinceLastVisit,
            ciro_30d              AS ciro30,
            ciro_prev_30d         AS ciroPrev30,
-           risk_tier             AS riskTier
+           risk_tier             AS riskTier,
+           risk_score            AS riskScore,
+           risk_tier_v2          AS riskTierV2,
+           risk_components       AS riskComponents,
+           risk_reasons          AS riskReasons
     FROM map_customers
     ${whereSql}
     ORDER BY
@@ -222,6 +636,7 @@ export function listMapCustomers(
     sehir: string | null;
     ilce: string | null;
     distributor: string | null;
+    bolge: string | null;
     lat: number;
     lng: number;
     hasSales: number;
@@ -230,6 +645,10 @@ export function listMapCustomers(
     ciro30: number | null;
     ciroPrev30: number | null;
     riskTier: string | null;
+    riskScore: number | null;
+    riskTierV2: string | null;
+    riskComponents: string | null;
+    riskReasons: string | null;
   }>;
 
   return rows.map((r) => ({
@@ -241,6 +660,7 @@ export function listMapCustomers(
     sehir: r.sehir,
     ilce: r.ilce,
     distributor: r.distributor,
+    bolge: r.bolge,
     lat: r.lat,
     lng: r.lng,
     hasSales: r.hasSales === 1,
@@ -249,7 +669,282 @@ export function listMapCustomers(
     ciro30: r.ciro30 ?? 0,
     ciroPrev30: r.ciroPrev30 ?? 0,
     riskTier: (r.riskTier as RiskTier) ?? "low",
+    riskScore: rehydrateRiskScore(r),
   }));
+}
+
+/**
+ * SQLite rows'tan `CustomerRiskScore` döndürür. Yeni sync hâlâ çalışmamışsa
+ * (eski rows, risk_score = NULL) `unknown` tier ile placeholder döner — UI'da
+ * "yeniden sync gerekli" sinyali olarak okunabilir.
+ */
+function rehydrateRiskScore(r: {
+  riskScore: number | null;
+  riskTierV2: string | null;
+  riskComponents: string | null;
+  riskReasons: string | null;
+}): CustomerRiskScore {
+  const fallback: CustomerRiskScore = {
+    score: null,
+    tier: "unknown",
+    components: {
+      momentum: null,
+      behavioral: null,
+      payment: null,
+      engagement: null,
+    },
+    reasons: ["Risk skoru bu müşteri için henüz hesaplanmadı (yeniden sync)."],
+  };
+
+  if (r.riskScore === null && !r.riskTierV2) return fallback;
+
+  let components = fallback.components;
+  if (r.riskComponents) {
+    try {
+      const parsed = JSON.parse(r.riskComponents) as Partial<
+        Record<RiskComponentKey, number | null>
+      >;
+      components = {
+        momentum: parsed.momentum ?? null,
+        behavioral: parsed.behavioral ?? null,
+        payment: parsed.payment ?? null,
+        engagement: parsed.engagement ?? null,
+      };
+    } catch {
+      // bozuk JSON → fallback components
+    }
+  }
+  let reasons: string[] = fallback.reasons;
+  if (r.riskReasons) {
+    try {
+      const parsed = JSON.parse(r.riskReasons);
+      if (Array.isArray(parsed)) {
+        reasons = parsed.filter((x): x is string => typeof x === "string");
+      }
+    } catch {
+      // bozuk JSON → fallback reasons
+    }
+  }
+
+  const tier = isRiskTierV2(r.riskTierV2) ? r.riskTierV2 : "unknown";
+  return { score: r.riskScore, tier, components, reasons };
+}
+
+function isRiskTierV2(s: string | null): s is RiskTierV2 {
+  return (
+    s === "healthy" ||
+    s === "watch" ||
+    s === "risk" ||
+    s === "critical" ||
+    s === "unknown"
+  );
+}
+
+/**
+ * Klasik 7 bölge bazlı toplu görünüm. Müşterinin `sehir` alanı (TXTSEHIR)
+ * `data/geo/tr-province-region.json` ile Marmara/Ege/Akdeniz/İç Anadolu/
+ * Karadeniz/Doğu Anadolu/Güneydoğu Anadolu/Kıbrıs eşlemesine sokulur, sonra
+ * bu klasik bölgeye göre agregat alınır.
+ *
+ * Avantaj (eski TBLDISTGRUP-bazlı `bolge` yerine): standart TR coğrafyası,
+ * il sınırı GeoJSON'u ile birebir uyumlu, drill-down il bazına yapılabilir.
+ */
+export type MapRegion = {
+  bolge: string;
+  musteriSayisi: number;
+  /** @deprecated Eski 4-tier dağılımı. UI cutover sonrası kaldırılır. */
+  high: number;
+  medium: number;
+  active: number;
+  low: number;
+  /** Composite Risk Score tier dağılımı — yeni model. */
+  critical: number;
+  risk: number;
+  watch: number;
+  healthy: number;
+  /** Yeterli veri olmayan müşteriler. */
+  unknown: number;
+  /** Centroid — müşteri konumlarının ortalaması (etiket konumu için). */
+  lat: number;
+  lng: number;
+  /** Toplam 30g ciro. */
+  ciro30: number;
+  /** Klasik bölge rengi (tr-province-region.json'dan). */
+  color: string;
+  /** Bölgenin kapsadığı iller (normalize edilmiş, drill-down için). */
+  provinces: string[];
+};
+
+export type MapRegionFilters = {
+  /** Tek bir sehir filtresi (drill-down sonrası kullanılır). */
+  sehir?: string;
+  distKod?: number;
+  salesFilter?: "with" | "without";
+  /** @deprecated Eski 4-tier filter. Yeni UI `tier` kullanır. */
+  riskTier?: RiskTier;
+  /** Composite Risk Score tier filter. */
+  tier?: RiskTierV2;
+  minDaysSinceVisit?: number;
+};
+
+export async function listMapRegions(
+  repoRoot: string,
+  filters: MapRegionFilters = {},
+): Promise<MapRegion[]> {
+  const db = getLocalDb(repoRoot);
+  const master = await loadRegionMaster();
+
+  const where: string[] = ["sehir IS NOT NULL AND sehir <> ''"];
+  const params: Record<string, unknown> = {};
+  if (filters.sehir) {
+    where.push("sehir = @sehir");
+    params.sehir = filters.sehir;
+  }
+  if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
+    where.push("dist_kod = @distKod");
+    params.distKod = Math.floor(filters.distKod);
+  }
+  if (filters.salesFilter === "with") where.push("has_sales = 1");
+  else if (filters.salesFilter === "without") where.push("has_sales = 0");
+  // Yeni tier filtresi öncelikli; yoksa eski riskTier.
+  if (filters.tier) {
+    where.push("risk_tier_v2 = @tier");
+    params.tier = filters.tier;
+  } else if (filters.riskTier) {
+    where.push("risk_tier = @riskTier");
+    params.riskTier = filters.riskTier;
+  }
+  if (typeof filters.minDaysSinceVisit === "number") {
+    where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
+    params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
+  }
+
+  // Önce şehir bazlı agg, sonra JS tarafında klasik bölgeye topla.
+  // (SQLite tarafında province → region mapping yapacak fonksiyon yok;
+  //  JS post-process tek pas.)
+  const sql = `
+    SELECT
+      sehir,
+      COUNT(*)                                                 AS musteriSayisi,
+      SUM(CASE WHEN risk_tier = 'high'   THEN 1 ELSE 0 END)     AS high,
+      SUM(CASE WHEN risk_tier = 'medium' THEN 1 ELSE 0 END)     AS medium,
+      SUM(CASE WHEN risk_tier = 'active' THEN 1 ELSE 0 END)     AS active,
+      SUM(CASE WHEN risk_tier = 'low'    THEN 1 ELSE 0 END)     AS low,
+      SUM(CASE WHEN risk_tier_v2 = 'critical' THEN 1 ELSE 0 END) AS critical,
+      SUM(CASE WHEN risk_tier_v2 = 'risk'     THEN 1 ELSE 0 END) AS riskCount,
+      SUM(CASE WHEN risk_tier_v2 = 'watch'    THEN 1 ELSE 0 END) AS watch,
+      SUM(CASE WHEN risk_tier_v2 = 'healthy'  THEN 1 ELSE 0 END) AS healthy,
+      SUM(CASE WHEN risk_tier_v2 = 'unknown' OR risk_tier_v2 IS NULL THEN 1 ELSE 0 END) AS unknownCount,
+      AVG(lat)                                                  AS lat,
+      AVG(lng)                                                  AS lng,
+      SUM(COALESCE(ciro_30d, 0))                                AS ciro30
+    FROM map_customers
+    WHERE ${where.join(" AND ")}
+    GROUP BY sehir
+  `;
+
+  const cityRows = db.prepare(sql).all(params) as Array<{
+    sehir: string;
+    musteriSayisi: number;
+    high: number;
+    medium: number;
+    active: number;
+    low: number;
+    critical: number;
+    riskCount: number;
+    watch: number;
+    healthy: number;
+    unknownCount: number;
+    lat: number;
+    lng: number;
+    ciro30: number | null;
+  }>;
+
+  // Şehir → klasik bölge gruplama
+  type Agg = {
+    musteriSayisi: number;
+    // Legacy tier sayımları
+    high: number;
+    medium: number;
+    active: number;
+    low: number;
+    // Yeni tier sayımları
+    critical: number;
+    risk: number;
+    watch: number;
+    healthy: number;
+    unknown: number;
+    latSum: number;
+    lngSum: number;
+    latWeight: number;
+    ciro30: number;
+    provinces: Set<string>;
+  };
+  const byRegion = new Map<string, Agg>();
+
+  for (const r of cityRows) {
+    const norm = normalizeProvince(r.sehir);
+    const info = master.byProvince.get(norm);
+    if (!info) continue; // eşleşmeyen şehir (örn. yanlış değer) — atla
+    const agg = byRegion.get(info.region) ?? {
+      musteriSayisi: 0,
+      high: 0, medium: 0, active: 0, low: 0,
+      critical: 0, risk: 0, watch: 0, healthy: 0, unknown: 0,
+      latSum: 0, lngSum: 0, latWeight: 0,
+      ciro30: 0,
+      provinces: new Set<string>(),
+    };
+    const w = Number(r.musteriSayisi);
+    agg.musteriSayisi += w;
+    agg.high += Number(r.high);
+    agg.medium += Number(r.medium);
+    agg.active += Number(r.active);
+    agg.low += Number(r.low);
+    agg.critical += Number(r.critical);
+    agg.risk += Number(r.riskCount);
+    agg.watch += Number(r.watch);
+    agg.healthy += Number(r.healthy);
+    agg.unknown += Number(r.unknownCount);
+    // Weighted centroid — il merkezleri büyük illere göre ağırlıklı
+    agg.latSum += Number(r.lat) * w;
+    agg.lngSum += Number(r.lng) * w;
+    agg.latWeight += w;
+    agg.ciro30 += Number(r.ciro30 ?? 0);
+    agg.provinces.add(norm);
+    byRegion.set(info.region, agg);
+  }
+
+  const out: MapRegion[] = [];
+  for (const [regionName, agg] of byRegion.entries()) {
+    const info = master.byRegion.get(regionName);
+    // Etiket konumu: master'daki sabit centroid (haritada bölgenin coğrafi
+    // ortasında oluyor). Customer weighted ortalama outlier'lara duyarlıydı
+    // (örn. yanlış koordinatlı tek müşteri tüm bölgeyi Rusya'ya kaydırıyordu).
+    const centroid = info?.centroid ?? [
+      agg.latWeight > 0 ? agg.lngSum / agg.latWeight : 35,
+      agg.latWeight > 0 ? agg.latSum / agg.latWeight : 39,
+    ];
+    out.push({
+      bolge: regionName,
+      musteriSayisi: agg.musteriSayisi,
+      high: agg.high,
+      medium: agg.medium,
+      active: agg.active,
+      low: agg.low,
+      critical: agg.critical,
+      risk: agg.risk,
+      watch: agg.watch,
+      healthy: agg.healthy,
+      unknown: agg.unknown,
+      lng: centroid[0],
+      lat: centroid[1],
+      ciro30: agg.ciro30,
+      color: info?.color ?? "#78716c",
+      provinces: Array.from(agg.provinces).sort(),
+    });
+  }
+  out.sort((a, b) => b.musteriSayisi - a.musteriSayisi);
+  return out;
 }
 
 export function getMapFacets(repoRoot: string): MapFacets {
@@ -296,8 +991,11 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const startedAt = Date.now();
 
   // Pre-aggregated risk dimensions per customer — single trip during sync so
-  // map page renders use only SQLite. Risk tier is derived in JS after the
-  // pull (easier to tune thresholds without a SQL rewrite).
+  // map page renders use only SQLite. Composite Risk Score (yeni model) JS
+  // tarafında `computeCustomerRiskScore` ile son adımda hesaplanır.
+  //
+  // CTE'ler her biri ~2 sn (probe ölçümleri; bkz. scripts/probe-risk-fields
+  // çıktıları). Toplam ek maliyet ~10 sn — kabul edilebilir.
   const customerSql = `
     WITH son_satis AS (
       SELECT f.LNGMUSTERIKOD, MAX(f.TRHISLEMTARIHI) AS son
@@ -306,22 +1004,80 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_30 AS (
-      SELECT f.LNGMUSTERIKOD, SUM(f.DBLNETTUTAR) AS ciro
+      SELECT f.LNGMUSTERIKOD,
+             SUM(f.DBLNETTUTAR) AS ciro,
+             COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_prev_30 AS (
-      SELECT f.LNGMUSTERIKOD, SUM(f.DBLNETTUTAR) AS ciro
+      SELECT f.LNGMUSTERIKOD,
+             SUM(f.DBLNETTUTAR) AS ciro,
+             COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, GETDATE())
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
+    -- Risk skoru momentum bileşeni için: 90 günlük baseline + YoY pencere
+    ciro_t90 AS (
+      SELECT f.LNGMUSTERIKOD,
+             SUM(f.DBLNETTUTAR) AS ciro,
+             COUNT(*)           AS fatura
+      FROM dbo.TBLMSDFATURA AS f
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -90, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    ciro_yoy_30d AS (
+      SELECT f.LNGMUSTERIKOD, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA AS f
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -395, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -365, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    -- Sepet çeşitliliği — davranışsal bileşen için.
+    -- 4-tablo JOIN, probe ölçümünde ~2 sn / pencere.
+    urun_grup_30 AS (
+      SELECT f.LNGMUSTERIKOD,
+             COUNT(DISTINCT COALESCE(g.TXTAD, u.TXTAD)) AS grupSayi
+      FROM dbo.TBLMSDFATURA AS f
+      INNER JOIN dbo.TBLMSDBELGEDETAY AS bd
+        ON bd.LNGYIL = f.LNGYIL
+       AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND bd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN AS u ON u.LNGKOD = bd.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNGRUP AS g
+        ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    urun_grup_prev_30 AS (
+      SELECT f.LNGMUSTERIKOD,
+             COUNT(DISTINCT COALESCE(g.TXTAD, u.TXTAD)) AS grupSayi
+      FROM dbo.TBLMSDFATURA AS f
+      INNER JOIN dbo.TBLMSDBELGEDETAY AS bd
+        ON bd.LNGYIL = f.LNGYIL
+       AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND bd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN AS u ON u.LNGKOD = bd.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNGRUP AS g
+        ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
     son_ziyaret AS (
-      SELECT z.LNGMUSTERIKOD, MAX(z.TRHGIRIS) AS son
+      SELECT z.LNGMUSTERIKOD,
+             MAX(z.TRHGIRIS) AS son,
+             SUM(CASE WHEN z.TRHGIRIS >= DATEADD(day, -90, GETDATE())
+                      THEN 1 ELSE 0 END) AS ziyaret90
       FROM dbo.TBLPMPZIYARETBASLIK AS z
       WHERE z.TRHGIRIS IS NOT NULL
       GROUP BY z.LNGMUSTERIKOD
@@ -335,19 +1091,35 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       m.TXTSEHIR     AS sehir,
       m.TXTILCE      AS ilce,
       d.TXTAD        AS distributor,
+      -- Bölge: TBLDIST.TXTGRUP → TBLDISTGRUP.TXTAD. LNGDISTKOD şartı yok
+      -- (her ikisi de NULL olduğu için JOIN'i boşaltır).
+      g.TXTAD        AS bolge,
       CAST(m.DBLKOORDINATX AS FLOAT) AS lat,
       CAST(m.DBLKOORDINATY AS FLOAT) AS lng,
       CASE WHEN c30.LNGMUSTERIKOD IS NULL THEN 0 ELSE 1 END AS hasSales,
       CASE WHEN s.son IS NULL THEN NULL ELSE DATEDIFF(day, s.son, GETDATE()) END AS daysSinceLastSale,
       CASE WHEN z.son IS NULL THEN NULL ELSE DATEDIFF(day, z.son, GETDATE()) END AS daysSinceLastVisit,
-      ISNULL(c30.ciro, 0)   AS ciro30,
-      ISNULL(cp30.ciro, 0)  AS ciroPrev30
+      ISNULL(c30.ciro,   0)   AS ciro30,
+      ISNULL(c30.fatura, 0)   AS fatura30,
+      ISNULL(cp30.ciro,  0)   AS ciroPrev30,
+      ISNULL(cp30.fatura,0)   AS faturaPrev30,
+      ISNULL(ct90.ciro,  0)   AS ciroT90,
+      ISNULL(ct90.fatura,0)   AS faturaT90,
+      ISNULL(cyoy.ciro,  0)   AS ciroYoy30,
+      ISNULL(ug30.grupSayi,  0) AS urunGrup30,
+      ISNULL(ugp30.grupSayi, 0) AS urunGrupPrev30,
+      ISNULL(z.ziyaret90, 0)    AS ziyaret90
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST    AS d   ON d.LNGKOD = m.LNGDISTKOD
-    LEFT JOIN son_satis      AS s   ON s.LNGMUSTERIKOD = m.LNGKOD
-    LEFT JOIN ciro_30        AS c30 ON c30.LNGMUSTERIKOD = m.LNGKOD
-    LEFT JOIN ciro_prev_30   AS cp30 ON cp30.LNGMUSTERIKOD = m.LNGKOD
-    LEFT JOIN son_ziyaret    AS z   ON z.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN dbo.TBLDISTGRUP AS g  ON g.TXTKOD = d.TXTGRUP
+    LEFT JOIN son_satis        AS s    ON s.LNGMUSTERIKOD    = m.LNGKOD
+    LEFT JOIN ciro_30          AS c30  ON c30.LNGMUSTERIKOD  = m.LNGKOD
+    LEFT JOIN ciro_prev_30     AS cp30 ON cp30.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN ciro_t90         AS ct90 ON ct90.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN ciro_yoy_30d     AS cyoy ON cyoy.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN urun_grup_30     AS ug30  ON ug30.LNGMUSTERIKOD  = m.LNGKOD
+    LEFT JOIN urun_grup_prev_30 AS ugp30 ON ugp30.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN son_ziyaret      AS z    ON z.LNGMUSTERIKOD    = m.LNGKOD
     WHERE m.DBLKOORDINATX > 0 AND m.DBLKOORDINATY > 0
     ORDER BY hasSales DESC, m.LNGKOD
   `;
@@ -375,15 +1147,25 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const db = getLocalDb(repoRoot);
   const insCustomer = db.prepare(`
     INSERT INTO map_customers
-      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor,
+      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor, bolge,
        lat, lng, has_sales,
        days_since_last_sale, days_since_last_visit,
-       ciro_30d, ciro_prev_30d, risk_tier)
+       ciro_30d, ciro_prev_30d, risk_tier,
+       ciro_t90, ciro_yoy_30d,
+       fatura_30d, fatura_prev_30d, fatura_t90,
+       urun_grup_30d, urun_grup_prev_30d,
+       ziyaret_90d,
+       risk_score, risk_tier_v2, risk_components, risk_reasons)
     VALUES
-      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor,
+      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor, @bolge,
        @lat, @lng, @hasSales,
        @daysSinceLastSale, @daysSinceLastVisit,
-       @ciro30, @ciroPrev30, @riskTier)
+       @ciro30, @ciroPrev30, @riskTier,
+       @ciroT90, @ciroYoy30d,
+       @fatura30, @faturaPrev30, @faturaT90,
+       @urunGrup30, @urunGrupPrev30,
+       @ziyaret90,
+       @riskScore, @riskTierV2, @riskComponents, @riskReasons)
   `);
   const insCity = db.prepare("INSERT OR IGNORE INTO map_cities (sehir) VALUES (?)");
   const insDist = db.prepare(
@@ -397,6 +1179,31 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       const daysSinceLastVisit = r.daysSinceLastVisit == null ? null : Number(r.daysSinceLastVisit);
       const ciro30 = Number(r.ciro30 ?? 0);
       const ciroPrev30 = Number(r.ciroPrev30 ?? 0);
+      const ciroT90 = Number(r.ciroT90 ?? 0);
+      const ciroYoy30d = Number(r.ciroYoy30 ?? 0);
+      const fatura30 = Number(r.fatura30 ?? 0);
+      const faturaPrev30 = Number(r.faturaPrev30 ?? 0);
+      const faturaT90 = Number(r.faturaT90 ?? 0);
+      const urunGrup30 = Number(r.urunGrup30 ?? 0);
+      const urunGrupPrev30 = Number(r.urunGrupPrev30 ?? 0);
+      const ziyaret90 = Number(r.ziyaret90 ?? 0);
+
+      // Yeni composite skor — saf JS fonksiyonu, MSSQL'e geri dönmez
+      const score = computeCustomerRiskScore({
+        daysSinceLastSale,
+        daysSinceLastVisit,
+        ciro30,
+        ciroPrev30,
+        ciroT90,
+        ciroYoy30d,
+        fatura30,
+        faturaPrev30,
+        faturaT90,
+        urunGrup30,
+        urunGrupPrev30,
+        ziyaret90,
+      });
+
       insCustomer.run({
         id: Number(r.id),
         distKod: r.distKod == null ? null : Number(r.distKod),
@@ -406,6 +1213,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         sehir: (r.sehir as string | null) ?? null,
         ilce: (r.ilce as string | null) ?? null,
         distributor: (r.distributor as string | null) ?? null,
+        bolge: (r.bolge as string | null) ?? null,
         lat: Number(r.lat),
         lng: Number(r.lng),
         hasSales: Number(r.hasSales) === 1 ? 1 : 0,
@@ -419,6 +1227,18 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
           ciro30,
           ciroPrev30,
         }),
+        ciroT90,
+        ciroYoy30d,
+        fatura30,
+        faturaPrev30,
+        faturaT90,
+        urunGrup30,
+        urunGrupPrev30,
+        ziyaret90,
+        riskScore: score.score,
+        riskTierV2: score.tier,
+        riskComponents: JSON.stringify(score.components),
+        riskReasons: JSON.stringify(score.reasons),
       });
     }
     for (const r of citiesRes.rows) {

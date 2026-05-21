@@ -14,6 +14,7 @@ import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { z } from "zod";
 import {
+  analyzeRegionAnomaly,
   closePool,
   formatRetrievalForPrompt,
   getCustomerSales,
@@ -23,6 +24,7 @@ import {
   getReport,
   getSyncStatus,
   listMapCustomers,
+  listMapRegions,
   listRadarDefinitions,
   listReports,
   loadSnapshot,
@@ -292,6 +294,16 @@ app.post("/api/radars/:id/explain", async (c) => {
 // needed, because the mirror IS the cache. The mirror only refreshes
 // when /api/map/sync is called (via the "Verileri yenile" button).
 
+// Composite Risk Score tier'larının runtime guard'ı (server boundary).
+const TIER_V2_VALUES = ["healthy", "watch", "risk", "critical", "unknown"] as const;
+type TierV2 = (typeof TIER_V2_VALUES)[number];
+function parseTier(raw: string | undefined): TierV2 | undefined {
+  if (!raw) return undefined;
+  return (TIER_V2_VALUES as readonly string[]).includes(raw)
+    ? (raw as TierV2)
+    : undefined;
+}
+
 app.get("/api/map/customers", async (c) => {
   try {
     const sehir = c.req.query("sehir") ?? undefined;
@@ -307,20 +319,62 @@ app.get("/api/map/customers", async (c) => {
       riskTierRaw === "high" || riskTierRaw === "medium" || riskTierRaw === "low" || riskTierRaw === "active"
         ? (riskTierRaw as "high" | "medium" | "low" | "active")
         : undefined;
+    // Yeni composite tier filtresi — geçirilirse riskTier'i bypass eder.
+    const tier = parseTier(c.req.query("tier"));
     const minDaysVisitRaw = c.req.query("minDaysSinceVisit");
     const minDaysSinceVisit = minDaysVisitRaw ? parseInt(minDaysVisitRaw, 10) : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
 
-    const customers = listMapCustomers(REPO_ROOT, {
+    const bolge = c.req.query("bolge") ?? undefined;
+    const region = c.req.query("region") ?? undefined;
+    const customers = await listMapCustomers(REPO_ROOT, {
       sehir,
       distKod,
+      bolge,
+      region,
       salesFilter,
       riskTier,
+      tier,
       minDaysSinceVisit,
       limit,
     });
     return c.json({ count: customers.length, customers });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// Bölge bazlı toplu görünüm — region toggle açıldığında çağrılır.
+// Aynı filter parametreleri (sehir/distKod/sales/risk/minVisit) burada da
+// geçerli; region aggregation bunlardan etkilenir.
+app.get("/api/map/regions", async (c) => {
+  try {
+    const sehir = c.req.query("sehir") ?? undefined;
+    const distKodRaw = c.req.query("distKod");
+    const distKod = distKodRaw ? parseInt(distKodRaw, 10) : undefined;
+    const salesFilterRaw = c.req.query("salesFilter");
+    const salesFilter: "with" | "without" | undefined =
+      salesFilterRaw === "with" || salesFilterRaw === "without"
+        ? salesFilterRaw
+        : undefined;
+    const riskTierRaw = c.req.query("riskTier");
+    const riskTier =
+      riskTierRaw === "high" || riskTierRaw === "medium" || riskTierRaw === "low" || riskTierRaw === "active"
+        ? (riskTierRaw as "high" | "medium" | "low" | "active")
+        : undefined;
+    const tier = parseTier(c.req.query("tier"));
+    const minDaysVisitRaw = c.req.query("minDaysSinceVisit");
+    const minDaysSinceVisit = minDaysVisitRaw ? parseInt(minDaysVisitRaw, 10) : undefined;
+    const regions = await listMapRegions(REPO_ROOT, {
+      sehir,
+      distKod,
+      salesFilter,
+      riskTier,
+      tier,
+      minDaysSinceVisit,
+    });
+    return c.json({ count: regions.length, regions });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
@@ -411,10 +465,28 @@ app.get("/api/komuta", async (c) => {
     const forceRefresh = c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
     const otvNet = c.req.query("otv") === "1";
-    const snap = await getKomutaSnapshot({ forceRefresh, reelTL, otvNet });
+    // unit=9le → tüm value alanları 9-Liter-Equivalent volume bazında döner;
+    // boş veya başka değer → TL (default).
+    const unit = c.req.query("unit") === "9le" ? "9le" as const : "tl" as const;
+    const snap = await getKomutaSnapshot({ forceRefresh, reelTL, otvNet, unit });
     return c.json(snap);
   } catch (err) {
     console.error("[/api/komuta] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Finans Agentı — bölge YoY anomalisini decompose eden Gemini analizi.
+// `region` path segment: TBLDIST.TXTGRUP değeri (case-insensitive eşleştirilir).
+app.get("/api/komuta/finance/:region", async (c) => {
+  try {
+    const region = decodeURIComponent(c.req.param("region") ?? "").trim();
+    if (!region) return c.json({ error: "region parametresi boş." }, 400);
+    const forceRefresh = c.req.query("refresh") === "1";
+    const analysis = await analyzeRegionAnomaly(region, { forceRefresh });
+    return c.json(analysis);
+  } catch (err) {
+    console.error("[/api/komuta/finance] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
   }
 });

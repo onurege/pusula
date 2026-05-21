@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
 import { generate } from "./gemini.js";
+import { currentDate } from "./now.js";
 
 // Resolve repo root from this file's own location — same trick we use in
 // snapshot.ts so calendar lookup doesn't depend on cwd.
@@ -67,7 +68,7 @@ export type UpcomingEvent = {
  */
 export async function getUpcomingEvents(
   windowDays = 14,
-  today: Date = new Date(),
+  today: Date = currentDate(),
 ): Promise<UpcomingEvent[]> {
   const cal = await loadCalendar(today.getFullYear());
   const start = isoDate(today);
@@ -118,7 +119,7 @@ export type YoyPurchase = {
 export async function getCustomerYoyWindow(
   customerId: number,
   windowDays = 14,
-  today: Date = new Date(),
+  today: Date = currentDate(),
 ): Promise<YoyPurchase[]> {
   const lastYear = addDays(today, -365);
   const start = isoDate(addDays(lastYear, -3));
@@ -129,7 +130,7 @@ export async function getCustomerYoyWindow(
   const sql = `
     SELECT TOP 10
       COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
-      SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro,
+      SUM(d.DBLNETFIYAT) AS ciro,
       SUM(d.DBLMIKTAR) AS miktar
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLMSDBELGEDETAY d
@@ -201,7 +202,7 @@ export async function getDroppedCategories(
     WITH detay AS (
       SELECT
         COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
-        d.DBLNETFIYAT * d.DBLMIKTAR AS satirCiro,
+        d.DBLNETFIYAT AS satirCiro,
         d.DBLMIKTAR AS satirMiktar,
         f.TRHISLEMTARIHI AS tarih
       FROM dbo.TBLMSDFATURA f
@@ -321,7 +322,7 @@ export async function getCohortRecent(
       SELECT
         COALESCE(g.TXTAD, u.TXTAD) AS urunGrubu,
         f.LNGMUSTERIKOD AS musteriKod,
-        SUM(d.DBLNETFIYAT * d.DBLMIKTAR) AS ciro
+        SUM(d.DBLNETFIYAT) AS ciro
       FROM dbo.TBLMSDFATURA f
       INNER JOIN cohort c ON c.LNGKOD = f.LNGMUSTERIKOD
       INNER JOIN dbo.TBLMSDBELGEDETAY d
@@ -500,7 +501,7 @@ async function computeForesight(
 
   const userPrompt = [
     `Müşteri: ${customerLabel} (id ${customerId}).`,
-    `Bugün: ${new Date().toISOString().slice(0, 10)}. Pencere: ${windowDays} gün.`,
+    `Bugün: ${currentDate().toISOString().slice(0, 10)}. Pencere: ${windowDays} gün.`,
     "",
     riskFlags.length > 0
       ? "⚠️ YÜKSEK ÖNCELİKLİ RİSK SİNYALLERİ (BRIEF'in İLK CÜMLESİ BUNU AÇIKLAYACAK):"

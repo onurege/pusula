@@ -25,7 +25,10 @@ export function MapFilters({ facets, customers, count }: Props) {
   const sehir = params.get("sehir") ?? "";
   const distKod = params.get("distKod") ?? "";
   const salesFilter = params.get("salesFilter") ?? "";
-  const riskTier = params.get("riskTier") ?? "";
+  // Yeni composite tier filter. Eski `riskTier` URL param'ı varsa görmezden
+  // gelinmez ama UI yeni `tier`'ı yazar (geri uyumluluk: eski deep-link'ler
+  // hâlâ çalışır, sadece select yeni tier'ı yansıtır).
+  const tier = params.get("tier") ?? "";
   const minDaysSinceVisit = params.get("minDaysSinceVisit") ?? "";
 
   const [q, setQ] = useState("");
@@ -66,7 +69,7 @@ export function MapFilters({ facets, customers, count }: Props) {
     );
   }
 
-  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q || !!riskTier || !!minDaysSinceVisit;
+  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q || !!tier || !!minDaysSinceVisit;
 
   const inputCls =
     "w-full bg-surface border border-border rounded-md px-3 h-9 text-sm shadow-xs " +
@@ -183,16 +186,21 @@ export function MapFilters({ facets, customers, count }: Props) {
       <div className="space-y-1.5">
         <label className={labelCls}>Risk seviyesi</label>
         <select
-          value={riskTier}
-          onChange={(e) => update({ riskTier: e.target.value })}
+          value={tier}
+          // tier seçilince eski `riskTier` URL param'ı da temizlensin —
+          // backend her ikisini de okur, çakışma olmasın.
+          onChange={(e) =>
+            update({ tier: e.target.value, riskTier: "" })
+          }
           disabled={isPending}
           className={inputCls}
         >
           <option value="">Tümü</option>
-          <option value="high">Yüksek risk (kırmızı)</option>
-          <option value="medium">Orta risk (amber)</option>
-          <option value="active">Aktif (yeşil)</option>
-          <option value="low">Sessiz (gri)</option>
+          <option value="critical">Kritik (75-100)</option>
+          <option value="risk">Riskli (55-74)</option>
+          <option value="watch">İzlemede (30-54)</option>
+          <option value="healthy">Sağlıklı (0-29)</option>
+          <option value="unknown">Yetersiz veri</option>
         </select>
       </div>
 

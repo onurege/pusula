@@ -35,6 +35,19 @@
   --color-bad: #dc2626;
   --color-bad-soft: #fef2f2;
 
+  /* Risk tier "risk" (orange) — warn ile aynı band olmasın diye ayrı ton */
+  --color-tier-risk: #ea580c;       /* orange-600 */
+  --color-tier-risk-soft: #fff7ed;  /* orange-50 */
+
+  /* Heatmap pastel tones — 3 ton (negatif/nötr/pozitif). Dark mode'da
+   *  override edilir. */
+  --color-heat-neg-bg: #fecaca;
+  --color-heat-neg-fg: #991b1b;
+  --color-heat-flat-bg: #f5f5f4;
+  --color-heat-flat-fg: #57534e;
+  --color-heat-pos-bg: #bbf7d0;
+  --color-heat-pos-fg: #166534;
+
   /* Typography — Inter via Next/font, falls back gracefully */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
@@ -52,6 +65,62 @@
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Dark mode — `html[data-theme="dark"]` üzerinde aynı CSS variable'ları
+ * koyu temayla override eder. Tailwind utilities (bg-surface, text-fg,
+ * border-border, ...) bu variable'lara referans verdiği için otomatik
+ * uyumlu olur. Komuta sayfası KOMUTA_CSS ve client komponentlerin styled-jsx
+ * blokları da bu variable'lardan beslenir.
+ * --------------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  /* Surfaces — zinc/neutral koyu palette (saf siyah değil; gözü yormaz) */
+  --color-bg: #0a0a0b;
+  --color-surface: #18181b;        /* zinc-900 */
+  --color-surface-2: #27272a;      /* zinc-800 */
+  --color-surface-3: #3f3f46;      /* zinc-700 */
+
+  --color-border: #27272a;          /* zinc-800 */
+  --color-border-strong: #3f3f46;  /* zinc-700 */
+
+  --color-fg: #fafafa;              /* near-white */
+  --color-fg-2: #d4d4d8;            /* zinc-300 */
+  --color-muted: #a1a1aa;           /* zinc-400 */
+  --color-muted-2: #71717a;         /* zinc-500 */
+
+  /* Accent — koyu zeminde daha aydınlık indigo */
+  --color-accent: #818cf8;          /* indigo-400 */
+  --color-accent-hover: #a5b4fc;    /* indigo-300 */
+  --color-accent-soft: #1e1b4b;     /* indigo-950 tinted bg */
+  --color-accent-fg: #0a0a0b;
+
+  /* Semantic — koyu zeminde daha parlak ton */
+  --color-good: #4ade80;            /* green-400 */
+  --color-good-soft: #052e16;       /* green-950 */
+  --color-warn: #fbbf24;            /* amber-400 */
+  --color-warn-soft: #451a03;       /* amber-950 */
+  --color-bad: #f87171;             /* red-400 */
+  --color-bad-soft: #450a0a;        /* red-950 */
+
+  /* Risk tier "risk" — dark zeminde daha aydınlık */
+  --color-tier-risk: #fb923c;       /* orange-400 */
+  --color-tier-risk-soft: #431407;  /* orange-950 */
+
+  /* Heatmap pastel — koyu zemine adapte edilmiş, doygunluk düşük */
+  --color-heat-neg-bg: #450a0a;    /* red-950 */
+  --color-heat-neg-fg: #fca5a5;    /* red-300 */
+  --color-heat-flat-bg: #27272a;   /* zinc-800 */
+  --color-heat-flat-fg: #a1a1aa;   /* zinc-400 */
+  --color-heat-pos-bg: #052e16;    /* green-950 */
+  --color-heat-pos-fg: #86efac;    /* green-300 */
+}
+
+/* Tema geçişinde animasyon — sayfa renkleri yumuşak fade etsin */
+html, body, .komuta-root, .panel, .kpi-card, .heatmap-grid, .h-cell,
+.fa-modal, .fa-section, .fa-headline-card, .fa-kpi {
+  transition: background-color 0.18s ease, color 0.18s ease,
+              border-color 0.18s ease;
 }
 
 * {

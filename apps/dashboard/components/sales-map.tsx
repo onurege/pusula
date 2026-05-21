@@ -1,15 +1,78 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import maplibregl from "maplibre-gl";
-import type { MapCustomer } from "@/lib/api";
+import type {
+  CustomerRiskScore,
+  MapCustomer,
+  MapRegion,
+  RiskComponentKey,
+  RiskTierV2,
+} from "@/lib/api";
 import { CustomerModal } from "./customer-modal";
 
-// CARTO Positron — vector style with proper Turkish labels and a clean
-// gray base that doesn't fight the indigo markers. Same style map-check
-// uses. Free, no key, includes its own glyphs URL inside the JSON so we
-// don't have to declare one inline.
-const MAP_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+/**
+ * GeoJSON property'sinden composite Risk Score'u geri kurar. MapLibre
+ * feature properties string|number|null tuttuğu için tam objeyi JSON-string
+ * olarak serialize edip burada parse ediyoruz.
+ */
+function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRiskScore {
+  const fallback: CustomerRiskScore = {
+    score: null,
+    tier: "unknown",
+    components: {
+      momentum: null,
+      behavioral: null,
+      payment: null,
+      engagement: null,
+    },
+    reasons: ["Risk skoru bu müşteri için henüz yüklenmedi."],
+  };
+  if (typeof raw !== "string" || raw.length === 0) return fallback;
+  try {
+    const parsed = JSON.parse(raw) as Partial<CustomerRiskScore>;
+    const tier: RiskTierV2 =
+      parsed.tier === "healthy" ||
+      parsed.tier === "watch" ||
+      parsed.tier === "risk" ||
+      parsed.tier === "critical" ||
+      parsed.tier === "unknown"
+        ? parsed.tier
+        : "unknown";
+    const c: Partial<Record<RiskComponentKey, number | null>> =
+      parsed.components ?? {};
+    const componentVal = (k: RiskComponentKey): number | null =>
+      typeof c[k] === "number" ? (c[k] as number) : null;
+    return {
+      score: typeof parsed.score === "number" ? parsed.score : null,
+      tier,
+      components: {
+        momentum: componentVal("momentum"),
+        behavioral: componentVal("behavioral"),
+        payment: componentVal("payment"),
+        engagement: componentVal("engagement"),
+      },
+      reasons: Array.isArray(parsed.reasons)
+        ? parsed.reasons.filter((x): x is string => typeof x === "string")
+        : fallback.reasons,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// CARTO Positron (light) / Dark Matter (dark) — vector styles with proper
+// Turkish labels. Tema toggle ile dinamik geçişli; harita instance'ı
+// `setStyle()` ile yenilenir, layer'lar effect tarafından yeniden eklenir.
+const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
+const MAP_STYLE_DARK = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
+function getMapStyleForTheme(): string {
+  if (typeof document === "undefined") return MAP_STYLE_LIGHT;
+  return document.documentElement.getAttribute("data-theme") === "dark"
+    ? MAP_STYLE_DARK
+    : MAP_STYLE_LIGHT;
+}
 const INITIAL_CENTER: [number, number] = [35.0, 39.0];
 const INITIAL_ZOOM = 5.2;
 
@@ -24,18 +87,57 @@ const COLOR_ACCENT_DEEP = "#3730a3";   // indigo-800 (≥1000)
 const COLOR_MUTED = "#a1a1aa";         // zinc-400 (silent customer)
 const COLOR_STROKE = "#ffffff";         // white stroke for light tiles
 const COLOR_LABEL = "#ffffff";          // cluster count text on indigo
-const COLOR_RISK_HIGH = "#dc2626";     // red-600 — customer at high risk
-const COLOR_RISK_MED  = "#d97706";     // amber-600 — medium risk
-const COLOR_ACTIVE    = "#16a34a";     // green-600 — healthy / active
+
+// Composite Risk Score tier renkleri — UI dilinde "Kritik / Riskli /
+// İzlemede / Sağlıklı / Yetersiz veri".
+const COLOR_TIER_CRITICAL = "#dc2626"; // red-600
+const COLOR_TIER_RISK     = "#ea580c"; // orange-600
+const COLOR_TIER_WATCH    = "#d97706"; // amber-600
+const COLOR_TIER_HEALTHY  = "#16a34a"; // green-600
+const COLOR_TIER_UNKNOWN  = "#a1a1aa"; // zinc-400
 
 type Props = {
   customers: MapCustomer[];
+  regions?: MapRegion[];
+  viewMode?: "customer" | "region";
 };
 
-export default function SalesMap({ customers }: Props) {
+export default function SalesMap({ customers, regions = [], viewMode = "customer" }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const [selected, setSelected] = useState<MapCustomer | null>(null);
+  // mapReady: harita stili tamamen yüklendi mi (kaynak/layer eklenebilir mi).
+  // Effect'lerin "map mount ile aynı tick'te tetiklendi ama map henüz hazır
+  // değil" race condition'ını engellemek için state.
+  const [mapReady, setMapReady] = useState(false);
+  const router = useRouter();
+  const pathname = usePathname();
+  const sp = useSearchParams();
+
+  // Click handler bunları capture edebilsin diye ref'te tut — useEffect deps
+  // listesine girince her search param değişiminde cleanup/setup loop'una sokar.
+  const navRef = useRef({ router, pathname, sp });
+  navRef.current = { router, pathname, sp };
+
+  // Aynı sebepten: regions ref'te tutulur, deps loop'unu önler. Hem layer
+  // setup hem data güncelleme buradan okur.
+  const regionsRef = useRef(regions);
+  regionsRef.current = regions;
+
+  // Filter-driven veri tazelemelerinde paint'in güncellenmesi için stabil
+  // signature. Aynı veri → aynı string → effect re-run yok. Veri değişti
+  // (composite tier sayıları farklı) → string değişti → effect tetiklenir
+  // ve fill renkleri / etiket sayıları yenilenir.
+  const regionsKey = useMemo(
+    () =>
+      regions
+        .map(
+          (r) =>
+            `${r.bolge}:${r.musteriSayisi}:${r.critical}:${r.risk}:${r.watch}:${r.healthy}`,
+        )
+        .join("|"),
+    [regions],
+  );
 
   // Listen for fly-to events dispatched from the filters panel search.
   useEffect(() => {
@@ -49,6 +151,61 @@ export default function SalesMap({ customers }: Props) {
     window.addEventListener("enroute:fly-to", handler);
     return () => window.removeEventListener("enroute:fly-to", handler);
   }, []);
+
+  // Region drill-down sonrası: customer mode'da ?region= varsa, regions
+  // master'dan o bölgenin centroid'ine + uygun zoom'a fit et.
+  const regionFilter = sp.get("region");
+  useEffect(() => {
+    if (viewMode !== "customer" || !regionFilter) return;
+    const target = regions.find((r) => r.bolge === regionFilter);
+    if (!target) return;
+    const map = mapRef.current;
+    if (!map) return;
+    // Coğrafi büyüklüğe göre zoom: KKTC küçük, Doğu Anadolu büyük
+    const isSmall = target.bolge === "Kıbrıs";
+    map.easeTo({
+      center: [target.lng, target.lat],
+      zoom: isSmall ? 8.5 : 6.5,
+      duration: 700,
+    });
+  }, [viewMode, regionFilter, regions]);
+
+  // Region geojson — her bölge için tek bir point (centroid). Region mode
+  // açıkken bu kaynak üzerinden tek katmanlı büyük balonlar render edilir.
+  // greenRatio artık composite tier'lardan türetilir:
+  //   green = healthy + 0.6*watch,  red = critical + 0.6*risk
+  //   ratio = green / (green + red). Bilinen müşteri 0 ise null (-1) → gri.
+  const regionGeojson = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: regions.map((r) => {
+        const rankedTotal = r.critical + r.risk + r.watch + r.healthy;
+        const green = r.healthy + 0.6 * r.watch;
+        const red = r.critical + 0.6 * r.risk;
+        const greenRatio = green + red > 0 ? green / (green + red) : -1;
+        return {
+          type: "Feature" as const,
+          properties: {
+            bolge: r.bolge,
+            musteriSayisi: r.musteriSayisi,
+            critical: r.critical,
+            risk: r.risk,
+            watch: r.watch,
+            healthy: r.healthy,
+            unknown: r.unknown,
+            rankedTotal,
+            greenRatio,
+            ciro30: r.ciro30,
+          },
+          geometry: {
+            type: "Point" as const,
+            coordinates: [r.lng, r.lat] as [number, number],
+          },
+        };
+      }),
+    }),
+    [regions],
+  );
 
   const geojson = useMemo(
     () => ({
@@ -64,14 +221,17 @@ export default function SalesMap({ customers }: Props) {
           sehir: c.sehir ?? "",
           ilce: c.ilce ?? "",
           distributor: c.distributor ?? "",
+          bolge: c.bolge ?? "",
           hasSales: c.hasSales ? 1 : 0,
-          // Numeric encoding for maplibre paint expressions:
-          //   3 high · 2 medium · 1 active · 0 low/dormant
-          riskScore:
-            c.riskTier === "high" ? 3 :
-            c.riskTier === "medium" ? 2 :
-            c.riskTier === "active" ? 1 : 0,
+          // Yeni composite Risk Score modeli — paint expression'lar bunu
+          // okur. UI cutover sonrası eski `riskTier` field'ları sadece
+          // back-compat için duruyor (modal'da fallback'lerde kullanılabilir).
+          riskTierV2: c.riskScore.tier,
           riskTier: c.riskTier,
+          // Tam Risk Score objesi — JSON string olarak tutuluyor ki
+          // unclustered click handler tam objeyi geri kurabilsin (komponent
+          // skorları + reasons). Paint expression'lar bu string'i okumaz.
+          riskScoreJson: JSON.stringify(c.riskScore),
           daysSinceLastSale: c.daysSinceLastSale ?? -1,
           daysSinceLastVisit: c.daysSinceLastVisit ?? -1,
           ciro30: c.ciro30,
@@ -91,18 +251,27 @@ export default function SalesMap({ customers }: Props) {
     const container = containerRef.current;
     const map = new maplibregl.Map({
       container,
-      style: MAP_STYLE,
+      style: getMapStyleForTheme(),
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       attributionControl: { compact: true },
     });
     map.addControl(new maplibregl.NavigationControl(), "top-right");
     mapRef.current = map;
-    map.on("load", () => {
+    // Debug — global expose
+    (window as unknown as { __map: maplibregl.Map }).__map = map;
+    const onLoaded = () => {
       // ssr:false dynamic import + flexbox layout often gives the map a 0×0
       // canvas on first paint. Force a resize once we're loaded.
       map.resize();
-    });
+      setMapReady(true);
+    };
+    // İdle event = "tüm style/tile yüklendi + render bitti" — load'dan daha
+    // garantili. once handler ile bir kez tetiklenir. HMR/StrictMode'da
+    // race olsa da idle her zaman tetiklenir.
+    map.once("idle", onLoaded);
+    // Backup: load event'ini de bekle (idle gelmezse).
+    map.once("load", onLoaded);
 
     const resize = () => map.resize();
     const observer = new ResizeObserver(resize);
@@ -115,9 +284,31 @@ export default function SalesMap({ customers }: Props) {
     };
   }, []);
 
+  // Tema değiştiğinde MapLibre base style'ı (positron ↔ dark-matter) güncelle.
+  // setStyle layer'ları yıkar; mapReady false'a çekilip sonra true'ya geçer
+  // ki effect'ler customer/region katmanlarını yeniden eklesin.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const onThemeChange = () => {
+      try {
+        setMapReady(false);
+        map.setStyle(getMapStyleForTheme());
+        map.once("idle", () => setMapReady(true));
+        map.once("load", () => setMapReady(true));
+      } catch (err) {
+        console.error("[sales-map] setStyle failed:", err);
+      }
+    };
+    window.addEventListener("enroute:theme:changed", onThemeChange);
+    return () => window.removeEventListener("enroute:theme:changed", onThemeChange);
+  }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    // Region modunda customer katmanlarını hiç ekleme — temiz render.
+    if (viewMode !== "customer") return;
 
     const SRC = "customers";
 
@@ -141,9 +332,29 @@ export default function SalesMap({ customers }: Props) {
         clusterMaxZoom: 13,
         clusterRadius: 50,
         clusterProperties: {
-          // Sum of hasSales (0/1) per cluster — used to tone clusters by
-          // how active their constituent customers are.
-          activeCount: ["+", ["get", "hasSales"]],
+          // Cluster içindeki composite Risk Score tier sayıları. MapLibre
+          // clusterProperties map expression subset'i `case` desteklemediği
+          // için boolean'ı `to-number` ile 0/1'e çeviriyoruz.
+          criticalCount: [
+            "+",
+            ["to-number", ["==", ["get", "riskTierV2"], "critical"]],
+          ],
+          riskCount: [
+            "+",
+            ["to-number", ["==", ["get", "riskTierV2"], "risk"]],
+          ],
+          watchCount: [
+            "+",
+            ["to-number", ["==", ["get", "riskTierV2"], "watch"]],
+          ],
+          healthyCount: [
+            "+",
+            ["to-number", ["==", ["get", "riskTierV2"], "healthy"]],
+          ],
+          unknownCount: [
+            "+",
+            ["to-number", ["==", ["get", "riskTierV2"], "unknown"]],
+          ],
         },
       });
 
@@ -153,23 +364,48 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["has", "point_count"],
       paint: {
-        // Cluster color = how alive the customers inside it are. Any cluster
-        // with zero recent-sales customers reads gray; mostly-sales clusters
-        // get the accent ramp (deeper for bigger clusters).
+        // Cluster rengi = içerdiği "kırmızı ağırlık" oranı.
+        //   redWeight   = critical + 0.6*risk    (yüksek + orta-yüksek risk)
+        //   greenWeight = healthy + 0.6*watch    (sağlam + erken-uyarı)
+        //   redRatio    = redWeight / (redWeight + greenWeight)
+        // Bilinen müşteri toplamı 0 ise (sadece unknown) gri.
         "circle-color": [
           "case",
-          ["==", ["get", "activeCount"], 0],
-          COLOR_MUTED,
           [
-            "step",
-            ["get", "point_count"],
-            COLOR_ACCENT,
-            50,
-            COLOR_ACCENT_MID,
-            200,
-            COLOR_ACCENT_HIGH,
-            1000,
-            COLOR_ACCENT_DEEP,
+            "==",
+            [
+              "+",
+              ["to-number", ["get", "criticalCount"]],
+              ["to-number", ["get", "riskCount"]],
+              ["to-number", ["get", "watchCount"]],
+              ["to-number", ["get", "healthyCount"]],
+            ],
+            0,
+          ],
+          COLOR_TIER_UNKNOWN,
+          [
+            "interpolate",
+            ["linear"],
+            [
+              "/",
+              [
+                "+",
+                ["to-number", ["get", "criticalCount"]],
+                ["*", 0.6, ["to-number", ["get", "riskCount"]]],
+              ],
+              [
+                "+",
+                ["to-number", ["get", "criticalCount"]],
+                ["to-number", ["get", "riskCount"]],
+                ["to-number", ["get", "watchCount"]],
+                ["to-number", ["get", "healthyCount"]],
+              ],
+            ],
+            0,    COLOR_TIER_HEALTHY,  // tüm sağlıklı
+            0.25, "#84cc16",            // çoğunluk healthy/watch
+            0.5,  COLOR_TIER_WATCH,    // karışık (amber)
+            0.75, COLOR_TIER_RISK,     // çoğunluk risk
+            1,    COLOR_TIER_CRITICAL, // tüm critical
           ],
         ],
         "circle-radius": [
@@ -211,25 +447,27 @@ export default function SalesMap({ customers }: Props) {
       source: SRC,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        // Color priority: high risk first (red), then medium (amber), then
-        // active (green), else muted (gray) for dormant/never-bought.
+        // Composite Risk Score tier rengi.
+        //   critical → red, risk → orange, watch → amber, healthy → green,
+        //   unknown → gray.
         "circle-color": [
           "match",
-          ["get", "riskScore"],
-          3, COLOR_RISK_HIGH,
-          2, COLOR_RISK_MED,
-          1, COLOR_ACTIVE,
-          /* default */ COLOR_MUTED,
+          ["get", "riskTierV2"],
+          "critical", COLOR_TIER_CRITICAL,
+          "risk",     COLOR_TIER_RISK,
+          "watch",    COLOR_TIER_WATCH,
+          "healthy",  COLOR_TIER_HEALTHY,
+          /* default (unknown) */ COLOR_TIER_UNKNOWN,
         ],
-        // High-risk points get a bigger marker to draw the eye when scanning
-        // a dense city; active are normal; dormant are small.
+        // Tier yükseldikçe daha büyük marker — yoğun şehirde gözü yakalar.
         "circle-radius": [
           "match",
-          ["get", "riskScore"],
-          3, 9,
-          2, 7,
-          1, 6,
-          /* default */ 4,
+          ["get", "riskTierV2"],
+          "critical", 9,
+          "risk",     7.5,
+          "watch",    6,
+          "healthy",  6,
+          /* default (unknown) */ 4,
         ],
         "circle-stroke-width": 1.5,
         "circle-stroke-color": COLOR_STROKE,
@@ -262,6 +500,7 @@ export default function SalesMap({ customers }: Props) {
         sehir: (p.sehir as string) || null,
         ilce: (p.ilce as string) || null,
         distributor: (p.distributor as string) || null,
+        bolge: (p.bolge as string) || null,
         lat: (f.geometry as GeoJSON.Point).coordinates[1] as number,
         lng: (f.geometry as GeoJSON.Point).coordinates[0] as number,
         hasSales: Number(p.hasSales) === 1,
@@ -270,8 +509,34 @@ export default function SalesMap({ customers }: Props) {
         ciro30: Number(p.ciro30 ?? 0),
         ciroPrev30: Number(p.ciroPrev30 ?? 0),
         riskTier: ((p.riskTier as string) || "low") as MapCustomer["riskTier"],
+        riskScore: parseRiskScoreJson(p.riskScoreJson),
       };
       setSelected(c);
+    });
+
+    // Çift tıklama → bir seviye derine in (drill-down).
+    //   distKod yoksa  → ?distKod=...  (distribütör seviyesi filter)
+    //   distKod varsa  → modal aç (zaten en alt seviye)
+    // Müşteri marker default-zoom interaksiyonunu engellemek için preventDefault.
+    map.on("dblclick", "unclustered", (e) => {
+      e.preventDefault();
+      const f = e.features?.[0];
+      if (!f) return;
+      const p = f.properties as Record<string, string | number>;
+      const distKodNum = Number(p.distKod);
+      const sehirStr = String(p.sehir ?? "");
+      const { router: rt, pathname: pn, sp: sParams } = navRef.current;
+      const params = new URLSearchParams(sParams.toString());
+      // Mevcut seviyeye göre bir alt seviyeye in
+      if (!sParams.get("sehir") && sehirStr) {
+        params.set("sehir", sehirStr);
+      } else if (!sParams.get("distKod") && distKodNum > 0) {
+        params.set("distKod", String(distKodNum));
+      } else {
+        // Zaten en altta — modal aç (default click davranışı)
+        return;
+      }
+      rt.push(`${pn}?${params.toString()}`);
     });
 
       const setCursor = (cursor: string) => {
@@ -288,7 +553,445 @@ export default function SalesMap({ customers }: Props) {
     } else {
       map.once("load", apply);
     }
-  }, [geojson]);
+
+    // viewMode region'a geçince customer kaynak ve katmanlarını temizle.
+    return () => {
+      try {
+        if (map.getLayer("clusters")) map.removeLayer("clusters");
+        if (map.getLayer("cluster-count")) map.removeLayer("cluster-count");
+        if (map.getLayer("unclustered")) map.removeLayer("unclustered");
+        if (map.getSource("customers")) map.removeSource("customers");
+      } catch {
+        // map kaldırılmış olabilir — yut
+      }
+    };
+  }, [geojson, viewMode, mapReady]);
+
+  // Region katmanı — viewMode === "region" iken TR il polygon'larını fill
+  // ile renkler. Aynı klasik bölgenin il'leri aynı renge boyanır →
+  // birleşik bölge görünümü. Polygon kaynağı statik:
+  // /geo/tr-provinces.geojson (her feature.properties.region zaten dolu).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (viewMode !== "region") return;
+
+    const PROV_SRC = "tr-provinces";
+    const CENT_SRC = "region-centroids";
+
+    let cancelled = false;
+
+    // styleHasLayers: isStyleLoaded() external tile'lar yüklenene kadar
+    // false dönebilir (MapLibre v3 quirk). Style spec layer'larının yüklenmiş
+    // olması source/layer eklemek için yeterli — daha güvenilir gösterge.
+    const styleReady = () =>
+      (map.getStyle()?.layers?.length ?? 0) > 0;
+
+    const apply = async () => {
+      if (!styleReady()) return;
+
+      // İl polygon GeoJSON'unu fetch et (cache'lenir tarayıcıda)
+      let provGeo: GeoJSON.FeatureCollection | null = null;
+      try {
+        const r = await fetch("/geo/tr-provinces.geojson");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        provGeo = await r.json();
+      } catch (e) {
+        console.error("[sales-map] il GeoJSON yüklenemedi:", e);
+        return;
+      }
+      if (!provGeo) return;
+      // cancelled check'i fetch sonrası kaldırıldı — setup idempotent
+      // (remove + add), HMR remount sırasında stale durum kalmaz.
+
+      // Bölge → metric eşlemesi (composite tier ağırlıklı greenRatio + sayım)
+      type RegMetric = { greenRatio: number; musteriSayisi: number; color: string };
+      const metrics = new Map<string, RegMetric>();
+      for (const r of regionsRef.current) {
+        const green = r.healthy + 0.6 * r.watch;
+        const red = r.critical + 0.6 * r.risk;
+        const denom = green + red;
+        metrics.set(r.bolge, {
+          // denom 0 ise (bilinen müşteri yok) -1 → fill'de "veri yok" gri'sine düşer
+          greenRatio: denom > 0 ? green / denom : -1,
+          musteriSayisi: r.musteriSayisi,
+          color: r.color,
+        });
+      }
+
+      // Her il feature'ına agg metric'i ekle (data-driven paint için)
+      const enriched: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: provGeo.features.map((f) => {
+          const p = (f.properties ?? {}) as Record<string, unknown>;
+          const regionName = String(p.region ?? "");
+          const m = metrics.get(regionName);
+          return {
+            ...f,
+            properties: {
+              ...p,
+              greenRatio: m?.greenRatio ?? -1, // -1 = veri yok
+              musteriSayisi: m?.musteriSayisi ?? 0,
+            },
+          };
+        }),
+      };
+
+      // Centroid kaynak — etiketler için (regionGeojson zaten bizim
+      // weighted-centroid verimiz; merkeze koy)
+      const existingProv = map.getSource(PROV_SRC) as maplibregl.GeoJSONSource | undefined;
+      if (existingProv) {
+        existingProv.setData(enriched);
+      } else {
+        map.addSource(PROV_SRC, { type: "geojson", data: enriched });
+      }
+      const existingCent = map.getSource(CENT_SRC) as maplibregl.GeoJSONSource | undefined;
+      if (existingCent) {
+        existingCent.setData(regionGeojson);
+      } else {
+        map.addSource(CENT_SRC, { type: "geojson", data: regionGeojson });
+      }
+
+      // Layer'ları her zaman yeniden ekle — HMR/race sırasında stale state
+      // kalmasın. addLayer "exists" hata atar; bu yüzden önce sil sonra ekle.
+      if (map.getLayer("region-fill")) map.removeLayer("region-fill");
+      if (map.getLayer("region-outline")) map.removeLayer("region-outline");
+      if (map.getLayer("region-label")) map.removeLayer("region-label");
+
+      // Fill layer — aynı klasik bölgenin il'leri aynı rengi alır
+      map.addLayer({
+        id: "region-fill",
+        type: "fill",
+        source: PROV_SRC,
+        paint: {
+          "fill-color": [
+            "case",
+            ["==", ["get", "greenRatio"], -1],
+            COLOR_MUTED,
+            [
+              "interpolate",
+              ["linear"],
+              ["get", "greenRatio"],
+              0,    "#dc2626",
+              0.25, "#ef4444",
+              0.5,  "#f59e0b",
+              0.75, "#84cc16",
+              1,    "#16a34a",
+            ],
+          ],
+          "fill-opacity": [
+            "case",
+            ["==", ["get", "greenRatio"], -1],
+            0.18,
+            0.55,
+          ],
+        },
+      });
+
+      // Region sınır çizgisi
+      map.addLayer({
+        id: "region-outline",
+        type: "line",
+        source: PROV_SRC,
+        paint: {
+          "line-color": "#44403c",
+          "line-width": 0.8,
+          "line-opacity": 0.5,
+        },
+      });
+
+      // Bölge adı + müşteri sayısı (centroid'de).
+      map.addLayer({
+        id: "region-label",
+        type: "symbol",
+        source: CENT_SRC,
+        layout: {
+          "text-field": [
+            "concat",
+            ["get", "bolge"],
+            "\n",
+            ["to-string", ["get", "musteriSayisi"]],
+          ],
+          "text-size": 15,
+          "text-font": ["Open Sans Semibold"],
+          "text-anchor": "center",
+          "text-allow-overlap": true,
+          "text-ignore-placement": true,
+          "text-letter-spacing": 0.04,
+        },
+        paint: {
+          "text-color":
+            typeof document !== "undefined" &&
+            document.documentElement.getAttribute("data-theme") === "dark"
+              ? "#fafafa"
+              : "#0f172a",
+          "text-halo-color":
+            typeof document !== "undefined" &&
+            document.documentElement.getAttribute("data-theme") === "dark"
+              ? "#0a0a0b"
+              : "#ffffff",
+          "text-halo-width": 3,
+          "text-halo-blur": 0.5,
+        },
+      });
+
+      // Drill-down: il polygon'una tıklayınca customer view + ?region=<bolge>
+      map.on("click", "region-fill", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        const regionName = String((f.properties as { region?: string }).region ?? "");
+        if (!regionName) return;
+        const { router: rt, pathname: pn, sp: sParams } = navRef.current;
+        const params = new URLSearchParams(sParams.toString());
+        params.delete("view"); // customer'a dön
+        params.delete("bolge"); // legacy filter'i temizle
+        params.set("region", regionName);
+        rt.push(`${pn}?${params.toString()}`);
+      });
+
+      const setCursor = (cursor: string) => {
+        map.getCanvas().style.cursor = cursor;
+      };
+      map.on("mouseenter", "region-fill", () => setCursor("pointer"));
+      map.on("mouseleave", "region-fill", () => setCursor(""));
+    };
+
+    // isStyleLoaded() ve idle event timing'i MapLibre v3'te kararsız. Polling
+    // ile periyodik check yapıp ilk hazır olduğunda apply çağır.
+    let applied = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tryApply = () => {
+      if (applied || cancelled) return;
+      if (map.isStyleLoaded()) {
+        applied = true;
+        void apply();
+        return;
+      }
+      timer = setTimeout(tryApply, 100);
+    };
+    tryApply();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      try {
+        if (map.getLayer("region-label")) map.removeLayer("region-label");
+        if (map.getLayer("region-outline")) map.removeLayer("region-outline");
+        if (map.getLayer("region-fill")) map.removeLayer("region-fill");
+        if (map.getSource("region-centroids")) map.removeSource("region-centroids");
+        if (map.getSource("tr-provinces")) map.removeSource("tr-provinces");
+      } catch {
+        // yut
+      }
+    };
+    // mapReady ile race condition korunur — map henüz yüklenmemişken effect
+    // tetiklenirse early return etmesin, mapReady true olunca tekrar fire et.
+    // regionsKey değişirse (filter ile bölge metrikleri güncellendi) layer
+    // yeniden kurulur ve fill renkleri tazelenir.
+  }, [viewMode, mapReady, regionsKey]);
+
+  // Customer drill-down il sınırı overlay'i — viewMode === "customer" ve
+  // ?region= varken, o klasik bölgenin il'lerini dashed outline + il adı
+  // etiketi olarak çizer. Maraş'ın Pazarcık ilçesi gibi sınır noktalar
+  // basemap'in "Gaziantep" yazısının dibine düşünce kafa karışıyordu;
+  // il sınırı çizgisi noktaları görsel olarak doğru il'e yerleştirir.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (viewMode !== "customer" || !regionFilter) return;
+
+    const PROV_SRC = "drill-provinces";
+    const CENT_SRC = "drill-province-centroids";
+    let cancelled = false;
+    let applied = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // İl polygon'unun ana gövdesi için tek bir merkez nokta — etiket buraya
+    // konur. MultiPolygon (İzmir = yarımada + adalar) için en BÜYÜK polygon'un
+    // bbox merkezi alınır; küçük adalar etiket spamı yapmasın.
+    const ringArea = (ring: number[][]): number => {
+      let a = 0;
+      for (let i = 0; i < ring.length - 1; i++) {
+        a += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+      }
+      return Math.abs(a / 2);
+    };
+    const ringBboxCenter = (ring: number[][]): [number, number] => {
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const [x, y] of ring) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+      return [(minX + maxX) / 2, (minY + maxY) / 2];
+    };
+    const featureCentroid = (geom: GeoJSON.Geometry): [number, number] | null => {
+      if (geom.type === "Polygon") return ringBboxCenter(geom.coordinates[0]);
+      if (geom.type === "MultiPolygon") {
+        let largest = geom.coordinates[0];
+        let area = ringArea(largest[0]);
+        for (const poly of geom.coordinates) {
+          const a = ringArea(poly[0]);
+          if (a > area) { largest = poly; area = a; }
+        }
+        return ringBboxCenter(largest[0]);
+      }
+      return null;
+    };
+
+    const apply = async () => {
+      if (cancelled || !map.isStyleLoaded()) return;
+
+      let geo: GeoJSON.FeatureCollection | null = null;
+      try {
+        const r = await fetch("/geo/tr-provinces.geojson");
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        geo = await r.json();
+      } catch (e) {
+        console.error("[sales-map] drill-down il geojson yüklenemedi:", e);
+        return;
+      }
+      if (!geo || cancelled) return;
+
+      // Sadece drill-down bölgesinin il'leri
+      const filtered: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: geo.features.filter(
+          (f) =>
+            String((f.properties ?? {}).region ?? "") === regionFilter,
+        ),
+      };
+
+      // Centroid'ler (il başına tek Point) — etiketler için ayrı source
+      const centroidFeatures: GeoJSON.Feature[] = [];
+      for (const f of filtered.features) {
+        const c = featureCentroid(f.geometry);
+        if (!c) continue;
+        centroidFeatures.push({
+          type: "Feature",
+          properties: { name: String((f.properties ?? {}).name ?? "") },
+          geometry: { type: "Point", coordinates: c },
+        });
+      }
+      const centroids: GeoJSON.FeatureCollection = {
+        type: "FeatureCollection",
+        features: centroidFeatures,
+      };
+
+      const existing = map.getSource(PROV_SRC) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (existing) existing.setData(filtered);
+      else map.addSource(PROV_SRC, { type: "geojson", data: filtered });
+
+      const existingCent = map.getSource(CENT_SRC) as
+        | maplibregl.GeoJSONSource
+        | undefined;
+      if (existingCent) existingCent.setData(centroids);
+      else map.addSource(CENT_SRC, { type: "geojson", data: centroids });
+
+      // Clusters layer'ı varsa onun ALTINA yerleştir — point click'leri
+      // bloklamasın diye fill ve outline en altta kalsın.
+      const beforeId = map.getLayer("clusters") ? "clusters" : undefined;
+
+      if (map.getLayer("drill-fill")) map.removeLayer("drill-fill");
+      map.addLayer(
+        {
+          id: "drill-fill",
+          type: "fill",
+          source: PROV_SRC,
+          paint: {
+            "fill-color": ["get", "regionColor"],
+            // Çok düşük opacity — sadece il alanını hafifçe boya, noktalar
+            // baskın kalsın. Drill-down olduğunu ima eden subtle vurgu.
+            "fill-opacity": 0.06,
+          },
+        },
+        beforeId,
+      );
+
+      if (map.getLayer("drill-outline")) map.removeLayer("drill-outline");
+      map.addLayer(
+        {
+          id: "drill-outline",
+          type: "line",
+          source: PROV_SRC,
+          paint: {
+            "line-color": ["get", "regionColor"],
+            "line-width": 1.5,
+            "line-opacity": 0.75,
+            // Kesik çizgi — basemap'in il sınırlarıyla karışmasın diye.
+            "line-dasharray": [2, 2],
+          },
+        },
+        beforeId,
+      );
+
+      // İl ad etiketleri — en üstte (noktaların üstüne). Polygon kaynağı
+      // değil, il başına TEK Point içeren centroid kaynağı kullanılır;
+      // MultiPolygon il'lerde (İzmir vs.) parça başına etiket çıkmasın.
+      if (map.getLayer("drill-label")) map.removeLayer("drill-label");
+      map.addLayer({
+        id: "drill-label",
+        type: "symbol",
+        source: CENT_SRC,
+        // Düşük zoom'da il etiketleri spam yapmasın — 7+ zoom'da görünsün
+        minzoom: 6.5,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-size": 13,
+          "text-font": ["Open Sans Semibold"],
+          "text-anchor": "center",
+          "text-letter-spacing": 0.05,
+          // Centroid'ler il başına tek olduğu için overlap olmaz; emin olmak
+          // için allow-overlap=false bırakıyoruz (yine de zoom out'ta küçük
+          // illerin etiketleri komşusuna çakışırsa biri gizlenir).
+          "text-allow-overlap": false,
+        },
+        paint: {
+          "text-color":
+            typeof document !== "undefined" &&
+            document.documentElement.getAttribute("data-theme") === "dark"
+              ? "#fafafa"
+              : "#0f172a",
+          "text-halo-color":
+            typeof document !== "undefined" &&
+            document.documentElement.getAttribute("data-theme") === "dark"
+              ? "#0a0a0b"
+              : "#ffffff",
+          "text-halo-width": 2.5,
+          "text-halo-blur": 0.4,
+        },
+      });
+    };
+
+    const tryApply = () => {
+      if (applied || cancelled) return;
+      if (map.isStyleLoaded()) {
+        applied = true;
+        void apply();
+        return;
+      }
+      timer = setTimeout(tryApply, 100);
+    };
+    tryApply();
+
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      try {
+        if (map.getLayer("drill-label")) map.removeLayer("drill-label");
+        if (map.getLayer("drill-outline")) map.removeLayer("drill-outline");
+        if (map.getLayer("drill-fill")) map.removeLayer("drill-fill");
+        if (map.getSource("drill-province-centroids"))
+          map.removeSource("drill-province-centroids");
+        if (map.getSource("drill-provinces")) map.removeSource("drill-provinces");
+      } catch {
+        // yut
+      }
+    };
+  }, [viewMode, mapReady, regionFilter]);
 
   return (
     <>

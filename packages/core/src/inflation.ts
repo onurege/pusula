@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { currentDate } from "./now.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../..");
@@ -46,18 +47,18 @@ export function getMultiplier(
 }
 
 /** YYYY-MM formatında bugünün ayını döndürür. */
-export function currentYyyymm(today: Date = new Date()): string {
+export function currentYyyymm(today: Date = currentDate()): string {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 }
 
 /** Bir tarihten önce N gün geriye giderek YYYY-MM döndürür. */
-export function yyyymmDaysAgo(days: number, today: Date = new Date()): string {
+export function yyyymmDaysAgo(days: number, today: Date = currentDate()): string {
   const d = new Date(today.getTime() - days * 86_400_000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 /** Bir tarihten N yıl geriye + offset gün ile YYYY-MM döndürür. */
-export function yyyymmYearsAgo(years: number, today: Date = new Date()): string {
+export function yyyymmYearsAgo(years: number, today: Date = currentDate()): string {
   const d = new Date(today.getTime() - years * 365 * 86_400_000);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }

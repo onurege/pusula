@@ -95,6 +95,39 @@ export function getLocalDb(repoRoot: string): Database.Database {
   ensureColumn(db, "map_customers", "ciro_30d", "REAL");
   ensureColumn(db, "map_customers", "ciro_prev_30d", "REAL");
   ensureColumn(db, "map_customers", "risk_tier", "TEXT");
+  // Bölge: TBLDIST.TXTGRUP (kod) → TBLDISTGRUP.TXTAD (okunabilir ad). Sync
+  // sırasında doldurulur. Bölge-bazlı harita görünümü ve filtreleri kullanır.
+  ensureColumn(db, "map_customers", "bolge", "TEXT");
+
+  // Bölge filtresi için index — region görünümünde aggregate + drill-down
+  // sırasında kullanılır.
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_map_customers_bolge ON map_customers(bolge);`);
+
+  // -- Composite Risk Score modeli (0..100, 4 bileşenli) -----------------------
+  // Önceki tek-tier `risk_tier` kolonu legacy olarak kalır; yeni model paralelde
+  // doldurulur. UI cutover'ı (Faz 3) sonrası eski kolon kaldırılabilir.
+  //
+  // Yeni veri alanları — `syncMapData` her sync'te doldurur. Hepsi nullable;
+  // veri yoksa skor `risk_score = NULL` + `risk_tier_v2 = 'unknown'` döner.
+  ensureColumn(db, "map_customers", "ciro_t90", "REAL");
+  ensureColumn(db, "map_customers", "ciro_yoy_30d", "REAL");
+  ensureColumn(db, "map_customers", "fatura_30d", "INTEGER");
+  ensureColumn(db, "map_customers", "fatura_prev_30d", "INTEGER");
+  ensureColumn(db, "map_customers", "fatura_t90", "INTEGER");
+  ensureColumn(db, "map_customers", "urun_grup_30d", "INTEGER");
+  ensureColumn(db, "map_customers", "urun_grup_prev_30d", "INTEGER");
+  ensureColumn(db, "map_customers", "ziyaret_90d", "INTEGER");
+  // Composite + components + reasons. components ve reasons JSON-encoded
+  // (SQLite native JSON yok ama TEXT'te tutmak yeterli; okurken parse edilir).
+  ensureColumn(db, "map_customers", "risk_score", "INTEGER");
+  ensureColumn(db, "map_customers", "risk_tier_v2", "TEXT");
+  ensureColumn(db, "map_customers", "risk_components", "TEXT");
+  ensureColumn(db, "map_customers", "risk_reasons", "TEXT");
+
+  // Yeni tier üzerinden filtreleme/sıralama için index.
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_map_customers_tier_v2 ON map_customers(risk_tier_v2);`,
+  );
 
   dbInstance = db;
   dbRoot = repoRoot;

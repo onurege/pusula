@@ -5,8 +5,10 @@ import { createPortal } from "react-dom";
 import {
   AlertCircle,
   Calendar,
+  Check,
   Hash,
   MapPin,
+  Plus,
   RefreshCw,
   Sparkles,
   Target,
@@ -16,10 +18,10 @@ import {
 } from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
-import { describeRiskReason } from "@/lib/risk";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
+import { addAction as addWeeklyAction } from "@/components/weekly-actions/store";
 
 type SalesState =
   | { kind: "idle" }
@@ -152,15 +154,7 @@ export function CustomerModal({ customer, onClose }: Props) {
               <div className="text-sm text-fg-2 mt-0.5 truncate">{customer.kisaAd}</div>
             )}
             <div className="text-xs text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              {customer.riskTier === "high" && (
-                <Badge tone="bad" size="sm" dot>Yüksek risk</Badge>
-              )}
-              {customer.riskTier === "medium" && (
-                <Badge tone="warn" size="sm" dot>Orta risk</Badge>
-              )}
-              {customer.riskTier === "active" && (
-                <Badge tone="good" size="sm" dot>Aktif</Badge>
-              )}
+              <RiskTierBadge tier={customer.riskScore.tier} score={customer.riskScore.score} />
               {customer.distributor && (
                 <Badge tone="accent" size="sm">
                   {customer.distributor}
@@ -204,21 +198,9 @@ export function CustomerModal({ customer, onClose }: Props) {
                 )}
               </div>
             )}
-            {(customer.riskTier === "high" || customer.riskTier === "medium") && (
-              <div
-                className={
-                  "mt-2 text-[11px] leading-snug px-2.5 py-1.5 rounded-md border " +
-                  (customer.riskTier === "high"
-                    ? "border-bad/30 bg-[var(--color-bad-soft)] text-bad"
-                    : "border-warn/30 bg-[var(--color-warn-soft)] text-warn")
-                }
-              >
-                <span className="font-semibold uppercase tracking-wider text-[10px] mr-1.5">
-                  Neden:
-                </span>
-                <span className="text-fg-2">{describeRiskReason(customer)}</span>
-              </div>
-            )}
+            {/* Risk Skoru kartı header'ın altındaki content bloğunda gösteriliyor
+                (full-width card formatında); burada başlık altında sadece
+                tier rozet'i kalıyor. */}
           </div>
           <button
             type="button"
@@ -246,6 +228,9 @@ export function CustomerModal({ customer, onClose }: Props) {
 
           {sales.kind === "ok" && (
             <>
+              {/* Composite Risk Score — başlığın hemen altında öne çıkar */}
+              <RiskScoreCard riskScore={customer.riskScore} />
+
               {/* Top KPI grid */}
               <section>
                 <SectionHeading>Son 30 Gün Özet</SectionHeading>
@@ -464,6 +449,197 @@ function formatCompact(n: number): string {
   return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
 }
 
+// ---------------------------------------------------------------------------
+// Risk Skoru bileşenleri (composite, açıklanabilir)
+// ---------------------------------------------------------------------------
+
+type TierStyle = {
+  label: string;
+  badgeTone: "bad" | "warn" | "good" | "accent" | "muted";
+  textCls: string;
+  borderCls: string;
+  softCls: string;
+  barCls: string;
+};
+
+const TIER_STYLES: Record<MapCustomer["riskScore"]["tier"], TierStyle> = {
+  critical: {
+    label: "Kritik",
+    badgeTone: "bad",
+    textCls: "text-bad",
+    borderCls: "border-bad/40",
+    softCls: "bg-[var(--color-bad-soft)]",
+    barCls: "bg-bad",
+  },
+  risk: {
+    label: "Riskli",
+    badgeTone: "warn",
+    textCls: "text-tier-risk",
+    borderCls: "border-tier-risk/40",
+    softCls: "bg-tier-risk-soft",
+    barCls: "bg-tier-risk",
+  },
+  watch: {
+    label: "İzlemede",
+    badgeTone: "warn",
+    textCls: "text-warn",
+    borderCls: "border-warn/40",
+    softCls: "bg-[var(--color-warn-soft)]",
+    barCls: "bg-warn",
+  },
+  healthy: {
+    label: "Sağlıklı",
+    badgeTone: "good",
+    textCls: "text-good",
+    borderCls: "border-good/40",
+    softCls: "bg-[var(--color-good-soft)]",
+    barCls: "bg-good",
+  },
+  unknown: {
+    label: "Yetersiz veri",
+    badgeTone: "muted",
+    textCls: "text-muted",
+    borderCls: "border-border",
+    softCls: "bg-surface-2",
+    barCls: "bg-muted-2",
+  },
+};
+
+function RiskTierBadge({
+  tier,
+  score,
+}: {
+  tier: MapCustomer["riskScore"]["tier"];
+  score: number | null;
+}) {
+  const s = TIER_STYLES[tier];
+  return (
+    <Badge tone={s.badgeTone} size="sm" dot>
+      {score !== null ? `${score}/100 · ${s.label}` : s.label}
+    </Badge>
+  );
+}
+
+const COMPONENT_LABELS: Record<
+  keyof MapCustomer["riskScore"]["components"],
+  string
+> = {
+  momentum: "Satış Momentumu",
+  behavioral: "Davranışsal",
+  payment: "Ödeme",
+  engagement: "Etkileşim",
+};
+
+function RiskScoreCard({
+  riskScore,
+}: {
+  riskScore: MapCustomer["riskScore"];
+}) {
+  const s = TIER_STYLES[riskScore.tier];
+  return (
+    <section
+      className={
+        "rounded-lg border p-4 space-y-4 " +
+        s.borderCls +
+        " " +
+        s.softCls
+      }
+    >
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+            Risk Skoru
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span
+              className={"text-3xl font-bold tracking-tight tabular-nums " + s.textCls}
+            >
+              {riskScore.score !== null ? riskScore.score : "—"}
+            </span>
+            <span className="text-sm text-muted">/100</span>
+            <span className={"text-sm font-semibold " + s.textCls}>· {s.label}</span>
+          </div>
+        </div>
+        <div className="text-[10px] text-muted-2 text-right leading-tight max-w-[180px]">
+          Satış, davranış, ödeme ve etkileşim sinyallerinin bileşik skoru.
+        </div>
+      </div>
+
+      {/* Bileşen barları */}
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+        {(Object.keys(COMPONENT_LABELS) as Array<keyof typeof COMPONENT_LABELS>).map(
+          (key) => (
+            <ComponentBar
+              key={key}
+              label={COMPONENT_LABELS[key]}
+              value={riskScore.components[key]}
+            />
+          ),
+        )}
+      </div>
+
+      {/* Reasons */}
+      {riskScore.reasons.length > 0 && (
+        <ul className="space-y-1 text-[11.5px] leading-snug text-fg-2 border-t border-border/60 pt-3">
+          {riskScore.reasons.map((r, i) => (
+            <li key={i} className="flex gap-2">
+              <span className="text-muted-2 shrink-0">·</span>
+              <span>{r}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ComponentBar({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | null;
+}) {
+  const pct = value === null ? 0 : Math.min(100, Math.max(0, value));
+  // Bar rengi değere göre — yüksek değer = kötü (kırmızı), düşük = iyi (yeşil)
+  const barTone: keyof typeof TIER_STYLES =
+    value === null
+      ? "unknown"
+      : value < 30
+        ? "healthy"
+        : value < 55
+          ? "watch"
+          : value < 75
+            ? "risk"
+            : "critical";
+  const bar = TIER_STYLES[barTone].barCls;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between gap-2 mb-1">
+        <span className="text-[10.5px] uppercase tracking-wider text-muted font-semibold">
+          {label}
+        </span>
+        <span
+          className={
+            "text-[11px] tabular-nums " +
+            (value === null ? "text-muted-2" : "text-fg-2 font-medium")
+          }
+        >
+          {value === null ? "veri yok" : Math.round(value)}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-surface-2 overflow-hidden">
+        {value !== null && (
+          <div
+            className={"h-full rounded-full transition-all " + bar}
+            style={{ width: `${pct}%` }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ForesightDashboard({
   data,
   customer,
@@ -476,6 +652,34 @@ function ForesightDashboard({
   const yoyTotal = data.yoy.reduce((a, b) => a + b.ciro, 0);
   const yoyTop = data.yoy.slice(0, 8);
   const yoyMax = yoyTop[0]?.ciro ?? 1;
+
+  // Hangi aksiyon zaten haftalık listeye eklendi — index bazlı set.
+  // Foresight yeniden çekilirse (generatedAt değişir) sıfırla; yeni öneriler
+  // duplicate işaretiyle açılmasın.
+  const [addedActions, setAddedActions] = useState<Set<number>>(new Set());
+  useEffect(() => {
+    setAddedActions(new Set());
+  }, [data.generatedAt]);
+
+  const handleAddAction = (index: number, text: string) => {
+    if (addedActions.has(index)) return;
+    // Drawer'da chip'te uzun unvan'lar truncate ediliyor; mümkünse kısa adı
+    // tercih et, yoksa tam unvan'a düş.
+    const customerName = customer.kisaAd ?? customer.unvan;
+    addWeeklyAction({
+      text,
+      source: "foresight",
+      reason: "14 günlük müşteri foresight",
+      customerId: customer.id,
+      customerName,
+      ...(customer.bolge ? { region: customer.bolge } : {}),
+    });
+    setAddedActions((prev) => {
+      const next = new Set(prev);
+      next.add(index);
+      return next;
+    });
+  };
 
   return (
     <div className="p-6 space-y-5">
@@ -572,14 +776,45 @@ function ForesightDashboard({
             Bu hafta yapılacak
           </div>
           <ol className="space-y-2.5">
-            {data.actions.map((a, i) => (
-              <li key={i} className="text-sm flex gap-3">
-                <span className="shrink-0 size-6 rounded-full bg-accent text-accent-fg text-xs font-semibold flex items-center justify-center">
-                  {i + 1}
-                </span>
-                <span className="flex-1 leading-snug pt-0.5">{a}</span>
-              </li>
-            ))}
+            {data.actions.map((a, i) => {
+              const isAdded = addedActions.has(i);
+              return (
+                <li key={i} className="text-sm flex gap-3 items-start">
+                  <span className="shrink-0 size-6 rounded-full bg-accent text-accent-fg text-xs font-semibold flex items-center justify-center">
+                    {i + 1}
+                  </span>
+                  <span className="flex-1 leading-snug pt-0.5">{a}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleAddAction(i, a)}
+                    disabled={isAdded}
+                    aria-label={
+                      isAdded
+                        ? "Bu aksiyon haftalık listeye eklendi"
+                        : "Aksiyonu haftalık listeye ekle"
+                    }
+                    className={
+                      "shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md border text-[11px] font-medium transition-colors " +
+                      (isAdded
+                        ? "border-good/40 bg-good-soft text-good cursor-default"
+                        : "border-accent/40 bg-surface text-accent hover:bg-accent-soft")
+                    }
+                  >
+                    {isAdded ? (
+                      <>
+                        <Check size={12} />
+                        Eklendi
+                      </>
+                    ) : (
+                      <>
+                        <Plus size={12} />
+                        Yapılacaklar'a ekle
+                      </>
+                    )}
+                  </button>
+                </li>
+              );
+            })}
           </ol>
         </div>
       )}

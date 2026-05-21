@@ -1,0 +1,50 @@
+{
+  "$schema": "İl adı → Türkiye'nin 7 klasik coğrafi bölgesi eşlemesi. Anahtarlar TR upper + diacritic strip ile normalize (İstanbul → ISTANBUL, Şanlıurfa → SANLIURFA).",
+  "$notes": [
+    "TR-coğrafya konvansiyonel: 7 bölge = Marmara, Ege, Akdeniz, İç Anadolu, Karadeniz, Doğu Anadolu, Güneydoğu Anadolu.",
+    "Toplam 81 il (11+8+8+13+18+14+9 = 81).",
+    "KKTC ayrı 'Kıbrıs' kategorisi — klasik 7 bölgenin dışı."
+  ],
+  "regions": {
+    "Marmara": {
+      "color": "#6366f1",
+      "centroid": [29.2, 40.5],
+      "provinces": ["ISTANBUL","TEKIRDAG","EDIRNE","KIRKLARELI","CANAKKALE","BALIKESIR","BURSA","YALOVA","KOCAELI","SAKARYA","BILECIK"]
+    },
+    "Ege": {
+      "color": "#16a34a",
+      "centroid": [28.2, 38.4],
+      "provinces": ["IZMIR","AYDIN","MUGLA","DENIZLI","MANISA","KUTAHYA","USAK","AFYONKARAHISAR","AFYON"]
+    },
+    "Akdeniz": {
+      "color": "#d97706",
+      "centroid": [33.5, 36.9],
+      "provinces": ["ANTALYA","MERSIN","ICEL","ADANA","HATAY","OSMANIYE","KAHRAMANMARAS","K.MARAS","KMARAS","BURDUR","ISPARTA"]
+    },
+    "İç Anadolu": {
+      "color": "#9333ea",
+      "centroid": [33.6, 39.0],
+      "provinces": ["ANKARA","KONYA","ESKISEHIR","KAYSERI","SIVAS","AKSARAY","YOZGAT","NEVSEHIR","NIGDE","KIRSEHIR","KIRIKKALE","KARAMAN","CANKIRI"]
+    },
+    "Karadeniz": {
+      "color": "#0891b2",
+      "centroid": [37.0, 41.2],
+      "provinces": ["TRABZON","RIZE","ARTVIN","GIRESUN","ORDU","SAMSUN","TOKAT","AMASYA","CORUM","SINOP","KASTAMONU","BARTIN","BOLU","DUZCE","ZONGULDAK","KARABUK","GUMUSHANE","BAYBURT"]
+    },
+    "Doğu Anadolu": {
+      "color": "#dc2626",
+      "centroid": [41.5, 39.5],
+      "provinces": ["VAN","ERZURUM","MALATYA","ELAZIG","BINGOL","BITLIS","MUS","AGRI","IGDIR","TUNCELI","HAKKARI","KARS","ARDAHAN","ERZINCAN"]
+    },
+    "Güneydoğu Anadolu": {
+      "color": "#b45309",
+      "centroid": [40.0, 37.5],
+      "provinces": ["GAZIANTEP","SANLIURFA","URFA","DIYARBAKIR","MARDIN","BATMAN","SIIRT","SIRNAK","KILIS","ADIYAMAN"]
+    },
+    "Kıbrıs": {
+      "color": "#84cc16",
+      "centroid": [33.4, 35.2],
+      "provinces": ["KKTC","LEFKOSA","GIRNE","MAGUSA","GAZIMAGUSA","ISKELE","GUZELYURT","LEFKE"]
+    }
+  }
+}
