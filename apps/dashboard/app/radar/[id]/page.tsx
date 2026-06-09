@@ -10,7 +10,7 @@ import { RadarChart } from "@/components/radar-chart-client";
 import { RadarRefreshButton } from "@/components/radar-refresh-button";
 import { ResultTable } from "@/components/result-table";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams + params Promise dynamic tetikliyor.
 
 export default async function RadarPage({
   params,

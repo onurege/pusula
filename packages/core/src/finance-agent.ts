@@ -57,6 +57,10 @@ export type FinanceCustomerStats = {
 
 export type FinanceFacts = {
   region: string;
+  /** Eğer analiz tek bir ürün grubuna fokuslandıysa onun adı; tüm bölge
+   *  içinse undefined. UI bu bilgiyi başlığa bağlam olarak ekler ve
+   *  Gemini prompt'una "bu grup için" cümlesi ekler. */
+  productGroup?: string;
   buDonem: number;
   gecenYil: number;
   delta: number;
@@ -65,7 +69,8 @@ export type FinanceFacts = {
   distFactors: FinanceFactor[];
   /** Müşteri grubu kırılımı (HORECA/Off-trade/Otel vs) */
   channelFactors: FinanceFactor[];
-  /** Ürün grubu kırılımı (top kategoriler) */
+  /** Ürün grubu kırılımı (top kategoriler) — productGroup verildiyse
+   *  o grubun içindeki SKU breakdown. */
   productFactors: FinanceFactor[];
   /** Müşteri sayısı istatistikleri */
   customers: FinanceCustomerStats;
@@ -92,21 +97,42 @@ export type FinanceAnalysis = {
  */
 async function fetchRegionTotal(
   region: string,
+  productGroup?: string,
 ): Promise<{ bu: number; gecen: number }> {
   const escRegion = esc(region);
+  // productGroup verildiyse fatura toplamı yerine detay-bazlı (DBLNETFIYAT)
+  // hesaplıyoruz ve TBLURUN/TBLURUNGRUP üzerinden filtreliyoruz.
+  // Fatura toplamı (DBLNETTUTAR) tek bir grup için filtre yapılamaz çünkü
+  // bir fatura birden fazla ürün grubu içerebilir.
+  const isFiltered = !!productGroup;
+  const valExpr = isFiltered ? "bd.DBLNETFIYAT" : "f.DBLNETTUTAR";
+  const productJoin = isFiltered
+    ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd
+         ON bd.LNGYIL = f.LNGYIL
+        AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+        AND bd.LNGDISTKOD = f.LNGDISTKOD
+       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = bd.LNGURUNKOD
+       LEFT JOIN dbo.TBLURUNGRUP ug
+         ON ug.TXTKOD = u.TXTURUNGRUPKOD`
+    : "";
+  const productFilter = isFiltered
+    ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug.TXTAD, u.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+    : "";
   const sql = `
     SELECT
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS bu,
+               THEN ${valExpr} ELSE 0 END) AS bu,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                 AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS gecen
+               THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+    ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      ${productFilter}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         OR (
@@ -123,23 +149,43 @@ async function fetchRegionTotal(
   return { bu: Number(r.bu ?? 0), gecen: Number(r.gecen ?? 0) };
 }
 
-/** Bölge × Distribütör YoY (son 30g vs 12 ay öncesi aynı pencere). */
-async function fetchDistFactors(region: string): Promise<FinanceFactor[]> {
+/** Bölge × Distribütör YoY (son 30g vs 12 ay öncesi aynı pencere).
+ *  productGroup verildiyse sadece o grup için distribütör kırılımı. */
+async function fetchDistFactors(
+  region: string,
+  productGroup?: string,
+): Promise<FinanceFactor[]> {
   const escRegion = esc(region);
+  const isFiltered = !!productGroup;
+  const valExpr = isFiltered ? "bd.DBLNETFIYAT" : "f.DBLNETTUTAR";
+  const productJoin = isFiltered
+    ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd
+         ON bd.LNGYIL = f.LNGYIL
+        AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+        AND bd.LNGDISTKOD = f.LNGDISTKOD
+       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = bd.LNGURUNKOD
+       LEFT JOIN dbo.TBLURUNGRUP ug
+         ON ug.TXTKOD = u.TXTURUNGRUPKOD`
+    : "";
+  const productFilter = isFiltered
+    ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug.TXTAD, u.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+    : "";
   const sql = `
     SELECT TOP 10
       d.TXTAD AS ad,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS bu,
+               THEN ${valExpr} ELSE 0 END) AS bu,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                 AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS gecen
+               THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+    ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      ${productFilter}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         OR (
@@ -149,10 +195,10 @@ async function fetchDistFactors(region: string): Promise<FinanceFactor[]> {
       )
     GROUP BY d.TXTAD
     ORDER BY ABS(SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-                          THEN f.DBLNETTUTAR ELSE 0 END)
+                          THEN ${valExpr} ELSE 0 END)
               - SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                           AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-                          THEN f.DBLNETTUTAR ELSE 0 END)) DESC
+                          THEN ${valExpr} ELSE 0 END)) DESC
   `;
   const out = await runReadOnly(sql, {
     limit: 12,
@@ -173,26 +219,46 @@ async function fetchDistFactors(region: string): Promise<FinanceFactor[]> {
   });
 }
 
-/** Bölge × Müşteri grubu YoY (HORECA/Off-trade/Otel vs). */
-async function fetchChannelFactors(region: string): Promise<FinanceFactor[]> {
+/** Bölge × Müşteri grubu YoY (HORECA/Off-trade/Otel vs).
+ *  productGroup verildiyse sadece o grup için kanal kırılımı. */
+async function fetchChannelFactors(
+  region: string,
+  productGroup?: string,
+): Promise<FinanceFactor[]> {
   const escRegion = esc(region);
+  const isFiltered = !!productGroup;
+  const valExpr = isFiltered ? "bd.DBLNETFIYAT" : "f.DBLNETTUTAR";
+  const productJoin = isFiltered
+    ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd
+         ON bd.LNGYIL = f.LNGYIL
+        AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+        AND bd.LNGDISTKOD = f.LNGDISTKOD
+       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = bd.LNGURUNKOD
+       LEFT JOIN dbo.TBLURUNGRUP ug
+         ON ug.TXTKOD = u.TXTURUNGRUPKOD`
+    : "";
+  const productFilter = isFiltered
+    ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug.TXTAD, u.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+    : "";
   const sql = `
     SELECT TOP 10
       ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Grupsuz)') AS ad,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS bu,
+               THEN ${valExpr} ELSE 0 END) AS bu,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                 AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-               THEN f.DBLNETTUTAR ELSE 0 END) AS gecen
+               THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
     LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
+    ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND m.BYTDURUM = 0
       AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      ${productFilter}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         OR (
@@ -202,10 +268,10 @@ async function fetchChannelFactors(region: string): Promise<FinanceFactor[]> {
       )
     GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Grupsuz)')
     ORDER BY ABS(SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-                          THEN f.DBLNETTUTAR ELSE 0 END)
+                          THEN ${valExpr} ELSE 0 END)
               - SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                           AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-                          THEN f.DBLNETTUTAR ELSE 0 END)) DESC
+                          THEN ${valExpr} ELSE 0 END)) DESC
   `;
   const out = await runReadOnly(sql, {
     limit: 12,
@@ -226,12 +292,27 @@ async function fetchChannelFactors(region: string): Promise<FinanceFactor[]> {
   });
 }
 
-/** Bölge × Ürün grubu YoY (top kategoriler). */
-async function fetchProductFactors(region: string): Promise<FinanceFactor[]> {
+/** Bölge × Ürün grubu YoY (top kategoriler).
+ *  productGroup verildiyse o grup içindeki SKU breakdown'a geçer
+ *  (örn. VODKA seçildiyse → Absolut, Stoli, Smirnoff vb. SKU kırılımı). */
+async function fetchProductFactors(
+  region: string,
+  productGroup?: string,
+): Promise<FinanceFactor[]> {
   const escRegion = esc(region);
+  const isFiltered = !!productGroup;
+  // Filtre varsa GROUP BY ürün adına (u.TXTAD) düş — kullanıcı zaten "VODKA"
+  // grubunu seçti, içeride hangi SKU'lar performans değiştirdi onu görmeli.
+  // Filtre yoksa eski davranış: ürün grubuna göre grupla.
+  const groupByExpr = isFiltered
+    ? "u.TXTAD"
+    : "ISNULL(NULLIF(LTRIM(RTRIM(ug.TXTAD)), ''), u.TXTAD)";
+  const productFilter = isFiltered
+    ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug.TXTAD, u.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+    : "";
   const sql = `
     SELECT TOP 10
-      ISNULL(NULLIF(LTRIM(RTRIM(ug.TXTAD)), ''), u.TXTAD) AS ad,
+      ${groupByExpr} AS ad,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
                THEN bd.DBLNETFIYAT ELSE 0 END) AS bu,
       SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
@@ -246,10 +327,11 @@ async function fetchProductFactors(region: string): Promise<FinanceFactor[]> {
      AND bd.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = bd.LNGURUNKOD
     LEFT JOIN dbo.TBLURUNGRUP ug
-      ON ug.TXTKOD = u.TXTURUNGRUPKOD AND ug.LNGDISTKOD = u.LNGDISTKOD
+      ON ug.TXTKOD = u.TXTURUNGRUPKOD
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      ${productFilter}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         OR (
@@ -257,7 +339,7 @@ async function fetchProductFactors(region: string): Promise<FinanceFactor[]> {
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
         )
       )
-    GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(ug.TXTAD)), ''), u.TXTAD)
+    GROUP BY ${groupByExpr}
     ORDER BY ABS(SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
                           THEN bd.DBLNETFIYAT ELSE 0 END)
               - SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
@@ -283,11 +365,49 @@ async function fetchProductFactors(region: string): Promise<FinanceFactor[]> {
   });
 }
 
-/** Aktif/kaybedilen müşteri sayıları. */
+/** Aktif/kaybedilen müşteri sayıları. productGroup verildiyse sadece o
+ *  grubu satın alan müşteri sayıları. */
 async function fetchCustomerStats(
   region: string,
+  productGroup?: string,
 ): Promise<FinanceCustomerStats> {
   const escRegion = esc(region);
+  const isFiltered = !!productGroup;
+  const productJoin = isFiltered
+    ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd
+         ON bd.LNGYIL = f.LNGYIL
+        AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+        AND bd.LNGDISTKOD = f.LNGDISTKOD
+       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = bd.LNGURUNKOD
+       LEFT JOIN dbo.TBLURUNGRUP ug
+         ON ug.TXTKOD = u.TXTURUNGRUPKOD`
+    : "";
+  const productFilter = isFiltered
+    ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug.TXTAD, u.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+    : "";
+  // Aynı JOIN+filter churn sorgusunda da kullanılacak, alias kollizyonu olmasın
+  // diye prev/cur subquery'lerine ayrı verisi gönderiyoruz.
+  const productJoinPrev = isFiltered
+    ? productJoin.replace(/\bbd\b/g, "bd_p").replace(/\bu\b/g, "u_p").replace(/\bug\b/g, "ug_p").replace(/\bf\b/g, "f").replace(/\bbd_p\b/g, "bd_p")
+    : "";
+  // Yukarıdaki replace zinciri kırılgan — daha güvenli, prev/cur için
+  // baştan ayrı join string'leri yazıyoruz:
+  const productJoinForChurn = (faturaAlias: string, suffix: string) =>
+    isFiltered
+      ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd_${suffix}
+           ON bd_${suffix}.LNGYIL = ${faturaAlias}.LNGYIL
+          AND bd_${suffix}.LNGFATURAKOD = ${faturaAlias}.LNGBELGEKOD
+          AND bd_${suffix}.LNGDISTKOD = ${faturaAlias}.LNGDISTKOD
+         INNER JOIN dbo.TBLURUN u_${suffix} ON u_${suffix}.LNGKOD = bd_${suffix}.LNGURUNKOD
+         LEFT JOIN dbo.TBLURUNGRUP ug_${suffix}
+           ON ug_${suffix}.TXTKOD = u_${suffix}.TXTURUNGRUPKOD`
+      : "";
+  const productFilterForChurn = (suffix: string) =>
+    isFiltered
+      ? `AND UPPER(LTRIM(RTRIM(COALESCE(ug_${suffix}.TXTAD, u_${suffix}.TXTAD)))) = UPPER(LTRIM(RTRIM('${esc(productGroup!)}')))`
+      : "";
+  void productJoinPrev; // helper'ı ayrı yazdığımız için artık kullanılmıyor
+
   const sql = `
     SELECT
       COUNT(DISTINCT CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
@@ -298,9 +418,11 @@ async function fetchCustomerStats(
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+    ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      ${productFilter}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         OR (
@@ -316,16 +438,19 @@ async function fetchCustomerStats(
   const r = out.rows[0] ?? { aktif_bu: 0, aktif_gecen: 0 };
 
   // Kaybedilen müşteri: geçen yıl alışveriş yapıp bu yıl yapmayan
+  // (productGroup verildiyse "bu grubu") — prev/cur ayrı alias suffix
   const churnSql = `
     SELECT COUNT(DISTINCT prev.LNGMUSTERIKOD) AS kaybedilen
     FROM (
       SELECT DISTINCT f.LNGMUSTERIKOD
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+      ${productJoinForChurn("f", "p")}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND d.BYTDURUM = 0
         AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+        ${productFilterForChurn("p")}
         AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
     ) prev
@@ -334,9 +459,11 @@ async function fetchCustomerStats(
       FROM dbo.TBLMSDFATURA f2
       INNER JOIN dbo.TBLDIST d2 ON d2.LNGKOD = f2.LNGDISTKOD
       INNER JOIN dbo.TBLDISTGRUP dg2 ON dg2.TXTKOD = d2.TXTGRUP
+      ${productJoinForChurn("f2", "c")}
       WHERE f2.BYTTUR = 0 AND f2.BYTDURUM = 0
         AND d2.BYTDURUM = 0
         AND UPPER(LTRIM(RTRIM(dg2.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+        ${productFilterForChurn("c")}
         AND f2.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
     ) cur ON cur.LNGMUSTERIKOD = prev.LNGMUSTERIKOD
     WHERE cur.LNGMUSTERIKOD IS NULL
@@ -421,24 +548,34 @@ function buildUserPrompt(facts: FinanceFacts): string {
     )
     .join("\n");
 
-  return `Bölge: **${facts.region}**
+  const scopeHeader = facts.productGroup
+    ? `Bölge: **${facts.region}** · Ürün grubu fokusu: **${facts.productGroup}**
+
+⚠️ Bu analiz YALNIZCA "${facts.productGroup}" ürün grubunun ${facts.region} bölgesindeki performansına odaklanır. Diğer ürün gruplarından bahsetme — onlar bu analizin dışında. Tüm rakamlar (ciro, müşteri sayısı, distribütör/kanal kırılımı) bu grupla filtrelenmiştir.`
+    : `Bölge: **${facts.region}**`;
+
+  const productSectionLabel = facts.productGroup
+    ? `SKU kırılımı (${facts.productGroup} ürün grubu içinde, delta büyüklüğüne göre):`
+    : "Ürün grubu kırılımı:";
+
+  return `${scopeHeader}
 
 Son 30 gün ciro: ₺${fmt(facts.buDonem)}
 Geçen yıl aynı 30 gün: ₺${fmt(facts.gecenYil)}
 YoY delta: ₺${fmt(facts.delta)} (${pct(facts.yoyPct)})
 
-Müşteri sayısı:
+Müşteri sayısı${facts.productGroup ? ` (${facts.productGroup} grubunu alan müşteriler)` : ""}:
   - Bu dönem aktif: ${facts.customers.aktifBu}
   - Geçen yıl aktif: ${facts.customers.aktifGecen}
   - Kaybedilen (geçen yıl alıp bu yıl almayan): ${facts.customers.kaybedilen}
 
-Distribütör kırılımı (delta büyüklüğüne göre, en üstte en kötü):
+Distribütör kırılımı (delta büyüklüğüne göre, en üstte en kötü)${facts.productGroup ? ` · sadece ${facts.productGroup}` : ""}:
 ${distLines || "  (veri yok)"}
 
-Müşteri grubu kırılımı:
+Müşteri grubu kırılımı${facts.productGroup ? ` · sadece ${facts.productGroup}` : ""}:
 ${chLines || "  (veri yok)"}
 
-Ürün grubu kırılımı:
+${productSectionLabel}
 ${prodLines || "  (veri yok)"}
 
 Yukarıdaki verileri kullanarak finans analizi yap.`;
@@ -461,32 +598,43 @@ function fillContributions(factors: FinanceFactor[], totalDelta: number): void {
 
 export async function analyzeRegionAnomaly(
   region: string,
-  options: { forceRefresh?: boolean } = {},
+  options: { forceRefresh?: boolean; productGroup?: string } = {},
 ): Promise<FinanceAnalysis> {
   const cleaned = region.trim();
   if (!cleaned) throw new Error("region parametresi boş.");
+  const productGroup = options.productGroup?.trim() || undefined;
+
+  // CACHE_VERSION — SQL JOIN şekli veya prompt değiştiğinde bump et
+  // (TTL yok, eski entry'ler aksi halde yaşamaya devam eder).
+  // v2: TBLURUNGRUP JOIN'inde LNGDISTKOD constraint'i kaldırıldı.
+  const CACHE_VERSION = "v2";
+  // Cache key'e productGroup'u dahil et — aynı bölge için "tüm gruplar"
+  // ve "VODKA" analizleri ayrı cache satırı olmalı.
+  const cacheKey = productGroup
+    ? `${CACHE_VERSION}::${cleaned.toUpperCase()}::pg::${productGroup.toUpperCase()}`
+    : `${CACHE_VERSION}::${cleaned.toUpperCase()}`;
 
   const cached = await withCache<FinanceAnalysis>(
     CACHE_DOMAIN,
-    cleaned.toUpperCase(),
+    cacheKey,
     async () => {
-      // Paralel veri toplama
+      // Paralel veri toplama — productGroup tüm fetcher'lara geçer
       const [total, distFactors, channelFactors, productFactors, customers] =
         await Promise.all([
-          fetchRegionTotal(cleaned),
-          fetchDistFactors(cleaned).catch((e) => {
+          fetchRegionTotal(cleaned, productGroup),
+          fetchDistFactors(cleaned, productGroup).catch((e) => {
             console.error("[finance-agent dist]", e);
             return [] as FinanceFactor[];
           }),
-          fetchChannelFactors(cleaned).catch((e) => {
+          fetchChannelFactors(cleaned, productGroup).catch((e) => {
             console.error("[finance-agent channel]", e);
             return [] as FinanceFactor[];
           }),
-          fetchProductFactors(cleaned).catch((e) => {
+          fetchProductFactors(cleaned, productGroup).catch((e) => {
             console.error("[finance-agent product]", e);
             return [] as FinanceFactor[];
           }),
-          fetchCustomerStats(cleaned).catch((e) => {
+          fetchCustomerStats(cleaned, productGroup).catch((e) => {
             console.error("[finance-agent customers]", e);
             return { aktifBu: 0, aktifGecen: 0, kaybedilen: 0 };
           }),
@@ -502,6 +650,7 @@ export async function analyzeRegionAnomaly(
 
       const facts: FinanceFacts = {
         region: cleaned,
+        ...(productGroup ? { productGroup } : {}),
         buDonem: total.bu,
         gecenYil: total.gecen,
         delta,

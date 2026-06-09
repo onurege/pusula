@@ -23,7 +23,8 @@ import { InfoHint } from "@/components/komuta/InfoHint";
 import { TurkeyMapPolygon } from "@/components/komuta/TurkeyMapPolygon";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
+// böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
 export const metadata = {
   title: "Komuta Köprüsü · UNIQUE AI Reports",
 };
@@ -68,8 +69,26 @@ export default async function KomutaPage({ searchParams }: Props) {
         {snap.otvNet && <OtvNetBanner avgRate={snap.otvAvgRate} reelActive={snap.reelTL} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
             şeridi öncesi konumlandırılır ki sayfaya giren göz hemen
-            "bu sabahın hikâyesi" cümlesini yakalasın. */}
-        {snap.brief && <AiInsightBar brief={snap.brief} />}
+            "bu sabahın hikâyesi" cümlesini yakalasın. Brief üretilemezse
+            sessizce kaybolmasın → fallback mesaj. */}
+        {snap.brief && snap.brief.trim().length >= 50 ? (
+          <AiInsightBar brief={snap.brief} />
+        ) : (
+          <div className="ai-brief-empty">
+            <span className="ai-brief-empty-icon">🤖</span>
+            <div>
+              <strong>Günün AI yorumu üretilemedi.</strong>{" "}
+              <span className="ai-brief-empty-sub">
+                Gemini servisi yanıt vermedi (network / API key / timeout).
+                Sayfayı{" "}
+                <a href="/komuta?refresh=1" className="ai-brief-empty-link">
+                  ?refresh=1 ile yenile
+                </a>{" "}
+                veya API server log'larına bak.
+              </span>
+            </div>
+          </div>
+        )}
         <KpiStrip kpis={snap.kpis} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 

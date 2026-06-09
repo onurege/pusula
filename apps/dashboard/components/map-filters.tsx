@@ -9,6 +9,11 @@ type Props = {
   facets: MapFacets;
   customers: MapCustomer[];
   count: number;
+  /**
+   * Filtreleri uygularken router.push hedefi. /map (V1) veya /v2/harita (V2).
+   * V2'den V1'e atlamamak için her drill-down aynı path'e push'lar.
+   */
+  basePath?: string;
 };
 
 export const FLY_TO_EVENT = "enroute:fly-to";
@@ -17,7 +22,7 @@ export type FlyToDetail = {
   customer: MapCustomer;
 };
 
-export function MapFilters({ facets, customers, count }: Props) {
+export function MapFilters({ facets, customers, count, basePath = "/map" }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
@@ -51,14 +56,14 @@ export function MapFilters({ facets, customers, count }: Props) {
       else sp.delete(k);
     }
     startTransition(() => {
-      router.push(`/map?${sp.toString()}`);
+      router.push(`${basePath}?${sp.toString()}`);
     });
   }
 
   function reset() {
     setQ("");
     startTransition(() => {
-      router.push("/map");
+      router.push(basePath);
     });
   }
 

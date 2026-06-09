@@ -29,6 +29,145 @@ type SalesState =
   | { kind: "ok"; data: CustomerSales }
   | { kind: "err"; message: string };
 
+/**
+ * Ödeme skoru — son 30g tahsilat / ciro coverage'a dayalı.
+ * Core'da `payment: null` hardcoded; detail data'sındaki tahsilat ham
+ * rakamlarından display-time hesaplıyoruz.
+ *
+ * NOT: Daha güçlü sinyal olan kümülatif "cari bakiye" (TBLTCPMUSTERIBAKIYE)
+ * Univera kurulumları arasında tutarsız bulundu — kaldırıldı. Bu basit
+ * coverage modeli en azından son 30g penceresindeki ödeme davranışını
+ * yansıtır.
+ *
+ * Skor (0=mükemmel, 100=kritik):
+ *   coverage = toplam tahsilat / ciro30
+ *   coverage >= 1.0   → 10
+ *   coverage 0.8-1.0  → 25
+ *   coverage 0.5-0.8  → 50
+ *   coverage 0.2-0.5  → 75
+ *   coverage < 0.2    → 90
+ *   ciro > 0 & tahsilat = 0 → 80
+ *   ciro = 0 & tahsilat = 0 → null
+ *
+ * Method risk (çek+senet payı): +10/+20 penalty.
+ */
+function computePaymentScore(sales: CustomerSales): number | null {
+  const ciro = sales.ciro30 ?? 0;
+  const tahsilatNakit = sales.tahsilatNakit ?? 0;
+  const tahsilatCek = sales.tahsilatCek ?? 0;
+  const tahsilatSenet = sales.tahsilatSenet ?? 0;
+  const tahsilatKK = sales.tahsilatKK ?? 0;
+  const toplam = tahsilatNakit + tahsilatCek + tahsilatSenet + tahsilatKK;
+  if (ciro === 0 && toplam === 0) return null;
+  if (ciro > 0 && toplam === 0) return 80;
+
+  const coverage = ciro > 0 ? toplam / ciro : 1;
+  let baseScore: number;
+  if (coverage >= 1.0) baseScore = 10;
+  else if (coverage >= 0.8) baseScore = 25;
+  else if (coverage >= 0.5) baseScore = 50;
+  else if (coverage >= 0.2) baseScore = 75;
+  else baseScore = 90;
+
+  const vade = tahsilatCek + tahsilatSenet;
+  const vadeShare = toplam > 0 ? vade / toplam : 0;
+  let methodPenalty = 0;
+  if (vadeShare > 0.8) methodPenalty = 20;
+  else if (vadeShare > 0.5) methodPenalty = 10;
+
+  return Math.min(100, baseScore + methodPenalty);
+}
+
+/**
+ * Risk skoru bileşenlerini sales detail ile zenginleştirir — özellikle
+ * payment'i hesaplayıp overall skoru da yeniden ağırlıklandırır.
+ *
+ * RISK_WEIGHTS (core ile aynı): momentum 0.40, behavioral 0.30, payment 0.20,
+ * engagement 0.10.
+ */
+function enhanceRiskScoreWithPayment(
+  riskScore: MapCustomer["riskScore"],
+  sales: CustomerSales,
+): MapCustomer["riskScore"] {
+  // unknown tier'a dokunma (zaten yeterli veri yok)
+  if (riskScore.tier === "unknown") return riskScore;
+  const paymentValue = computePaymentScore(sales);
+  if (paymentValue === null) return riskScore; // payment hesaplanamadı, no-op
+
+  const enhancedComponents = {
+    ...riskScore.components,
+    payment: paymentValue,
+  };
+
+  // Overall skoru yeniden hesapla (payment dahil, 4 bileşen weighted avg)
+  const WEIGHTS = {
+    momentum: 0.40,
+    behavioral: 0.30,
+    payment: 0.20,
+    engagement: 0.10,
+  };
+  let wSum = 0;
+  let weighted = 0;
+  for (const [k, w] of Object.entries(WEIGHTS) as [
+    keyof typeof WEIGHTS,
+    number,
+  ][]) {
+    const v = enhancedComponents[k];
+    if (v != null) {
+      wSum += w;
+      weighted += w * v;
+    }
+  }
+  const newScore = wSum > 0 ? Math.round(weighted / wSum) : riskScore.score;
+  const newTier =
+    newScore == null
+      ? "unknown"
+      : newScore < 30
+        ? "healthy"
+        : newScore < 55
+          ? "watch"
+          : newScore < 75
+            ? "risk"
+            : "critical";
+
+  // Eski "ödeme verisi yok" reason'u filtrele + payment context'i ekle
+  const filteredReasons = riskScore.reasons.filter(
+    (r) =>
+      !r.startsWith("Ödeme/vade verisi mevcut değil") &&
+      !r.startsWith("Ödeme verisi mevcut değil"),
+  );
+  const ciro = sales.ciro30 ?? 0;
+  const toplam =
+    (sales.tahsilatNakit ?? 0) +
+    (sales.tahsilatCek ?? 0) +
+    (sales.tahsilatSenet ?? 0) +
+    (sales.tahsilatKK ?? 0);
+  let paymentReason = "";
+  if (ciro > 0 || toplam > 0) {
+    const coverage = ciro > 0 ? toplam / ciro : null;
+    const vadeShare = toplam > 0
+      ? ((sales.tahsilatCek ?? 0) + (sales.tahsilatSenet ?? 0)) / toplam
+      : 0;
+    const covStr = coverage != null
+      ? `tahsilat/ciro = %${(coverage * 100).toFixed(0)}`
+      : `tahsilat var, fatura yok`;
+    const methodStr = vadeShare > 0.5
+      ? ` · çek/senet payı %${(vadeShare * 100).toFixed(0)} (vade riski)`
+      : "";
+    paymentReason = `Ödeme skoru tahsilat verisinden: ${covStr}${methodStr}.`;
+  }
+
+  return {
+    ...riskScore,
+    score: newScore,
+    tier: newTier,
+    components: enhancedComponents,
+    reasons: paymentReason
+      ? [...filteredReasons, paymentReason]
+      : filteredReasons,
+  };
+}
+
 type ExplainState =
   | { kind: "idle" }
   | { kind: "loading" }
@@ -228,8 +367,14 @@ export function CustomerModal({ customer, onClose }: Props) {
 
           {sales.kind === "ok" && (
             <>
-              {/* Composite Risk Score — başlığın hemen altında öne çıkar */}
-              <RiskScoreCard riskScore={customer.riskScore} />
+              {/* Composite Risk Score — başlığın hemen altında öne çıkar.
+                  Ödeme bileşeni sync sırasında null geliyor (Univera mirror'da
+                  tahsilat snapshot'ı yok); detail fetch ile gelen tahsilat
+                  verisinden display-time hesaplıyoruz ve overall score'u
+                  yeniden ağırlıklandırıyoruz. */}
+              <RiskScoreCard
+                riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data)}
+              />
 
               {/* Top KPI grid */}
               <section>

@@ -1,7 +1,27 @@
 import { runReadOnly } from "./db.js";
+import { sqlNow } from "./now.js";
 import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
-import { loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { getTenantConfig } from "./tenant/index.js";
+
+/**
+ * TR il adını UPPER + ASCII (diacritic-strip) formuna normalize eden SQL
+ * expression — case + diacritic-insensitive eşleştirme için. SQLite native
+ * Turkish collation yok, manuel REPLACE zinciri yapıyoruz.
+ *
+ * Kullanım: `${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`
+ * "İZMİR", "İzmir", "IZMIR", "izmir" hepsi "IZMIR"'e indirgenir → eşleşir.
+ *
+ * Pernod (TBLMUSTERI'den "İZMİR" upper Turkish) + FMCG demo (seed'de "İzmir"
+ * canonical) + olası karışık state'ler tek noktadan tutarlı.
+ */
+function SEHIR_NORM_SQL(expr: string): string {
+  return (
+    `UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${expr},` +
+    `'İ','I'),'ı','I'),'Ş','S'),'ş','S'),'Ğ','G'),'ğ','G'),'Ü','U'),'ü','U'))`
+  );
+}
 
 export type RiskTier = "high" | "medium" | "low" | "active";
 
@@ -553,7 +573,12 @@ export async function listMapCustomers(
   const where: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters.sehir) {
-    where.push("sehir = @sehir");
+    // Case + diacritic-insensitive eşleştirme. DB tarafında Pernod
+    // ("İZMİR" — Türkçe upper), FMCG demo ("İzmir" — canonical mixed),
+    // ve olası eski state ("IZMIR" — ASCII upper) hepsi mevcut olabiliyor.
+    // URL'den de farklı form'lar gelebiliyor (geojson "İzmir" vs eski cache
+    // "İZMİR"). İki tarafı da SAME normalize → eşleşme garantilenir.
+    where.push(`${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`);
     params.sehir = filters.sehir;
   }
   if (filters.bolge) {
@@ -797,7 +822,8 @@ export async function listMapRegions(
   const where: string[] = ["sehir IS NOT NULL AND sehir <> ''"];
   const params: Record<string, unknown> = {};
   if (filters.sehir) {
-    where.push("sehir = @sehir");
+    // Case + diacritic-insensitive eşleştirme (bkz. üst not).
+    where.push(`${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`);
     params.sehir = filters.sehir;
   }
   if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
@@ -1335,7 +1361,16 @@ export async function getCustomerDetail(
   const id = Math.floor(musteriKod);
   const d = Math.floor(days);
 
-  const cacheKey = `${id}:${d}`;
+  // Demo tenant — MSSQL yok, SQLite mirror'dan sentezle. Müşteri kartı
+  // ziyaret + tahsilat + belge sayılarını gerçekçi şekilde gösterir.
+  const tenant = getTenantConfig();
+  if (tenant.id === "fmcg-demo") {
+    return loadCustomerDetailFromMirror(id, d);
+  }
+
+  // Cache v3: bakiye alanları kaldırıldı (TBLTCPMUSTERIBAKIYE proje-bazlı
+  // tutarsız bulundu; payment skoru artık sadece tahsilat coverage'tan).
+  const cacheKey = `v3:${id}:${d}`;
   const result = await withCache<CustomerDetail>(
     "customer-detail",
     cacheKey,
@@ -1343,6 +1378,110 @@ export async function getCustomerDetail(
     { forceRefresh: options.forceRefresh },
   );
   return result.value;
+}
+
+/**
+ * FMCG demo için müşteri detayını SQLite mirror'dan sentezle. Sync sırasında
+ * yazılan ciro_30d / fatura_30d / ziyaret_90d / days_since_last_* alanlarından
+ * gerçekçi bir CustomerDetail üretir.
+ *
+ * Sentezlenenler:
+ *   - ziyaret30 = ziyaret_90d / 3 (1 aylık pencereye indir)
+ *   - rutIci/rutDisi = 80/20 split (sahanın çoğu rota üzerinde)
+ *   - tahsilat split: nakit 60% / çek 25% / senet 10% / KK 5% (TR bakkal default)
+ *   - belge sayıları: her ziyarette ~1 fatura + 1 irsaliye + 0.5 sipariş
+ */
+function loadCustomerDetailFromMirror(id: number, _days: number): CustomerDetail {
+  const repoRoot = process.cwd();
+  const db = getLocalDb(repoRoot);
+  const row = db
+    .prepare(
+      `SELECT ciro_30d, fatura_30d, ziyaret_90d,
+              days_since_last_sale, days_since_last_visit
+       FROM map_customers WHERE id = ?`,
+    )
+    .get(id) as
+    | {
+        ciro_30d: number | null;
+        fatura_30d: number | null;
+        ziyaret_90d: number | null;
+        days_since_last_sale: number | null;
+        days_since_last_visit: number | null;
+      }
+    | undefined;
+
+  if (!row) {
+    return emptyCustomerDetail();
+  }
+
+  const ciro30 = row.ciro_30d ?? 0;
+  const fatura30 = row.fatura_30d ?? 0;
+  // ziyaret_90d 90 günlük; 30g penceresine indir.
+  const ziyaret30 = Math.round((row.ziyaret_90d ?? 0) / 3);
+  const rutIciZiyaret = Math.floor(ziyaret30 * 0.8);
+  const rutDisiZiyaret = ziyaret30 - rutIciZiyaret;
+
+  // Tahsilat dağılımı — TR bakkal/market default tipik kompozisyon.
+  const tahsilatNakit = Math.round(ciro30 * 0.6);
+  const tahsilatCek = Math.round(ciro30 * 0.25);
+  const tahsilatSenet = Math.round(ciro30 * 0.1);
+  const tahsilatKK = Math.round(ciro30 * 0.05);
+
+  // Belge sayıları: her ziyaret bir fatura + irsaliye, yarısında ek sipariş.
+  const ziyaretFaturaSayisi = ziyaret30;
+  const ziyaretIrsaliyeSayisi = ziyaret30;
+  const ziyaretSiparisSayisi = Math.round(ziyaret30 * 0.5);
+
+  // Tarihler — gün sayısı geri sayarak demo tarihi 2026-04-17'ye göre.
+  const demoToday = new Date("2026-04-17T00:00:00Z").getTime();
+  const sonFaturaTarihi =
+    row.days_since_last_sale !== null
+      ? new Date(demoToday - row.days_since_last_sale * 86_400_000)
+          .toISOString()
+          .slice(0, 10)
+      : null;
+  const sonZiyaretTarihi =
+    row.days_since_last_visit !== null
+      ? new Date(demoToday - row.days_since_last_visit * 86_400_000)
+          .toISOString()
+          .slice(0, 10)
+      : null;
+
+  return {
+    ciro30,
+    fatura30,
+    sonFaturaTarihi,
+    ziyaret30,
+    rutIciZiyaret,
+    rutDisiZiyaret,
+    sonZiyaretTarihi,
+    tahsilatNakit,
+    tahsilatCek,
+    tahsilatSenet,
+    tahsilatKK,
+    ziyaretFaturaSayisi,
+    ziyaretIrsaliyeSayisi,
+    ziyaretSiparisSayisi,
+  };
+}
+
+function emptyCustomerDetail(): CustomerDetail {
+  return {
+    ciro30: 0,
+    fatura30: 0,
+    sonFaturaTarihi: null,
+    ziyaret30: 0,
+    rutIciZiyaret: 0,
+    rutDisiZiyaret: 0,
+    sonZiyaretTarihi: null,
+    tahsilatNakit: 0,
+    tahsilatCek: 0,
+    tahsilatSenet: 0,
+    tahsilatKK: 0,
+    ziyaretFaturaSayisi: 0,
+    ziyaretIrsaliyeSayisi: 0,
+    ziyaretSiparisSayisi: 0,
+  };
 }
 
 async function loadCustomerDetailFromMssql(
@@ -1459,4 +1598,148 @@ export async function getCustomerSales(
   options: { forceRefresh?: boolean } = {},
 ): Promise<CustomerDetail> {
   return getCustomerDetail(musteriKod, days, options);
+}
+
+// ---------------------------------------------------------------------------
+// Şehir bazlı YoY — /map sayfasının city drill seviyesi için.
+// Son 30g vs Geçen yıl aynı 30g (-395..-365 gün) penceresi — Komuta'nın
+// fetchRegions'ı ile aynı window. Müşterilerin ciroPrev30'u "önceki ay"
+// olduğu için bu data MSSQL'den taze gelir, mirror üzerinden değil.
+// ---------------------------------------------------------------------------
+
+export type MapCityYoY = {
+  sehir: string;
+  /** Diacritic-strip normalize edilmiş — geojson province_norm ile eşleştirmek için */
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
+/** Şehir bazlı YoY (son 30g vs geçen yıl aynı 30g). region parametresi
+ *  JS tarafında master JSON ile filtre uygular; verilmezse tüm 81 il döner.
+ *
+ *  SQL'de bölge filter'i YOK — Türkçe karakter (Çorum/Kayseri/İçel)
+ *  MSSQL UPPER() + LIKE pattern'i ile uyumsuz, eşleşmeyen şehirler düşerdi.
+ *  81 il agregasyonu ucuz, tüm illeri hesaplayıp JS'de filtre etmek
+ *  daha sağlam. */
+export async function listMapCityYoY(
+  region?: string,
+): Promise<MapCityYoY[]> {
+  const master = await loadRegionMaster();
+  if (region && !master.byRegion.has(region)) {
+    // Bilinmeyen region adı → boş döner
+    return [];
+  }
+
+  const sql = `
+    WITH son AS (
+      SELECT m.TXTSEHIR AS sehir, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+      GROUP BY m.TXTSEHIR
+    ),
+    onceki AS (
+      SELECT m.TXTSEHIR AS sehir, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
+        AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+      GROUP BY m.TXTSEHIR
+    )
+    SELECT COALESCE(s.sehir, o.sehir) AS sehir,
+           ISNULL(s.ciro, 0) AS ciro,
+           ISNULL(o.ciro, 0) AS ciroPrev
+    FROM son s
+    FULL OUTER JOIN onceki o ON o.sehir = s.sehir
+  `;
+  const out = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+  console.info(
+    `[map city-yoy] SQL ${out.rows.length} ham şehir döndü (region filter JS'de uygulanacak: ${region ?? "yok"})`,
+  );
+
+  // Customer.sehir → master province_norm match (Komuta'nın matchProvince
+  // mantığı ile aynı). Birden fazla raw sehir aynı province'a düşerse
+  // toplama yapılır.
+  const matchProvince = (raw: string): string | null => {
+    const norm = raw
+      .replace(/İ/g, "I").replace(/ı/g, "I").replace(/I/g, "I").replace(/i/g, "I")
+      .replace(/Ş/g, "S").replace(/ş/g, "S")
+      .replace(/Ğ/g, "G").replace(/ğ/g, "G")
+      .replace(/Ü/g, "U").replace(/ü/g, "U")
+      .replace(/Ö/g, "O").replace(/ö/g, "O")
+      .replace(/Ç/g, "C").replace(/ç/g, "C")
+      .toUpperCase().trim();
+    if (!norm) return null;
+    if (master.byProvince.has(norm)) return norm;
+    const firstToken = norm.split(/[\s\-_./]+/)[0];
+    if (firstToken && master.byProvince.has(firstToken)) return firstToken;
+    for (const p of master.byProvince.keys()) {
+      if (p && norm.includes(p)) return p;
+    }
+    return null;
+  };
+
+  const byProvince = new Map<string, { ciro: number; ciroPrev: number; rawSehir: string }>();
+  const unmatched: string[] = [];
+  const droppedByRegion: string[] = [];
+  for (const row of out.rows) {
+    const raw = String(row.sehir ?? "").trim();
+    if (!raw) continue;
+    const matched = matchProvince(raw);
+    if (!matched) {
+      unmatched.push(raw);
+      continue;
+    }
+    // ALIAS → KANONİK: master "AFYONKARAHISAR" diye match etse de geojson
+    // sadece "AFYON" polygon'u taşıyor; canonicalProvince ile mapler.
+    const province = canonicalProvince(matched);
+    // İstenen bölgenin dışındaki şehirler düşür
+    if (region) {
+      const info = master.byProvince.get(province);
+      if (!info || info.region !== region) {
+        droppedByRegion.push(`${raw} → ${province} (${info?.region ?? "?"})`);
+        continue;
+      }
+    }
+    const e = byProvince.get(province) ?? {
+      ciro: 0,
+      ciroPrev: 0,
+      rawSehir: raw,
+    };
+    e.ciro += Number(row.ciro ?? 0);
+    e.ciroPrev += Number(row.ciroPrev ?? 0);
+    byProvince.set(province, e);
+  }
+  console.info(
+    `[map city-yoy] Sonuç: ${byProvince.size} il match etti${region ? ` (region=${region})` : ""}, ${unmatched.length} eşleşmeyen, ${droppedByRegion.length} bölge dışı`,
+  );
+  if (unmatched.length > 0) {
+    console.warn(
+      `[map city-yoy] Eşleşmeyen şehirler (master JSON'a eklenmeli):`,
+      unmatched.slice(0, 10).join(", "),
+    );
+  }
+  if (region && byProvince.size === 0) {
+    console.error(
+      `[map city-yoy] ${region} için HİÇBİR şehir eşleşmedi — bölge dışı dropped örnekleri:`,
+      droppedByRegion.slice(0, 5).join(" | "),
+    );
+  }
+
+  return Array.from(byProvince.entries()).map(([provNorm, agg]) => ({
+    sehir: agg.rawSehir,
+    sehirNorm: provNorm,
+    ciro: agg.ciro,
+    ciroPrev: agg.ciroPrev,
+    deltaPct:
+      agg.ciroPrev > 0
+        ? ((agg.ciro - agg.ciroPrev) / agg.ciroPrev) * 100
+        : null,
+  }));
 }

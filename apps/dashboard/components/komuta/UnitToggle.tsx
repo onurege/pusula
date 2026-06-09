@@ -3,9 +3,14 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui/cn";
+import { useTenant } from "@/components/tenant-provider";
 
 /**
- * Komuta birim toggle'ı: TL ↔ 9L (9-Litre-Equivalent).
+ * Komuta birim toggle'ı: TL ↔ <hacim birimi>.
+ *
+ * Hacim birimi tenant'a göre değişir:
+ *   - Pernod: 9L (9-Litre-Equivalent — TBLURUNEKSAHA saha 26)
+ *   - FMCG demo: gizli (sadece TL gösterilir)
  *
  * Snapshot tüm aggregation'larını (KPI, region, channel, matrix, heatmap,
  * portfolio, leaderboard) seçilen birim üzerinden hesaplar. Sayfa server
@@ -19,9 +24,16 @@ import { cn } from "@/components/ui/cn";
 export function UnitToggle() {
   const pathname = usePathname() ?? "/";
   const sp = useSearchParams();
-  const active = sp.get("unit") === "9le" ? "9le" : "tl";
+  const tenant = useTenant();
 
-  function buildHref(unit: "tl" | "9le"): string {
+  // FMCG demo / yeni tenant — 9LE benzeri ek birim yok, sadece TL.
+  // Toggle hiç render edilmez; layout boşluğu da yok.
+  if (!tenant.volume.showInToggle) return null;
+
+  const volumeKey = tenant.volume.key; // "9le" Pernod'da; gelecek tenant'ta farklı
+  const active = sp.get("unit") === volumeKey ? volumeKey : "tl";
+
+  function buildHref(unit: "tl" | typeof volumeKey): string {
     const params = new URLSearchParams(sp.toString());
     if (unit === "tl") params.delete("unit");
     else params.set("unit", unit);
@@ -29,12 +41,16 @@ export function UnitToggle() {
     return qs ? `${pathname}?${qs}` : pathname;
   }
 
-  const options: { id: "tl" | "9le"; label: string; hint: string }[] = [
-    { id: "tl", label: "₺ TL", hint: "Tüm değerler Türk Lirası bazında" },
+  const options: { id: "tl" | typeof volumeKey; label: string; hint: string }[] = [
     {
-      id: "9le",
-      label: "9L",
-      hint: "Tüm değerler 9-Litre-Equivalent hacim bazında (Pernod resmi katsayı: TBLURUNEKSAHA saha 26)",
+      id: "tl",
+      label: `${tenant.currencySymbol} TL`,
+      hint: "Tüm değerler Türk Lirası bazında",
+    },
+    {
+      id: volumeKey,
+      label: tenant.volume.short,
+      hint: tenant.volume.hint,
     },
   ];
 
@@ -43,7 +59,7 @@ export function UnitToggle() {
       role="tablist"
       aria-label="Birim"
       className="inline-flex items-center gap-1 p-1 rounded-lg bg-surface-2 border border-border"
-      title="TL ↔ 9L birim toggle'ı. Tüm Komuta hesaplamaları seçilen birim üzerinden yeniden çalışır."
+      title={`TL ↔ ${tenant.volume.short} birim toggle'ı. Tüm Komuta hesaplamaları seçilen birim üzerinden yeniden çalışır.`}
     >
       <span className="px-2 text-[10.5px] uppercase tracking-wider text-muted font-semibold">
         Birim

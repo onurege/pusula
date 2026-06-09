@@ -3,7 +3,7 @@ import { listMapCustomers, getMapSyncStatus } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { VisitGapList } from "@/components/visit-gap-list";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
 
 type SearchParams = Record<string, string | string[] | undefined>;
 

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { getReport, runReport } from "@/lib/api";
 import { ResultTable } from "@/components/result-table";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — params Promise zaten dynamic tetikliyor.
 
 export default async function ReportPage({
   params,

@@ -3,7 +3,7 @@ import { AlertCircle, ArrowRight, Database, FilePlus2, Plus } from "lucide-react
 import { listReports } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
 
 export default async function ReportsListPage() {
   let reports: Awaited<ReturnType<typeof listReports>> = [];

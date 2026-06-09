@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { cn } from "./cn";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { GlobalRefreshButton } from "@/components/global-refresh-button";
+import { useTenant } from "@/components/tenant-provider";
 
 // V1 — mevcut çalışan IA (üretim). Asla kırılmamalı.
 const itemsV1 = [
@@ -48,16 +50,19 @@ export function Navbar() {
   // /v2 veya /v2/* yolundayız → V2 nav setini göster.
   const isV2 = pathname === "/v2" || pathname.startsWith("/v2/");
   const items = isV2 ? itemsV2 : itemsV1;
+  // Tenant config — logo marka harfleri + ürün adı tenant-özel.
+  // FMCG demo'da "FM" + "Enroute Pusula", Pernod'da "EP" + "Enroute Pusula".
+  const tenant = useTenant();
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
         <Link href="/" className="flex items-center gap-2.5 group">
           <div className="size-7 rounded-lg bg-accent text-accent-fg font-bold flex items-center justify-center text-sm shadow-sm group-hover:shadow-md transition-shadow">
-            EP
+            {tenant.logoMark}
           </div>
           <div className="flex flex-col leading-none">
-            <span className="font-semibold tracking-tight text-[15px]">Enroute Pusula</span>
-            
+            <span className="font-semibold tracking-tight text-[15px]">{tenant.productName}</span>
+
           </div>
         </Link>
         <div className="flex items-center gap-1">
@@ -88,6 +93,7 @@ export function Navbar() {
             })}
           </nav>
           <div className="ml-1 pl-1 border-l border-border h-7" />
+          <GlobalRefreshButton />
           <VersionToggle isV2={isV2} />
           <ThemeToggle />
         </div>

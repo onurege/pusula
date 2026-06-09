@@ -1,8 +1,11 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import Script from "next/script";
 import "./globals.css";
 import { Navbar } from "@/components/ui/navbar";
 import { WeeklyActionsDrawer } from "@/components/weekly-actions/WeeklyActionsDrawer";
+import { TenantProvider } from "@/components/tenant-provider";
+import { getTenantConfig } from "@/lib/tenant";
 
 const inter = Inter({
   subsets: ["latin", "latin-ext"],
@@ -17,8 +20,9 @@ export const metadata: Metadata = {
 
 // Tema bootstrap script — ilk paint öncesi <html data-theme="..."> ayarlar.
 // localStorage'da kullanıcı tercihi varsa onu, yoksa OS prefers-color-scheme'i
-// dinler. Bu script body'den önce çalıştığı için sayfa renkleri "flash"
-// etmez (önce light render olup sonra dark'a dönmez).
+// dinler. next/script ile beforeInteractive strategy → React hydration
+// reconciliation'a girmez, browser extension'lar (Bitdefender bis_use vs.)
+// script tag'ini değiştirse bile React mismatch hatası vermez.
 const THEME_BOOTSTRAP_SCRIPT = `
 (function () {
   try {
@@ -33,19 +37,30 @@ const THEME_BOOTSTRAP_SCRIPT = `
 `;
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  // Server tarafı tenant config'ini layout'ta okuyup TenantProvider'a geçir.
+  // RSC sınırından plain object olarak geçer; client component'ler `useTenant()`
+  // ile bu değeri çeker. Her request'te yeniden okunur (process.env stable).
+  const tenant = getTenantConfig();
   return (
     <html lang="tr" className={inter.variable} suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }} />
-      </head>
       <body suppressHydrationWarning>
-        <div className="min-h-dvh">
-          <Navbar />
-          <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
-        </div>
-        {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
-            erişilebilsin diye layout seviyesinde tek seferlik mount. */}
-        <WeeklyActionsDrawer />
+        {/* Theme bootstrap — beforeInteractive: ilk paint öncesi çalışır,
+            FOUC olmaz. next/script React tree dışında render eder → DOM
+            mutasyonu yapan browser extension'lar hydration error tetiklemez. */}
+        <Script
+          id="enroute-theme-bootstrap"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }}
+        />
+        <TenantProvider value={tenant}>
+          <div className="min-h-dvh">
+            <Navbar />
+            <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
+          </div>
+          {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
+              erişilebilsin diye layout seviyesinde tek seferlik mount. */}
+          <WeeklyActionsDrawer />
+        </TenantProvider>
       </body>
     </html>
   );

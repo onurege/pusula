@@ -3,7 +3,7 @@ import { listMapCustomers, getMapSyncStatus } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 import { RiskCallList } from "@/components/risk-call-list";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
 
 export default async function RiskPage() {
   // Pull high-risk customers from the local SQLite mirror — no MSSQL hit on

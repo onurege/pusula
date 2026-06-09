@@ -11,7 +11,7 @@ import {
 } from "./inflation.js";
 import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
-import { loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -97,6 +97,18 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
+/** Bir bölge içindeki bir şehrin (il) YoY kırılımı — Komuta haritası
+ *  drill-down'unda kullanılır. */
+export type KomutaCityBreakdown = {
+  /** İl adı (TBLMUSTERI.TXTSEHIR — normalize edilmeden, ham). */
+  sehir: string;
+  /** Master JSON'daki normalize il adı — geojson eşleştirmesi için. */
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
 export type KomutaRegionRow = {
   /** Klasik 7 bölge + Kıbrıs adı — data/geo/tr-province-region.json'dan
    *  ("Marmara", "Ege", "Akdeniz", "İç Anadolu", "Karadeniz", "Doğu Anadolu",
@@ -111,6 +123,9 @@ export type KomutaRegionRow = {
   /** Bu bölgeye agrege edilen Pernod şehirlerinin listesi — debug/tooltip
    *  amaçlı. Örn. Doğu Anadolu = ["VAN", "ERZURUM", ...]. */
   sehirler: string[];
+  /** Bölge içindeki her şehrin YoY kırılımı — Komuta drill-down'ında
+   *  haritada şehirler bu kendi YoY'larına göre boyanır. */
+  cities: KomutaCityBreakdown[];
 };
 
 export type KomutaChannelSlice = {
@@ -538,27 +553,50 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
   // diacritic-strip normalize ile saklıyor (İSTANBUL → ISTANBUL); o yüzden
   // burada da normalizeProvince ile arıyoruz.
   const master = await loadRegionMaster();
-  type Agg = { ciro: number; ciroPrev: number; sehirler: Set<string> };
+  type CityAgg = { sehir: string; sehirNorm: string; ciro: number; ciroPrev: number };
+  type Agg = {
+    ciro: number;
+    ciroPrev: number;
+    sehirler: Set<string>;
+    cities: Map<string, CityAgg>; // key = sehirNorm
+  };
   const byRegion = new Map<string, Agg>();
   // 8 bölgenin hepsini önceden seed et — sıfır cirolu bölge bile sonuçta
   // bulunsun. Harita "veri yok" olarak gösterebilir.
   for (const region of master.byRegion.keys()) {
-    byRegion.set(region, { ciro: 0, ciroPrev: 0, sehirler: new Set() });
+    byRegion.set(region, {
+      ciro: 0,
+      ciroPrev: 0,
+      sehirler: new Set(),
+      cities: new Map(),
+    });
   }
   const unmatched = new Set<string>();
   for (const r of out.rows) {
     const sehir = String(r.sehir ?? "").trim();
     if (!sehir) continue;
-    const norm = normalizeProvince(sehir);
-    const info = master.byProvince.get(norm);
+    const rawNorm = normalizeProvince(sehir);
+    const info = master.byProvince.get(rawNorm);
     if (!info) {
       unmatched.add(sehir);
       continue;
     }
+    // ALIAS → KANONİK (geojson'da olan) — örn. "AFYONKARAHISAR" → "AFYON"
+    const norm = canonicalProvince(rawNorm);
     const agg = byRegion.get(info.region)!;
-    agg.ciro += Number(r.ciro ?? 0);
-    agg.ciroPrev += Number(r.ciroPrev ?? 0);
+    const ciro = Number(r.ciro ?? 0);
+    const ciroPrev = Number(r.ciroPrev ?? 0);
+    agg.ciro += ciro;
+    agg.ciroPrev += ciroPrev;
     agg.sehirler.add(sehir);
+    // Per-city kırılımı sakla — kanonik isimle merge
+    const existing = agg.cities.get(norm);
+    if (existing) {
+      existing.ciro += ciro;
+      existing.ciroPrev += ciroPrev;
+    } else {
+      agg.cities.set(norm, { sehir, sehirNorm: norm, ciro, ciroPrev });
+    }
   }
   if (unmatched.size > 0) {
     console.warn(
@@ -572,6 +610,16 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
       const info = master.byRegion.get(bolge)!;
       const deltaPct =
         agg.ciroPrev > 0 ? ((agg.ciro - agg.ciroPrev) / agg.ciroPrev) * 100 : null;
+      const cities = Array.from(agg.cities.values())
+        .map((c) => ({
+          sehir: c.sehir,
+          sehirNorm: c.sehirNorm,
+          ciro: c.ciro,
+          ciroPrev: c.ciroPrev,
+          deltaPct:
+            c.ciroPrev > 0 ? ((c.ciro - c.ciroPrev) / c.ciroPrev) * 100 : null,
+        }))
+        .sort((a, b) => b.ciro - a.ciro);
       return {
         bolge,
         ciro: agg.ciro,
@@ -579,6 +627,7 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
         deltaPct,
         color: info.color,
         sehirler: Array.from(agg.sehirler).sort(),
+        cities,
       };
     })
     .sort((a, b) => b.ciro - a.ciro);
@@ -1277,9 +1326,13 @@ async function fetchTopReps(unit: ValueUnit): Promise<KomutaRep[]> {
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d9.LNGURUNKOD
     LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26`
     : "";
-  // 9LE'de fatura COUNT(*) detay satırı sayısı verir; fatura sayısı için DISTINCT gerekli
+  // 9LE'de detay JOIN fatura'yı satır sayısı kadar çoğaltır; COUNT(*) yanlış
+  // verir, fatura için composite PK üzerinden DISTINCT lazım.
+  // CONCAT kullanıyoruz çünkü aritmetik (LNGYIL * 1e8) INT'i aşar
+  // (2026 * 1e8 = 2.026e11 > INT max 2.147e9) → "Arithmetic overflow" hatası
+  // → SQL fail, fetcher boş array döner → UI "verisi yok" gösterir.
   const faturaCount = unit === "9le"
-    ? "COUNT(DISTINCT f.LNGYIL * 100000000 + f.LNGBELGEKOD)"
+    ? "COUNT(DISTINCT CONCAT(f.LNGYIL, '-', f.LNGBELGEKOD, '-', f.LNGDISTKOD))"
     : "COUNT(*)";
   const sql = `
     SELECT TOP 8
@@ -1323,9 +1376,10 @@ async function fetchTopDists(unit: ValueUnit): Promise<KomutaTopDist[]> {
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d9.LNGURUNKOD
     LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26`
     : "";
-  // 9LE'de fatura COUNT(*) detay satırı sayısı verir; DISTINCT fatura sayısı için
+  // 9LE'de detay JOIN fatura'yı çoğaltır; composite PK üzerinden DISTINCT.
+  // CONCAT (INT aritmetik overflow'undan kaçınmak için — bkz fetchTopReps).
   const faturaCount = unit === "9le"
-    ? "COUNT(DISTINCT f.LNGYIL * 100000000 + f.LNGBELGEKOD)"
+    ? "COUNT(DISTINCT CONCAT(f.LNGYIL, '-', f.LNGBELGEKOD, '-', f.LNGDISTKOD))"
     : "COUNT(*)";
   const sql = `
     SELECT TOP 8
@@ -1520,6 +1574,15 @@ function isEmptySnapshot(s: KomutaSnapshot): boolean {
     s.matrix.length === 0 &&
     s.reps.length === 0 &&
     s.portfolio.length === 0
+  );
+}
+
+/** Snapshot data dolu ama AI brief üretilemedi — cache'ten brief'i
+ *  invalidate etmek için ayrı kontrol. Veri tamken brief tekrar denenmeli. */
+function isMissingBrief(s: KomutaSnapshot): boolean {
+  return (
+    !isEmptySnapshot(s) &&
+    (typeof s.brief !== "string" || s.brief.trim().length < 50)
   );
 }
 
@@ -1723,7 +1786,7 @@ export async function getKomutaSnapshot(
   // ki eski entry'ler otomatik invalidate olsun (TTL yok, manuel refresh
   // tek geri kalan yol oluyor). v2: fetchRegions TBLDISTGRUP driver'a geçti
   // ("Doğu Anadolu kayboldu" fix'i), 8 bölge garanti.
-  const CACHE_VERSION = "v3";
+  const CACHE_VERSION = "v5";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
@@ -1845,6 +1908,20 @@ export async function getKomutaSnapshot(
   // dene — bu sefer bypass ile.
   if (isEmptySnapshot(cached.value) && !options.forceRefresh) {
     console.warn("[komuta] cached snapshot is empty, retrying with refresh");
+    return getKomutaSnapshot({
+      forceRefresh: true,
+      reelTL: options.reelTL,
+      otvNet: options.otvNet,
+      unit: options.unit,
+    });
+  }
+  // Veri var ama Gemini brief üretilememiş (network/key/timeout) → retry et.
+  // Bu sayede AI yorumu sürekli "boş" cache'lenip kalmaz, bir sonraki istekte
+  // tekrar denenir. forceRefresh false ise yine de bir kez dene.
+  if (isMissingBrief(cached.value) && !options.forceRefresh) {
+    console.warn(
+      "[komuta] cached snapshot has empty/short brief, retrying with refresh",
+    );
     return getKomutaSnapshot({
       forceRefresh: true,
       reelTL: options.reelTL,

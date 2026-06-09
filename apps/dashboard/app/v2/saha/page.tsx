@@ -5,10 +5,10 @@ import { SubTabNav, type SubTab } from "@/components/v2/SubTabNav";
 import { RepLeaderboard } from "@/components/komuta/panels/RepLeaderboard";
 import { DistLeaderboard } from "@/components/komuta/panels/DistLeaderboard";
 import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
-import { PagePlaceholder } from "@/components/v2/PagePlaceholder";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
+import { getTenantConfig } from "@/lib/tenant";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
 export const metadata = { title: "Saha · V2 · Enroute Pusula" };
 
 const tabs: SubTab[] = [
@@ -24,6 +24,7 @@ type Props = {
 
 export default async function V2SahaPage({ searchParams }: Props) {
   const sp = await searchParams;
+  const tenant = getTenantConfig();
   const active = sp.tab ?? "temsilciler";
   const unit: ValueUnit = sp.unit === "9le" ? "9le" : "tl";
 
@@ -65,27 +66,128 @@ export default async function V2SahaPage({ searchParams }: Props) {
       )}
 
       {active === "ziyaret" && (
-        <PagePlaceholder
-          eyebrow="Saha · Ziyaret"
-          title="Ziyaret Performansı"
-          description="V1 /ziyaret sayfasının içeriği bu sekmeye konsolide edilecek (Faz B2)."
-          comingSoon={[
-            "Bölge başına ziyaret kapsama oranı",
-            "Rut içi vs rut dışı dağılım (TBLPMPZIYARETBASLIK.BYTRUTKODU)",
-            "Ziyaret → Sipariş dönüşüm oranı",
-            "Sahada üretilen belge/tahsilat",
-          ]}
-        />
+        <div className="panel">
+          <div className="panel-header">
+            <div className="panel-title">
+              <span className="icon">📋</span> Ziyaret Performansı
+            </div>
+            <div className="panel-meta">V1 sayfasına bağ</div>
+          </div>
+          <div
+            style={{
+              padding: "16px 4px",
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <p
+              style={{
+                fontSize: 13,
+                color: "var(--color-fg-2)",
+                lineHeight: 1.6,
+                margin: 0,
+              }}
+            >
+              Ziyaret analitiği V1&apos;de detaylı bir sayfa olarak mevcut —
+              <strong> rut içi vs rut dışı dağılım, ziyaret → sipariş
+              dönüşümü, sahada kesilen belge sayıları</strong> hepsi orada.
+              V2 IA&apos;da ayrı bir sekme olarak burada görünüyor; tam
+              taşıma Faz B2&apos;de.
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr",
+                gap: 10,
+              }}
+            >
+              <a
+                href="/ziyaret"
+                style={{
+                  background:
+                    "linear-gradient(135deg, var(--color-accent-soft) 0%, var(--color-surface) 100%)",
+                  border: "1px solid var(--color-accent)",
+                  borderRadius: 8,
+                  padding: "14px 18px",
+                  textDecoration: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      color: "var(--color-accent)",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.6px",
+                      fontWeight: 700,
+                      marginBottom: 4,
+                    }}
+                  >
+                    Mevcut canlı sayfa
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 15,
+                      fontWeight: 700,
+                      color: "var(--color-fg)",
+                    }}
+                  >
+                    Ziyaret Detay Analizi
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: "var(--color-muted)",
+                      marginTop: 2,
+                    }}
+                  >
+                    Bölge başına kapsama, rut içi/dışı dağılım, dönüşüm
+                  </div>
+                </div>
+                <span
+                  style={{
+                    fontSize: 13,
+                    color: "var(--color-accent)",
+                    fontWeight: 700,
+                  }}
+                >
+                  /ziyaret →
+                </span>
+              </a>
+            </div>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--color-muted)",
+                padding: "8px 12px",
+                background: "var(--color-surface-2)",
+                borderRadius: 6,
+                borderLeft: "3px solid var(--color-muted)",
+              }}
+            >
+              <strong>Faz B2 planı:</strong> /ziyaret sayfasındaki
+              TBLPMPZIYARETBASLIK + TBLPMPZIYARETDETAY agregasyonları
+              buraya taşınacak — Temsilciler / Distribütörler /
+              Kanal Mix sekmeleriyle aynı &quot;komuta&quot; layout&apos;u
+              içinde, snapshot tek noktadan beslenecek.
+            </div>
+          </div>
+        </div>
       )}
 
       {active === "kanal-mix" && (
         <ChannelMixChart
           rows={snap.channelByType}
           unit={snap.unit}
-          title="Pernod Müşteri Tipi · Son 12 Ay"
-          icon="🍸"
+          title={tenant.labels.channelTypeTitle}
+          icon={tenant.industry === "alcohol" ? "🍸" : "🛒"}
           category="müşteri tipi"
-          sourceNote="Pernod kanal segmentasyonu: TBLMUSTERIEKSAHA saha 8 (Müşteri Tipi) × TBLEKSAHASECENEK lookup. Perakende / On Trade / Otel / Tali Bayi / OPA — Pernod'un resmi kanal tanımları."
+          sourceNote={tenant.labels.channelTypeSource}
         />
       )}
     </div>

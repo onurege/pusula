@@ -5,10 +5,11 @@ import { SubTabNav, type SubTab } from "@/components/v2/SubTabNav";
 import { MatrixPanel } from "@/components/komuta/panels/MatrixPanel";
 import { HeatmapPanel } from "@/components/komuta/panels/HeatmapPanel";
 import { PortfolioPanel } from "@/components/komuta/panels/PortfolioPanel";
-import { PagePlaceholder } from "@/components/v2/PagePlaceholder";
+import { ProductTreemap } from "@/components/komuta/panels/ProductTreemap";
+import { ExecutionGapScatter } from "@/components/komuta/panels/ExecutionGapScatter";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
 export const metadata = { title: "Ürün · V2 · Enroute Pusula" };
 
 const tabs: SubTab[] = [
@@ -56,42 +57,20 @@ export default async function V2UrunPage({ searchParams }: Props) {
         </div>
       </header>
 
-      {active === "treemap" && (
-        <PagePlaceholder
-          eyebrow="Ürün · Treemap"
-          title="Brand × SKU Hiyerarşik Satış"
-          description="Recharts Treemap komponenti ile son 30g net ciro hiyerarşisi. Faz B2'de eklenecek."
-          comingSoon={[
-            "Recharts <Treemap> komponenti, last 30g net ciro",
-            "Marka düzeyinde renkler (Chivas / Ballantines / Absolut / Havana / vs.)",
-            "Hover → SKU detay tooltip (ciro / adet / 9L)",
-            "Toggle: ciro vs 9L volume bazında treemap",
-          ]}
-        />
-      )}
+      {active === "treemap" && <ProductTreemap portfolio={snap.portfolio} />}
 
       {active === "yorunge" && (
         <PortfolioPanel portfolio={snap.portfolio} unit={snap.unit} />
       )}
 
-      {active === "donem" && <MatrixPanel matrix={snap.matrix} unit={snap.unit} />}
+      {active === "donem" && (
+        <MatrixPanel matrix={snap.matrix} unit={snap.unit} />
+      )}
 
       {active === "heatmap" && <HeatmapPanel heatmap={snap.heatmap} />}
 
       {active === "execution-gap" && (
-        <PagePlaceholder
-          eyebrow="Ürün · Execution Gap"
-          title="Stockout × Margin × Lost Revenue"
-          description="X: Stockout Frequency, Y: Profit Margin, Bubble: Lost Revenue. Üst-sağ köşe = acil aksiyon bölgesi. Faz B2'de gelir."
-          comingSoon={[
-            "Recharts <ScatterChart> + custom bubble",
-            "X ekseni: TBLDEPO / TBLSTOK üzerinden out-of-stock yüzdesi",
-            "Y ekseni: Profit margin (DBLBRUTTUTAR vs DBLNETTUTAR oranı)",
-            "Bubble büyüklüğü: kaybedilen ciro tahmini",
-            "Channel renkleri (GT / MT / HORECA / E-Com)",
-            "Action Zone (top-right) kırmızı overlay",
-          ]}
-        />
+        <ExecutionGapScatter portfolio={snap.portfolio} />
       )}
     </div>
   );

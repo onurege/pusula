@@ -5,7 +5,7 @@ import { Map as MapIcon, Layers } from "lucide-react";
 import { cn } from "@/components/ui/cn";
 
 type Props = {
-  current: "customer" | "region";
+  current: "customer" | "region" | "city";
 };
 
 /**

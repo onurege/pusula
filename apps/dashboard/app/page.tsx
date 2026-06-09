@@ -3,7 +3,8 @@ import { Activity, AlertCircle, ArrowRight, FilePlus2, FileText } from "lucide-r
 import { listRadars } from "@/lib/api";
 import { Card } from "@/components/ui/card";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
+// Tag invalidate'i navbar refresh butonu yapıyor.
 
 const RADAR_GRADIENTS: Record<string, string> = {
   sales: "from-accent/20 via-accent/5 to-transparent",

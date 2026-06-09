@@ -48,6 +48,16 @@
   --color-heat-pos-bg: #bbf7d0;
   --color-heat-pos-fg: #166534;
 
+  /* TREND palette — YoY/MoM delta görsellerinde TÜM dashboard'da ortak.
+   * Pastel Tailwind 300-400 tonu — "patlamaz" ama net okunur.
+   * Treemap fill, harita polygon, scatter bubble, city insights pillls
+   * hepsi bunlardan beslenir. */
+  --color-trend-pos-strong: #4ade80;  /* green-400 — +%15+ */
+  --color-trend-pos-soft:   #a3e635;  /* lime-400 — +%5..+%15 */
+  --color-trend-neutral:    #d6d3d1;  /* stone-300 — ±%5 */
+  --color-trend-neg-soft:   #fb923c;  /* orange-400 — -%5..-%15 */
+  --color-trend-neg-strong: #f87171;  /* red-400 — -%15- */
+
   /* Typography — Inter via Next/font, falls back gracefully */
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
@@ -106,6 +116,13 @@
   /* Risk tier "risk" — dark zeminde daha aydınlık */
   --color-tier-risk: #fb923c;       /* orange-400 */
   --color-tier-risk-soft: #431407;  /* orange-950 */
+
+  /* TREND palette — dark mode'da aynı pastel tonu (kontrast korunur) */
+  --color-trend-pos-strong: #4ade80;
+  --color-trend-pos-soft:   #a3e635;
+  --color-trend-neutral:    #71717a;  /* dark'ta nötr biraz daha koyu */
+  --color-trend-neg-soft:   #fb923c;
+  --color-trend-neg-strong: #f87171;
 
   /* Heatmap pastel — koyu zemine adapte edilmiş, doygunluk düşük */
   --color-heat-neg-bg: #450a0a;    /* red-950 */

@@ -25,6 +25,7 @@ import {
   getSyncStatus,
   listMapCustomers,
   listMapRegions,
+  listMapCityYoY,
   listRadarDefinitions,
   listReports,
   loadSnapshot,
@@ -380,6 +381,19 @@ app.get("/api/map/regions", async (c) => {
   }
 });
 
+// Şehir bazlı YoY — /map sayfasının view=city drill seviyesi için.
+// MSSQL'den taze hesaplar: son 30g vs geçen yıl aynı 30g (cache yok, ağır
+// değil — 81 il agregasyonu).
+app.get("/api/map/cities", async (c) => {
+  try {
+    const region = c.req.query("region")?.trim() || undefined;
+    const cities = await listMapCityYoY(region);
+    return c.json({ count: cities.length, cities });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
 app.get("/api/map/facets", (c) => {
   try {
     return c.json(getMapFacets(REPO_ROOT));
@@ -483,7 +497,14 @@ app.get("/api/komuta/finance/:region", async (c) => {
     const region = decodeURIComponent(c.req.param("region") ?? "").trim();
     if (!region) return c.json({ error: "region parametresi boş." }, 400);
     const forceRefresh = c.req.query("refresh") === "1";
-    const analysis = await analyzeRegionAnomaly(region, { forceRefresh });
+    // productGroup query param — heatmap hücresinden gelir; verilirse
+    // analiz o ürün grubuyla filtrelenir.
+    const productGroup =
+      c.req.query("productGroup")?.trim() || undefined;
+    const analysis = await analyzeRegionAnomaly(region, {
+      forceRefresh,
+      productGroup,
+    });
     return c.json(analysis);
   } catch (err) {
     console.error("[/api/komuta/finance] failed:", err);
@@ -514,6 +535,63 @@ app.delete("/api/cache/:domain", (c) => {
 const PORT = parseInt(process.env.API_PORT ?? "8080", 10);
 serve({ fetch: app.fetch, port: PORT });
 console.log(`[enroute-api] listening on http://localhost:${PORT}`);
+
+// ---------------------------------------------------------------------------
+// GECE CRON — saha dışında snapshot warm-up
+// ---------------------------------------------------------------------------
+// Prod saha satıcıları 09:00-19:00 aktif; gece 03:00'te MSSQL en boş.
+// Bu saatte Komuta snapshot + TBLMUSTERI mirror refresh ediliyor → gün
+// boyu kullanıcı warm cache hit'i alır, prod DB'ye gün içi heavy query
+// gitmez.
+//
+// Cron yok (Node), 24 saatte bir tetiklenen setInterval ile çözdük. Server
+// restart'ında bir sonraki 03:00'e kadar bekler — manuel "Veriyi Yenile"
+// her zaman fallback olarak elimizde.
+const NIGHT_REFRESH_HOUR = parseInt(
+  process.env.NIGHT_REFRESH_HOUR ?? "3",
+  10,
+);
+
+function msUntilNextNightRefresh(): number {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(NIGHT_REFRESH_HOUR, 0, 0, 0);
+  if (next.getTime() <= now.getTime()) {
+    // Bugünün 03:00 geçti, yarına çevir
+    next.setDate(next.getDate() + 1);
+  }
+  return next.getTime() - now.getTime();
+}
+
+async function nightRefresh() {
+  console.log(`[night-refresh] başlıyor (${new Date().toISOString()})`);
+  try {
+    // Hem TL hem 9L modu için snapshot refresh
+    for (const unit of ["tl", "9le"] as const) {
+      await getKomutaSnapshot({
+        forceRefresh: true,
+        unit,
+      }).catch((err) => {
+        console.error(`[night-refresh] komuta ${unit} fail:`, err);
+      });
+    }
+    console.log(
+      `[night-refresh] başarılı (${new Date().toISOString()})`,
+    );
+  } catch (err) {
+    console.error("[night-refresh] beklenmeyen hata:", err);
+  }
+  // Sonraki gün için tekrar planla
+  setTimeout(nightRefresh, 24 * 60 * 60 * 1000);
+}
+
+// İlk tetikleme — bir sonraki 03:00'e kadar bekle
+const initialDelay = msUntilNextNightRefresh();
+const hoursUntil = (initialDelay / 1000 / 60 / 60).toFixed(1);
+console.log(
+  `[night-refresh] sonraki refresh ${hoursUntil}h içinde (${NIGHT_REFRESH_HOUR}:00)`,
+);
+setTimeout(nightRefresh, initialDelay);
 
 process.on("SIGINT", async () => {
   await closePool().catch(() => {});

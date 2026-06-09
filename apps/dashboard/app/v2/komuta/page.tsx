@@ -7,7 +7,7 @@ import { TurkeyMapPolygon } from "@/components/komuta/TurkeyMapPolygon";
 import { CalendarChart } from "@/components/komuta/CalendarChart";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
 export const metadata = { title: "Komuta · V2 · Enroute Pusula" };
 
 type Props = {
@@ -61,12 +61,36 @@ export default async function V2KomutaPage({ searchParams }: Props) {
         <UnitToggle />
       </header>
 
-      {snap.brief && <AiInsightBar brief={snap.brief} />}
+      {snap.brief && snap.brief.trim().length >= 50 ? (
+        <AiInsightBar brief={snap.brief} />
+      ) : (
+        <div
+          style={{
+            padding: "12px 16px",
+            background: "var(--color-surface-2)",
+            border: "1px dashed var(--color-border)",
+            borderRadius: 8,
+            fontSize: 12.5,
+            color: "var(--color-fg-2)",
+            margin: "12px 0",
+          }}
+        >
+          🤖 <strong>Günün AI yorumu üretilemedi.</strong>{" "}
+          Gemini servisi yanıt vermedi.{" "}
+          <a
+            href="/v2/komuta?refresh=1"
+            style={{ color: "var(--color-accent)", textDecoration: "underline" }}
+          >
+            ?refresh=1 ile yenile
+          </a>{" "}
+          veya API log'larına bak.
+        </div>
+      )}
       <KpiStrip kpis={snap.kpis} />
       {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
       <div className="main-grid">
-        <TurkeyMapPolygon regions={snap.regions} />
+        <TurkeyMapPolygon regions={snap.regions} basePath="/v2/harita" />
         {/* CalendarChart Fragment olarak 2 element döner (eyebrow + card);
             grid item olarak tek hücreye sıkıştırmak için div'le sarıyoruz. */}
         <div>

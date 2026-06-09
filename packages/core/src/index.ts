@@ -17,3 +17,5 @@ export * from "./inflation.js";
 export * from "./tax.js";
 export * from "./finance-agent.js";
 export * from "./now.js";
+export * from "./tenant/index.js";
+export * from "./local-db.js";

@@ -6,7 +6,7 @@ import { useMemo } from "react";
 
 type Props = {
   // URL durumundan gelen filtreler — her biri opsiyonel
-  viewMode: "customer" | "region";
+  viewMode: "customer" | "region" | "city";
   region?: string | null; // klasik bölge: Marmara/Ege/...
   sehir?: string | null;
   bolge?: string | null; // legacy TBLDISTGRUP
@@ -14,6 +14,12 @@ type Props = {
   distributorName?: string | null; // distKod'dan resolve edilirse görünür
   // Seçili seviyenin müşteri sayısı (üst düzey state'ten gelir)
   customerCount?: number;
+  /**
+   * Drill-down link hedef path'i — /map (V1) veya /v2/harita (V2). Kullanıcı
+   * V2'den geldiyse breadcrumb tıklamaları V2'de kalmalı; aksi halde
+   * navbar'ın V1/V2 sürüm geçişi takılır.
+   */
+  basePath?: string;
 };
 
 /**
@@ -32,6 +38,7 @@ export function MapHierarchyBreadcrumb({
   distKod,
   distributorName,
   customerCount,
+  basePath = "/map",
 }: Props) {
   const levels = useMemo(() => {
     const items: Array<{
@@ -43,7 +50,7 @@ export function MapHierarchyBreadcrumb({
       {
         label: "Türkiye",
         icon: <Globe2 size={11} />,
-        href: viewMode === "region" || region || sehir || bolge || distKod ? "/map" : null,
+        href: viewMode === "region" || region || sehir || bolge || distKod ? basePath : null,
       },
     ];
 
@@ -56,14 +63,28 @@ export function MapHierarchyBreadcrumb({
     }
 
     if (region) {
-      const isLeaf = !sehir && !bolge && !distKod;
+      // City view'dan tıklanırsa link region-view'a döner; aksi halde
+      // yalnızca region filter olur (customer view'da bölge filtrelidir).
+      const isLeaf =
+        !sehir && !bolge && !distKod && viewMode !== "city";
       const params = new URLSearchParams();
       params.set("region", region);
+      // Eğer city level görüntüleniyorsa breadcrumb'tan region adına
+      // tıklayınca city view'da kalsın
+      if (viewMode === "city") params.set("view", "city");
       items.push({
         label: region,
         icon: <Layers size={11} />,
-        href: isLeaf ? null : `/map?${params.toString()}`,
+        href: viewMode === "city" ? null : isLeaf ? null : `${basePath}?${params.toString()}`,
       });
+      // City view'dayken arada "Şehirler" labeli göster
+      if (viewMode === "city" && !sehir) {
+        items.push({
+          label: "Şehirler",
+          icon: <MapPin size={11} />,
+          href: null,
+        });
+      }
     }
 
     if (bolge) {
@@ -74,7 +95,7 @@ export function MapHierarchyBreadcrumb({
       items.push({
         label: bolge,
         icon: <Layers size={11} />,
-        href: isLeaf ? null : `/map?${params.toString()}`,
+        href: isLeaf ? null : `${basePath}?${params.toString()}`,
       });
     }
 
@@ -87,7 +108,7 @@ export function MapHierarchyBreadcrumb({
       items.push({
         label: sehir,
         icon: <MapPin size={11} />,
-        href: isLeaf ? null : `/map?${params.toString()}`,
+        href: isLeaf ? null : `${basePath}?${params.toString()}`,
       });
     }
 
@@ -100,7 +121,7 @@ export function MapHierarchyBreadcrumb({
     }
 
     return items;
-  }, [viewMode, region, sehir, bolge, distKod, distributorName]);
+  }, [viewMode, region, sehir, bolge, distKod, distributorName, basePath]);
 
   return (
     <div className="mhb-wrap">

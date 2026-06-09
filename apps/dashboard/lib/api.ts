@@ -56,14 +56,50 @@ export type GenerateReportResponse = {
   savedId?: string;
 };
 
+/**
+ * API domain'lerini path'ten çıkar — her domain için ayrı `revalidateTag`
+ * çağrısı yapılabilir. Saha DB mirror'ı (SQLite) gece cron'da tazelendiği
+ * için RAM Data Cache 5 dk boyunca tutulur; bu sayede sayfa-to-sayfa geçiş
+ * 60sn yerine <1sn'ye düşer.
+ *
+ * Bilinçli olarak coarse-grained: `/api/map/*` hepsi tek "map" tag'i;
+ * GlobalRefreshButton tek `revalidateTag("map")` ile her şeyi tazeler.
+ */
+function inferCacheTag(path: string): string {
+  if (path.startsWith("/api/map")) return "map";
+  if (path.startsWith("/api/komuta")) return "komuta";
+  if (path.startsWith("/api/reports")) return "reports";
+  if (path.startsWith("/api/radars")) return "radar";
+  if (path.startsWith("/api/retrieve")) return "schema";
+  return "default";
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isReadOp = method === "GET" || method === "HEAD";
+  // refresh=1 query param → SQLite cache'i bypass eden istek; Next.js Data
+  // Cache'i de bypass etmeli ki taze sonuç dönsün.
+  const isForceRefresh = path.includes("refresh=1");
+  // Cache stratejisi:
+  //   - Yazma (POST/PUT/...) → her zaman no-store
+  //   - refresh=1 işaretli okumalar → no-store (taze sonuç istenmiş)
+  //   - Diğer okumalar → 5 dk revalidate + domain tag (revalidateTag ile invalidate)
+  const cacheConfig: RequestInit = isReadOp && !isForceRefresh
+    ? {
+        next: {
+          revalidate: 300,
+          tags: [inferCacheTag(path)],
+        },
+      }
+    : { cache: "no-store" };
+
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     },
-    cache: "no-store",
+    ...cacheConfig,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -278,6 +314,24 @@ export type MapRegion = {
   provinces: string[];
 };
 
+// Şehir bazlı YoY (son 30g vs geçen yıl aynı 30g) — /map view=city için.
+export type MapCityYoY = {
+  sehir: string;
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
+export async function listMapCityYoY(params: {
+  region?: string;
+} = {}): Promise<{ count: number; cities: MapCityYoY[] }> {
+  const qp = new URLSearchParams();
+  if (params.region) qp.set("region", params.region);
+  const qs = qp.toString();
+  return request(`/api/map/cities${qs ? `?${qs}` : ""}`);
+}
+
 export async function listMapRegions(params: {
   sehir?: string;
   distKod?: number;
@@ -392,6 +446,16 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
+export type KomutaCityBreakdown = {
+  sehir: string;
+  /** Diacritic-strip normalize edilmiş il adı (örn. "İSTANBUL" → "ISTANBUL")
+   *  — geojson feature `properties.name`/`properties.shapeName` ile eşleşmek için. */
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
 export type KomutaRegionRow = {
   /** Klasik 7 bölge + Kıbrıs (Marmara/Ege/Akdeniz/İç Anadolu/Karadeniz/
    *  Doğu Anadolu/Güneydoğu Anadolu/Kıbrıs) — backend müşteri şehri →
@@ -404,6 +468,9 @@ export type KomutaRegionRow = {
   color: string;
   /** Bu bölgeye agrege edilen Pernod şehirlerinin listesi (debug/tooltip). */
   sehirler: string[];
+  /** Bölge içindeki her şehrin YoY kırılımı — Komuta haritası drill-down
+   *  modunda şehirler bu kırılımdan boyanır. */
+  cities: KomutaCityBreakdown[];
 };
 
 export type KomutaChannelSlice = {
@@ -550,6 +617,8 @@ export type FinanceFactor = {
 
 export type FinanceFacts = {
   region: string;
+  /** Eğer analiz tek bir ürün grubuna fokuslandıysa onun adı. */
+  productGroup?: string;
   buDonem: number;
   gecenYil: number;
   delta: number;
@@ -569,9 +638,12 @@ export type FinanceAnalysis = {
 
 export async function getFinanceAnalysis(
   region: string,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; productGroup?: string } = {},
 ): Promise<FinanceAnalysis> {
-  const qs = options.refresh ? "?refresh=1" : "";
+  const qp = new URLSearchParams();
+  if (options.refresh) qp.set("refresh", "1");
+  if (options.productGroup) qp.set("productGroup", options.productGroup);
+  const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<FinanceAnalysis>(
     `/api/komuta/finance/${encodeURIComponent(region)}${qs}`,
   );
