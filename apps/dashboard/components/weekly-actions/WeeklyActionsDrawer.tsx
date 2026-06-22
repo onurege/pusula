@@ -227,8 +227,8 @@ function EmptyState() {
       </div>
       <div className="text-sm font-medium text-fg">Liste henüz boş.</div>
       <p className="text-xs text-muted leading-relaxed max-w-[280px]">
-        Komuta Köprüsü'nde finans agentı önerilerini, müşteri modalında 14
-        günlük foresight aksiyonlarını buraya ekleyebilirsin.
+        Komuta'da finans agentı önerilerini, müşteri modalında 14 günlük
+        foresight aksiyonlarını buraya ekleyebilirsin.
       </p>
     </div>
   );

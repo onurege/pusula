@@ -26,7 +26,7 @@ import { UnitToggle } from "@/components/komuta/UnitToggle";
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
 // böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
 export const metadata = {
-  title: "Komuta Köprüsü · UNIQUE AI Reports",
+  title: "Komuta · Enroute Pusula",
 };
 
 type Props = {
@@ -108,10 +108,10 @@ export default async function KomutaPage({ searchParams }: Props) {
           <ChannelMixChart
             rows={snap.channelByType}
             unit={snap.unit}
-            title="Pernod Müşteri Tipi · Son 12 Ay"
-            icon="🍸"
+            title="Müşteri Tipi · Son 12 Ay"
+            icon="🛒"
             category="müşteri tipi"
-            sourceNote="Pernod kanal segmentasyonu: TBLMUSTERIEKSAHA saha 8 (Müşteri Tipi) × TBLEKSAHASECENEK lookup. Perakende / On Trade / Otel / Tali Bayi / OPA — Pernod'un resmi kanal tanımları."
+            sourceNote="Müşteri tipi segmentasyonu: Perakende / On Trade / Otel / Tali Bayi / OPA dağılımı, son 12 ay."
           />
           <MatrixPanel matrix={snap.matrix} unit={snap.unit} />
         </div>
@@ -159,7 +159,7 @@ function Header({
       <div className="komuta-page-header-main">
         <div className="komuta-eyebrow">
           <span className="komuta-eyebrow-dot" />
-          Komuta Köprüsü
+          Komuta
         </div>
         <h1 className="komuta-page-title">Operasyon Genel Görünümü</h1>
         <p className="komuta-page-desc">

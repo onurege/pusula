@@ -27,7 +27,7 @@ const itemsV1 = [
   { href: "/map", label: "Harita", icon: Map },
   { href: "/risk", label: "Kayıp Riski", icon: AlertTriangle },
   { href: "/ziyaret", label: "Ziyaret Boşluğu", icon: CalendarClock },
-  { href: "/komuta", label: "Komuta Köprüsü", icon: Compass },
+  { href: "/komuta", label: "Komuta", icon: Compass },
   { href: "/reports", label: "Raporlar", icon: FileText },
   { href: "/reports/new", label: "Yeni rapor", icon: FilePlus2 },
   { href: "/schema", label: "Şema", icon: Database },

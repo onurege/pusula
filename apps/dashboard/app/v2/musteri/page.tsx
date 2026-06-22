@@ -48,7 +48,7 @@ export default async function V2MusteriPage({ searchParams }: Props) {
           </div>
           <h1 className="komuta-page-title">Müşteri Portföyü</h1>
           <p className="komuta-page-desc">
-            Pernod kanal dağılımı, risk skoru kırılımı, kayıp müşteri takibi.
+            Kanal dağılımı, risk skoru kırılımı, kayıp müşteri takibi.
             Sekme bazlı detaylar aşağıda.
           </p>
         </div>

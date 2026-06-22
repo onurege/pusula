@@ -39,9 +39,9 @@ export const PERNOD_CONFIG: TenantConfig = {
 
   labels: {
     morningHeadline: "Bu Sabah Pernod'da Ne Oluyor",
-    channelTypeTitle: "Pernod Müşteri Tipi · Son 12 Ay",
+    channelTypeTitle: "Müşteri Tipi · Son 12 Ay",
     channelTypeSource:
-      "Pernod kanal segmentasyonu: TBLMUSTERIEKSAHA saha 8 (Müşteri Tipi) × TBLEKSAHASECENEK lookup. Perakende / On Trade / Otel / Tali Bayi / OPA — Pernod'un resmi kanal tanımları.",
+      "Müşteri tipi segmentasyonu: Perakende / On Trade / Otel / Tali Bayi / OPA dağılımı, son 12 ay.",
     mapEmptyDataSource:
       "Henüz hiç senkronizasyon yapılmamış. Sağ üstteki Verileri yenile butonuna tıklayarak PERNOD'dan müşteri listesini SQLite'a kopyalayın.",
     kpiSourceNote: "TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (9L için)",
