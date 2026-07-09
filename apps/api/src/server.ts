@@ -1,16 +1,13 @@
+// .env ÖN-YÜKLEME — MUTLAKA İLK import olmalı (ESM hoisting: bu, aşağıdaki
+// `@enroute/core` import'undan önce çalışır; auth.ts JWT_SECRET'i okumadan
+// önce process.env dolu olur).
+import "./env.js";
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { config as loadDotenv } from "dotenv";
 
-// .env yükleme — iki kaynaktan (dotenv override etmez; ilk bulan kazanır):
-//   1) REPO_ROOT/.env  → import.meta.url'den türetilir (dev + monorepo).
-//   2) process.cwd()/.env → PM2/Windows'ta tsx'in import.meta.url yolu
-//      beklenenden farklı çözülebildiği için sağlam fallback. PM2 cwd'yi
-//      repo köküne set eder; oradaki .env burada garanti yakalanır.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../..");
-loadDotenv({ path: path.join(REPO_ROOT, ".env") });
-loadDotenv({ path: path.join(process.cwd(), ".env") });
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
