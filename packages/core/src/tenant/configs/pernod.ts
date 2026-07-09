@@ -48,4 +48,13 @@ export const PERNOD_CONFIG: TenantConfig = {
     volumeMultiplierHint:
       '9L çarpanı: TBLURUNEKSAHA saha 26 "9 LT Değer" (Pernod\'un resmi katsayısı; 701 ürün için dolu)',
   },
+
+  // Pernod marka yapısı: TBLURUNEKGRUP (Chivas Regal, Ballantine's, Absolut)
+  // TBLURUNGRUP onda kategori taşır (VODKA, WHISKY, SCOTCH WHISKY).
+  brandTable: "TBLURUNEKGRUP",
+  brandJoinColumn: "TXTURUNEKGRUPKOD",
+
+  // Pernod portföyünden son 30g ciro lider 4 markası — TBLURUNEKGRUP.TXTAD
+  // ile birebir eşleşmeli. probe-wietnauer.ts canlı veriden teyit eder.
+  strategicBrands: ["Chivas Regal", "Ballantine's", "Absolut", "Olmeca"],
 };

@@ -525,11 +525,11 @@ function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
           <span className="icon">🗺️</span> Türkiye + KKTC · Bölge × YoY
           <InfoHint
             title="Bölge YoY hesaplaması"
-            source="TBLMSDFATURA × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
             window="Son 30 gün (TRHISLEMTARIHI ≥ DATEADD(day,-30,GETDATE())) vs -395..-365g (geçen yıl aynı 30g)"
             base="SUM(DBLNETTUTAR) bölge başına"
             notes={[
-              "Bölge = TBLDISTGRUP.TXTAD; JOIN dg.TXTKOD = d.TXTGRUP üzerinden bağlanır",
+              "Bölge = TBLDISTEKGRUP.TXTAD; JOIN dg.TXTKOD = d.TXTEKGRUP üzerinden bağlanır",
               "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0 (aktif satış + aktif dist)",
               "deltaPct = (son − önceki) / önceki × 100; önceki 0 ise null",
             ]}
@@ -1329,12 +1329,12 @@ function DistLeaderboard({
           <span className="icon">🏢</span> Top Distribütörler
           <InfoHint
             title="Distribütör sıralaması"
-            source="TBLMSDFATURA × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
             window="Son 30 gün"
             base="SUM(DBLNETTUTAR) her distribütör için + COUNT fatura"
             notes={[
               "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0",
-              "Bölge etiketi (TBLDISTGRUP.TXTAD) liste satırında görünür",
+              "Bölge etiketi (TBLDISTEKGRUP.TXTAD) liste satırında görünür",
               "Top 10; sıralama ciro DESC",
             ]}
           />

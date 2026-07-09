@@ -18,6 +18,7 @@ import { generate } from "./gemini.js";
 import { runReadOnly } from "./db.js";
 import { withCache } from "./cache.js";
 import { currentDate, sqlNow } from "./now.js";
+import { distFilterClause, type TenantScope } from "./auth.js";
 
 const CACHE_DOMAIN = "finance-agent";
 
@@ -28,6 +29,30 @@ const CACHE_DOMAIN = "finance-agent";
  */
 function esc(s: string): string {
   return s.replace(/'/g, "''");
+}
+
+/**
+ * Bölge adı (TBLDISTEKGRUP.TXTAD, örn. "IST-AVRUPA") → bölge kodu
+ * (TBLDISTEKGRUP.TXTKOD) çözümü. TEK sefer çağrılır (analyzeRegionAnomaly
+ * başında) — TBLDISTEKGRUP küçük bir referans tablosu (~8 satır), burada
+ * UPPER/LTRIM/RTRIM ile non-sargable karşılaştırma sorun yaratmaz.
+ *
+ * Dönen kod, tüm fetcher'larda `d.TXTEKGRUP = '${kod}'` sargable eşitliği
+ * için kullanılır — TBLMSDFATURA'ya bağlı büyük JOIN zincirinde artık
+ * TBLDISTEKGRUP.TXTAD üzerinde fonksiyon çağrısı yok (bkz. VYK-03).
+ *
+ * Bölge bulunamazsa null döner; çağıran boş sonuç davranışını korur.
+ */
+async function resolveRegionKod(region: string): Promise<string | null> {
+  const escRegion = esc(region);
+  const sql = `
+    SELECT TOP 1 TXTKOD
+    FROM dbo.TBLDISTEKGRUP
+    WHERE UPPER(LTRIM(RTRIM(TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+  `;
+  const out = await runReadOnly(sql, { limit: 1, timeoutMs: 10_000 });
+  const kod = out.rows[0]?.TXTKOD;
+  return kod == null ? null : String(kod);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,15 +116,17 @@ export type FinanceAnalysis = {
 /**
  * Bölge toplam YoY: son 30g vs 12 ay öncesinin aynı 30g penceresi.
  *
- * NOT: `TBLDIST.TXTGRUP` numeric **kod**'u tutar (örn. "60"); bölgenin
- * display adı (örn. "IST-AVRUPA") için `TBLDISTGRUP.TXTAD`'a JOIN'le.
- * Filtre `dg.TXTAD` üzerinden, case-insensitive (UPPER + TRIM).
+ * NOT: `TBLDIST.TXTEKGRUP` bölge **kod**'unu tutar (TBLDISTEKGRUP.TXTKOD'a
+ * karşılık gelir). Bölge adı → kod çözümü çağıran tarafta (analyzeRegionAnomaly)
+ * TEK sefer yapılır; buraya sargable `regionKod` geçirilir — `d.TXTEKGRUP = kod`
+ * eşitliği, TBLDISTEKGRUP.TXTAD üzerinde UPPER/LTRIM/RTRIM yerine (VYK-03).
  */
 async function fetchRegionTotal(
-  region: string,
+  regionKod: string,
+  distClause: string,
   productGroup?: string,
 ): Promise<{ bu: number; gecen: number }> {
-  const escRegion = esc(region);
+  const escKod = esc(regionKod);
   // productGroup verildiyse fatura toplamı yerine detay-bazlı (DBLNETFIYAT)
   // hesaplıyoruz ve TBLURUN/TBLURUNGRUP üzerinden filtreliyoruz.
   // Fatura toplamı (DBLNETTUTAR) tek bir grup için filtre yapılamaz çünkü
@@ -127,14 +154,15 @@ async function fetchRegionTotal(
                THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
-      AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      AND d.TXTEKGRUP = '${escKod}'
       ${productFilter}
+      ${distClause}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         OR (
           f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
@@ -152,10 +180,11 @@ async function fetchRegionTotal(
 /** Bölge × Distribütör YoY (son 30g vs 12 ay öncesi aynı pencere).
  *  productGroup verildiyse sadece o grup için distribütör kırılımı. */
 async function fetchDistFactors(
-  region: string,
+  regionKod: string,
+  distClause: string,
   productGroup?: string,
 ): Promise<FinanceFactor[]> {
-  const escRegion = esc(region);
+  const escKod = esc(regionKod);
   const isFiltered = !!productGroup;
   const valExpr = isFiltered ? "bd.DBLNETFIYAT" : "f.DBLNETTUTAR";
   const productJoin = isFiltered
@@ -180,14 +209,15 @@ async function fetchDistFactors(
                THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
-      AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      AND d.TXTEKGRUP = '${escKod}'
       ${productFilter}
+      ${distClause}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         OR (
           f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
@@ -222,10 +252,11 @@ async function fetchDistFactors(
 /** Bölge × Müşteri grubu YoY (HORECA/Off-trade/Otel vs).
  *  productGroup verildiyse sadece o grup için kanal kırılımı. */
 async function fetchChannelFactors(
-  region: string,
+  regionKod: string,
+  distClause: string,
   productGroup?: string,
 ): Promise<FinanceFactor[]> {
-  const escRegion = esc(region);
+  const escKod = esc(regionKod);
   const isFiltered = !!productGroup;
   const valExpr = isFiltered ? "bd.DBLNETFIYAT" : "f.DBLNETTUTAR";
   const productJoin = isFiltered
@@ -250,17 +281,18 @@ async function fetchChannelFactors(
                THEN ${valExpr} ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
     LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
     ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND m.BYTDURUM = 0
-      AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      AND d.TXTEKGRUP = '${escKod}'
       ${productFilter}
+      ${distClause}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         OR (
           f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
@@ -296,10 +328,11 @@ async function fetchChannelFactors(
  *  productGroup verildiyse o grup içindeki SKU breakdown'a geçer
  *  (örn. VODKA seçildiyse → Absolut, Stoli, Smirnoff vb. SKU kırılımı). */
 async function fetchProductFactors(
-  region: string,
+  regionKod: string,
+  distClause: string,
   productGroup?: string,
 ): Promise<FinanceFactor[]> {
-  const escRegion = esc(region);
+  const escKod = esc(regionKod);
   const isFiltered = !!productGroup;
   // Filtre varsa GROUP BY ürün adına (u.TXTAD) düş — kullanıcı zaten "VODKA"
   // grubunu seçti, içeride hangi SKU'lar performans değiştirdi onu görmeli.
@@ -320,7 +353,6 @@ async function fetchProductFactors(
                THEN bd.DBLNETFIYAT ELSE 0 END) AS gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     INNER JOIN dbo.TBLMSDBELGEDETAY bd
       ON bd.LNGYIL = f.LNGYIL
      AND bd.LNGFATURAKOD = f.LNGBELGEKOD
@@ -330,10 +362,12 @@ async function fetchProductFactors(
       ON ug.TXTKOD = u.TXTURUNGRUPKOD
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
-      AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      AND d.TXTEKGRUP = '${escKod}'
       ${productFilter}
+      ${distClause}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         OR (
           f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
@@ -368,10 +402,11 @@ async function fetchProductFactors(
 /** Aktif/kaybedilen müşteri sayıları. productGroup verildiyse sadece o
  *  grubu satın alan müşteri sayıları. */
 async function fetchCustomerStats(
-  region: string,
+  regionKod: string,
+  distClause: string,
   productGroup?: string,
 ): Promise<FinanceCustomerStats> {
-  const escRegion = esc(region);
+  const escKod = esc(regionKod);
   const isFiltered = !!productGroup;
   const productJoin = isFiltered
     ? `INNER JOIN dbo.TBLMSDBELGEDETAY bd
@@ -417,14 +452,15 @@ async function fetchCustomerStats(
                           THEN f.LNGMUSTERIKOD END) AS aktif_gecen
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-    INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
     ${productJoin}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
-      AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+      AND d.TXTEKGRUP = '${escKod}'
       ${productFilter}
+      ${distClause}
       AND (
         f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         OR (
           f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
           AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()})
@@ -438,19 +474,23 @@ async function fetchCustomerStats(
   const r = out.rows[0] ?? { aktif_bu: 0, aktif_gecen: 0 };
 
   // Kaybedilen müşteri: geçen yıl alışveriş yapıp bu yıl yapmayan
-  // (productGroup verildiyse "bu grubu") — prev/cur ayrı alias suffix
+  // (productGroup verildiyse "bu grubu") — prev/cur ayrı alias suffix.
+  // distClause `f.LNGDISTKOD` alias'ıyla üretildi; f2 subquery'si için
+  // alias'ı basit string replace ile uyarlıyoruz (güvenli — sadece kolon
+  // öneki, kullanıcı girdisi içermiyor).
+  const distClauseF2 = distClause.replace(/\bf\.LNGDISTKOD\b/g, "f2.LNGDISTKOD");
   const churnSql = `
     SELECT COUNT(DISTINCT prev.LNGMUSTERIKOD) AS kaybedilen
     FROM (
       SELECT DISTINCT f.LNGMUSTERIKOD
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLDIST d ON d.LNGKOD = f.LNGDISTKOD
-      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
       ${productJoinForChurn("f", "p")}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND d.BYTDURUM = 0
-        AND UPPER(LTRIM(RTRIM(dg.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+        AND d.TXTEKGRUP = '${escKod}'
         ${productFilterForChurn("p")}
+        ${distClause}
         AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
     ) prev
@@ -458,13 +498,14 @@ async function fetchCustomerStats(
       SELECT DISTINCT f2.LNGMUSTERIKOD
       FROM dbo.TBLMSDFATURA f2
       INNER JOIN dbo.TBLDIST d2 ON d2.LNGKOD = f2.LNGDISTKOD
-      INNER JOIN dbo.TBLDISTGRUP dg2 ON dg2.TXTKOD = d2.TXTGRUP
       ${productJoinForChurn("f2", "c")}
       WHERE f2.BYTTUR = 0 AND f2.BYTDURUM = 0
         AND d2.BYTDURUM = 0
-        AND UPPER(LTRIM(RTRIM(dg2.TXTAD))) = UPPER(LTRIM(RTRIM('${escRegion}')))
+        AND d2.TXTEKGRUP = '${escKod}'
         ${productFilterForChurn("c")}
+        ${distClauseF2}
         AND f2.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f2.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
     ) cur ON cur.LNGMUSTERIKOD = prev.LNGMUSTERIKOD
     WHERE cur.LNGMUSTERIKOD IS NULL
   `;
@@ -598,47 +639,80 @@ function fillContributions(factors: FinanceFactor[], totalDelta: number): void {
 
 export async function analyzeRegionAnomaly(
   region: string,
-  options: { forceRefresh?: boolean; productGroup?: string } = {},
+  options: {
+    forceRefresh?: boolean;
+    productGroup?: string;
+    /** Dist kullanıcının izinli distribütör kodları; null/undefined → merkez
+     *  (filtre yok). Sunucu-otoriter — server.ts JWT scope'undan geçirir. */
+    allowedDistKods?: number[] | null;
+  } = {},
 ): Promise<FinanceAnalysis> {
   const cleaned = region.trim();
   if (!cleaned) throw new Error("region parametresi boş.");
   const productGroup = options.productGroup?.trim() || undefined;
 
+  // Scope hesabı — komuta/wietnauer ile aynı desen.
+  const scope: TenantScope =
+    options.allowedDistKods == null
+      ? { type: "merkez", distKods: null }
+      : { type: "dist", distKods: options.allowedDistKods.filter((n) => Number.isInteger(n)) };
+  const distClause = distFilterClause(scope, "f.LNGDISTKOD");
+  const scopeKey =
+    options.allowedDistKods == null
+      ? "all"
+      : "d" + [...options.allowedDistKods].sort((a, b) => a - b).join("_");
+
   // CACHE_VERSION — SQL JOIN şekli veya prompt değiştiğinde bump et
   // (TTL yok, eski entry'ler aksi halde yaşamaya devam eder).
   // v2: TBLURUNGRUP JOIN'inde LNGDISTKOD constraint'i kaldırıldı.
-  const CACHE_VERSION = "v2";
-  // Cache key'e productGroup'u dahil et — aynı bölge için "tüm gruplar"
-  // ve "VODKA" analizleri ayrı cache satırı olmalı.
+  // v4: dist-bazlı veri izolasyonu — tüm fatura sorgularına distClause enjekte edildi.
+  // v5: VYK-03 — non-sargable dg.TXTAD filtresi kaldırıldı, bölge adı→kod
+  //     lookup'ı tek seferlik yapılıp d.TXTEKGRUP = kod (sargable) kullanıldı.
+  //     Sonuç rakamları AYNI (aynı bölgeye eşleşir); yalnız SQL şekli değişti.
+  const CACHE_VERSION = "v5";
+  // Cache key'e productGroup + scope'u dahil et — aynı bölge için "tüm
+  // gruplar"/"VODKA" ve merkez/dist analizleri ayrı cache satırı olmalı.
   const cacheKey = productGroup
-    ? `${CACHE_VERSION}::${cleaned.toUpperCase()}::pg::${productGroup.toUpperCase()}`
-    : `${CACHE_VERSION}::${cleaned.toUpperCase()}`;
+    ? `${CACHE_VERSION}::${cleaned.toUpperCase()}::pg::${productGroup.toUpperCase()}::${scopeKey}`
+    : `${CACHE_VERSION}::${cleaned.toUpperCase()}::${scopeKey}`;
 
   const cached = await withCache<FinanceAnalysis>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
+      // Bölge adı → kod çözümü TEK sefer (VYK-03) — bulunamazsa mevcut
+      // davranış korunur: tüm fetcher'lar atlanır, boş/sıfır sonuç döner.
+      const regionKod = await resolveRegionKod(cleaned);
+
       // Paralel veri toplama — productGroup tüm fetcher'lara geçer
       const [total, distFactors, channelFactors, productFactors, customers] =
-        await Promise.all([
-          fetchRegionTotal(cleaned, productGroup),
-          fetchDistFactors(cleaned, productGroup).catch((e) => {
-            console.error("[finance-agent dist]", e);
-            return [] as FinanceFactor[];
-          }),
-          fetchChannelFactors(cleaned, productGroup).catch((e) => {
-            console.error("[finance-agent channel]", e);
-            return [] as FinanceFactor[];
-          }),
-          fetchProductFactors(cleaned, productGroup).catch((e) => {
-            console.error("[finance-agent product]", e);
-            return [] as FinanceFactor[];
-          }),
-          fetchCustomerStats(cleaned, productGroup).catch((e) => {
-            console.error("[finance-agent customers]", e);
-            return { aktifBu: 0, aktifGecen: 0, kaybedilen: 0 };
-          }),
-        ]);
+        regionKod == null
+          ? [
+              { bu: 0, gecen: 0 },
+              [] as FinanceFactor[],
+              [] as FinanceFactor[],
+              [] as FinanceFactor[],
+              { aktifBu: 0, aktifGecen: 0, kaybedilen: 0 },
+            ]
+          : await Promise.all([
+              fetchRegionTotal(regionKod, distClause, productGroup),
+              fetchDistFactors(regionKod, distClause, productGroup).catch((e) => {
+                console.error("[finance-agent dist]", e);
+                return [] as FinanceFactor[];
+              }),
+              fetchChannelFactors(regionKod, distClause, productGroup).catch((e) => {
+                console.error("[finance-agent channel]", e);
+                return [] as FinanceFactor[];
+              }),
+              fetchProductFactors(regionKod, distClause, productGroup).catch((e) => {
+                console.error("[finance-agent product]", e);
+                return [] as FinanceFactor[];
+              }),
+              fetchCustomerStats(regionKod, distClause, productGroup).catch((e) => {
+                console.error("[finance-agent customers]", e);
+                return { aktifBu: 0, aktifGecen: 0, kaybedilen: 0 };
+              }),
+            ]);
 
       const delta = total.bu - total.gecen;
       const yoyPct = total.gecen > 0 ? (delta / total.gecen) * 100 : null;

@@ -4,6 +4,27 @@ import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { distFilterClause, type TenantScope } from "./auth.js";
+
+/**
+ * `allowedDistKods` (null → merkez, dizi → dist scope) SQLite `dist_kod`
+ * kolonuna güvenli IN(...) filtresine çevirir. Sayı dizisi olduğu için
+ * `.join(",")` injection riski taşımaz (Number.isInteger guard'lı).
+ */
+function sqliteDistFilter(allowedDistKods: number[] | null | undefined): string {
+  if (allowedDistKods == null) return "";
+  const ids = allowedDistKods.filter((n) => Number.isInteger(n));
+  if (ids.length === 0) return " AND 1=0";
+  return ` AND dist_kod IN (${ids.join(",")})`;
+}
+
+/** MSSQL tarafı için TenantScope + distFilterClause üretir — komuta/wietnauer
+ *  ile aynı desen. */
+function scopeFromAllowed(allowedDistKods: number[] | null | undefined): TenantScope {
+  return allowedDistKods == null
+    ? { type: "merkez", distKods: null }
+    : { type: "dist", distKods: allowedDistKods.filter((n) => Number.isInteger(n)) };
+}
 
 /**
  * TR il adını UPPER + ASCII (diacritic-strip) formuna normalize eden SQL
@@ -540,6 +561,9 @@ export type MapCustomerFilters = {
   /** Show only customers not visited for ≥ N days. */
   minDaysSinceVisit?: number;
   limit?: number;
+  /** Dist-bazlı veri izolasyonu — sunucu-otoriter. null/undefined → merkez
+   *  (filtre yok), dizi → yalnızca bu dist_kod'lara ait müşteriler. */
+  allowedDistKods?: number[] | null;
 };
 
 export type MapFacets = {
@@ -630,6 +654,10 @@ export async function listMapCustomers(
     where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
     params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
   }
+  // Dist-bazlı veri izolasyonu — sunucu-otoriter. Integer dizisi olduğu için
+  // `.join(",")` güvenli (Number.isInteger guard'lı, parametreli değil).
+  const distIsoClause = sqliteDistFilter(filters.allowedDistKods);
+  if (distIsoClause) where.push(distIsoClause.replace(/^ AND /, ""));
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
@@ -810,6 +838,8 @@ export type MapRegionFilters = {
   /** Composite Risk Score tier filter. */
   tier?: RiskTierV2;
   minDaysSinceVisit?: number;
+  /** Dist-bazlı veri izolasyonu — sunucu-otoriter. null/undefined → merkez. */
+  allowedDistKods?: number[] | null;
 };
 
 export async function listMapRegions(
@@ -844,6 +874,9 @@ export async function listMapRegions(
     where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
     params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
   }
+  // Dist-bazlı veri izolasyonu — sunucu-otoriter.
+  const distIsoClauseRegions = sqliteDistFilter(filters.allowedDistKods);
+  if (distIsoClauseRegions) where.push(distIsoClauseRegions.replace(/^ AND /, ""));
 
   // Önce şehir bazlı agg, sonra JS tarafında klasik bölgeye topla.
   // (SQLite tarafında province → region mapping yapacak fonksiyon yok;
@@ -986,6 +1019,31 @@ export function getMapFacets(repoRoot: string): MapFacets {
   return { cities, distributors };
 }
 
+/**
+ * Bir müşterinin `dist_kod`'unun scope içinde olup olmadığını SQLite
+ * mirror'dan kontrol eder. Dist kullanıcı başka dist'in müşteri detayını
+ * (satış/foresight) görememelidir — server.ts bu sonuca göre 403/404 döner.
+ *
+ * `allowedDistKods == null` → merkez, her zaman true.
+ * Müşteri mirror'da bulunamazsa (senkron gecikmesi/hatalı id) da `true`
+ * döner — var olmayan kayıt için 404 zaten ayrı bir kontrolle ele alınmalı,
+ * bu fonksiyon SADECE "başka dist'in müşterisi" durumunu yakalar.
+ */
+export function customerInScope(
+  repoRoot: string,
+  musteriKod: number,
+  allowedDistKods: number[] | null | undefined,
+): boolean {
+  if (allowedDistKods == null) return true;
+  const db = getLocalDb(repoRoot);
+  const row = db
+    .prepare("SELECT dist_kod AS distKod FROM map_customers WHERE id = ?")
+    .get(Math.floor(musteriKod)) as { distKod: number | null } | undefined;
+  if (!row) return true;
+  if (row.distKod == null) return true;
+  return allowedDistKods.includes(row.distKod);
+}
+
 export function getSyncStatus(repoRoot: string): MapSyncStatus {
   const db = getLocalDb(repoRoot);
   const row = db
@@ -1117,7 +1175,8 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       m.TXTSEHIR     AS sehir,
       m.TXTILCE      AS ilce,
       d.TXTAD        AS distributor,
-      -- Bölge: TBLDIST.TXTGRUP → TBLDISTGRUP.TXTAD. LNGDISTKOD şartı yok
+      -- Bölge: TBLDIST.TXTEKGRUP → TBLDISTEKGRUP.TXTAD (standart 5-bölge:
+      -- MARMARA/EGE/ANADOLU/AKDENİZ/GÜNEYDOĞU). LNGDISTKOD şartı yok
       -- (her ikisi de NULL olduğu için JOIN'i boşaltır).
       g.TXTAD        AS bolge,
       CAST(m.DBLKOORDINATX AS FLOAT) AS lat,
@@ -1137,7 +1196,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       ISNULL(z.ziyaret90, 0)    AS ziyaret90
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST    AS d   ON d.LNGKOD = m.LNGDISTKOD
-    LEFT JOIN dbo.TBLDISTGRUP AS g  ON g.TXTKOD = d.TXTGRUP
+    LEFT JOIN dbo.TBLDISTEKGRUP AS g  ON g.TXTKOD = d.TXTEKGRUP
     LEFT JOIN son_satis        AS s    ON s.LNGMUSTERIKOD    = m.LNGKOD
     LEFT JOIN ciro_30          AS c30  ON c30.LNGMUSTERIKOD  = m.LNGKOD
     LEFT JOIN ciro_prev_30     AS cp30 ON cp30.LNGMUSTERIKOD = m.LNGKOD
@@ -1625,12 +1684,16 @@ export type MapCityYoY = {
  *  daha sağlam. */
 export async function listMapCityYoY(
   region?: string,
+  allowedDistKods?: number[] | null,
 ): Promise<MapCityYoY[]> {
   const master = await loadRegionMaster();
   if (region && !master.byRegion.has(region)) {
     // Bilinmeyen region adı → boş döner
     return [];
   }
+
+  const scope = scopeFromAllowed(allowedDistKods);
+  const distClause = distFilterClause(scope, "f.LNGDISTKOD");
 
   const sql = `
     WITH son AS (
@@ -1639,7 +1702,9 @@ export async function listMapCityYoY(
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+        ${distClause}
       GROUP BY m.TXTSEHIR
     ),
     onceki AS (
@@ -1650,6 +1715,7 @@ export async function listMapCityYoY(
         AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+        ${distClause}
       GROUP BY m.TXTSEHIR
     )
     SELECT COALESCE(s.sehir, o.sehir) AS sehir,

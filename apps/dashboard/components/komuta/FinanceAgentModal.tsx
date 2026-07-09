@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   Bar,
   BarChart,
@@ -105,12 +106,19 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
     n == null ? "—" : `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
 
   // Map drill-down URL — region varsa bolge filter, her durumda riskTier=high.
-  // URLSearchParams ile encode et; "İç Anadolu" gibi TR karakterleri elle
-  // birleştirmek yerine tek noktadan geçsin.
+  // basePath URL'den auto-detect: V3 Cockpit'ten açıldıysa /v3/harita'ya,
+  // V2 Komuta'dan /v2/harita'ya, aksi /map'e. TurkeyMapPolygon ile aynı
+  // kural.
+  const pathname = usePathname() ?? "";
+  const mapBase = pathname.startsWith("/v3")
+    ? "/v3/harita"
+    : pathname.startsWith("/v2")
+      ? "/v2/harita"
+      : "/map";
   const mapHrefParams = new URLSearchParams();
   if (region) mapHrefParams.set("bolge", region);
   mapHrefParams.set("riskTier", "high");
-  const mapHref = `/map?${mapHrefParams.toString()}`;
+  const mapHref = `${mapBase}?${mapHrefParams.toString()}`;
 
   const handleAddToWeekly = () => {
     if (!region || addedToWeekly) return;

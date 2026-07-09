@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import { usePathname } from "next/navigation";
 import maplibregl from "maplibre-gl";
 import type { KomutaRegionRow } from "@/lib/api";
 import { FinanceAgentLauncher } from "./FinanceAgentLauncher";
@@ -9,9 +10,11 @@ import { TREND_LEGEND, trendColor } from "./trend-colors";
 type Props = {
   regions: KomutaRegionRow[];
   /**
-   * Bölgeye tıklayınca yönlendirilecek harita path'i. V1 Komuta'da "/map",
-   * V2 Komuta'da "/v2/harita". IA tutarlılığı için doğru basePath geçilmeli;
-   * aksi halde V2 kullanıcısı V1 haritasına atılır (navbar V2'den V1'e dönüş).
+   * Bölgeye tıklayınca yönlendirilecek harita path'i. Explicit verilmezse
+   * mevcut URL'den otomatik tespit: /v3/* → /v3/harita, /v2/* → /v2/harita,
+   * aksi /map. Aynı KomutaPage hem /komuta hem /v3/cockpit'ten servis
+   * edildiği için bu auto-detect navbar tutarlılığını koruyor — V3
+   * kullanıcısı haritaya tıkladığında V1 sayfasına atılmıyor.
    */
   basePath?: string;
 };
@@ -50,13 +53,22 @@ const deltaColor = trendColor;
  *   - Bölge etiketinde YoY% yazıyor
  *   - Karta tıklanınca /map?region=<klasik-bolge>'a gider
  */
-export function TurkeyMapPolygon({ regions, basePath = "/map" }: Props) {
+export function TurkeyMapPolygon({ regions, basePath }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  // Auto-detect: explicit basePath verilmediyse URL'den çıkar.
+  const pathname = usePathname() ?? "";
+  const effectiveBasePath =
+    basePath ??
+    (pathname.startsWith("/v3")
+      ? "/v3/harita"
+      : pathname.startsWith("/v2")
+        ? "/v2/harita"
+        : "/map");
   // useEffect içindeki click handler closure'unda sabit kalmasın diye ref'le
   // tut — props değiştikçe handler güncel path'i okur.
-  const basePathRef = useRef(basePath);
-  basePathRef.current = basePath;
+  const basePathRef = useRef(effectiveBasePath);
+  basePathRef.current = effectiveBasePath;
 
   // bölge adı → row (data lookup için)
   const byBolge = useMemo(() => {

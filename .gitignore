@@ -36,3 +36,17 @@ apps/dashboard/next-env.d.ts
 .idea
 *.log
 .claude/worktrees/
+
+# Wietnauer canlı SQLite mirror — GERÇEK müşteri verisi, repoda ASLA olmamalı
+# (regenerable: /api/map/sync ile MSSQL'den yeniden üretilir).
+data/wietnauer.sqlite
+data/wietnauer.sqlite-shm
+data/wietnauer.sqlite-wal
+
+# Geçici doğrulama/dump script'leri (session output)
+scratchpad/
+
+# Güvenlik denetim raporları — açık-açık listesi; production'a klonlanan
+# repoda bulunmamalı (yerelde saklanır).
+reports/
+tmp/

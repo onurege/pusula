@@ -85,6 +85,16 @@ export type TenantConfig = {
    */
   sqliteFileName: string;
 
+  /**
+   * MSSQL credential env var prefix'i — `<prefix>SERVER`, `<prefix>DATABASE`,
+   * `<prefix>USER`, `<prefix>PASSWORD`, `<prefix>PORT`, `<prefix>ENCRYPT`,
+   * `<prefix>TRUST_SERVER_CERT` okunur.
+   *
+   * Tanımsız bırakılırsa `"MSSQL_"` default (geriye uyumluluk — Pernod canlı
+   * sistem). Wietnauer için `"W_MSSQL_"` — aynı Univera sunucusu, farklı DB.
+   */
+  mssqlEnvPrefix?: string;
+
   // -- Birim & vergi ----------------------------------------------------------
 
   volume: VolumeUnit;
@@ -95,4 +105,25 @@ export type TenantConfig = {
   // -- UI labels --------------------------------------------------------------
 
   labels: TenantLabels;
+
+  // -- Marka kaynağı ----------------------------------------------------------
+
+  /**
+   * Tenant'ın "marka" katmanı hangi Univera tablosundan okunur. Univera
+   * standart bir hiyerarşi tutmaz; her dağıtıcı kendi kurgusunu yapar:
+   *   - Pernod: TBLURUNEKGRUP = marka (Chivas, Ballantine's), TBLURUNGRUP = kategori
+   *   - Wietnauer: TBLURUNGRUP = marka (JAGERMEISTER, BELUGA), TBLURUNEKGRUP = kategori
+   *
+   * `brandTable` o tenant'ta marka isimlerini taşıyan tablo;
+   * `brandJoinColumn` TBLURUN üzerinde o tabloya bağlanan FK sütunu.
+   */
+  brandTable: "TBLURUNEKGRUP" | "TBLURUNGRUP";
+  brandJoinColumn: "TXTURUNEKGRUPKOD" | "TXTURUNGRUPKOD";
+
+  /**
+   * Tenant'ın stratejik takip ettiği marka adları (`brandTable`.TXTAD ile
+   * birebir eşleşir, case-insensitive). Wietnauer dashboards'unda özel zoom
+   * panelleri bu liste üzerinden render edilir.
+   */
+  strategicBrands?: string[];
 };

@@ -11,15 +11,23 @@ import {
   FilePlus2,
   FileText,
   Layers,
+  LayoutDashboard,
   Map,
   Package,
+  PieChart,
   Sparkles,
+  Target,
+  TrendingUp,
+  Truck,
   Users,
+  Wallet,
 } from "lucide-react";
+import { LogOut } from "lucide-react";
 import { cn } from "./cn";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
 import { GlobalRefreshButton } from "@/components/global-refresh-button";
 import { useTenant } from "@/components/tenant-provider";
+import { useAuth } from "@/components/auth/auth-context";
 
 // V1 — mevcut çalışan IA (üretim). Asla kırılmamalı.
 const itemsV1 = [
@@ -45,14 +53,59 @@ const itemsV2 = [
   { href: "/v2/raporlar", label: "Raporlar", icon: FileText },
 ] as const;
 
+// V3 — Wietnauer talepleri doğrultusunda ayrı dashboard IA. Her dashboard
+// kendi sayfası; karışık tab yapısı yok.
+const itemsV3 = [
+  { href: "/v3", label: "Özet", icon: LayoutDashboard },
+  { href: "/v3/cockpit", label: "Cockpit", icon: Compass },
+  { href: "/v3/harita", label: "Harita", icon: Map },
+  { href: "/v3/yonetim-kurulu", label: "Yönetim", icon: PieChart },
+  { href: "/v3/satis-performans", label: "Satış", icon: TrendingUp },
+  { href: "/v3/musteri-segmentasyon", label: "Segment", icon: Users },
+  { href: "/v3/marka-sku", label: "Marka", icon: Package },
+  { href: "/v3/stok-tukenme", label: "Stok", icon: Package },
+  { href: "/v3/saha-operasyon", label: "Saha", icon: Truck },
+  { href: "/v3/aktivasyon-risk", label: "Risk", icon: Target },
+  { href: "/v3/ticari-yatirim", label: "İskonto", icon: Wallet },
+] as const;
+
+/** Giriş yapan kullanıcı rozeti + rol etiketi + çıkış. */
+function UserChip() {
+  const { user, loading } = useAuth();
+  const { logout } = useAuth();
+  if (loading || !user) return null;
+  const name = user.displayName?.trim() || user.username;
+  const roleLabel = user.role === "merkez" ? "Merkez" : "Distribütör";
+  return (
+    <div className="ml-1 flex items-center gap-2">
+      <div className="hidden sm:flex flex-col items-end leading-tight">
+        <span className="text-[12px] font-medium text-fg max-w-[140px] truncate">{name}</span>
+        <span className="text-[10px] text-muted">{roleLabel}</span>
+      </div>
+      <button
+        type="button"
+        onClick={() => void logout()}
+        title="Çıkış yap"
+        className="flex items-center justify-center size-9 rounded-md text-muted hover:text-fg hover:bg-surface-2 transition-colors"
+      >
+        <LogOut size={15} strokeWidth={2} />
+      </button>
+    </div>
+  );
+}
+
 export function Navbar() {
   const pathname = usePathname() ?? "/";
-  // /v2 veya /v2/* yolundayız → V2 nav setini göster.
-  const isV2 = pathname === "/v2" || pathname.startsWith("/v2/");
-  const items = isV2 ? itemsV2 : itemsV1;
+  // Login sayfasında chrome gösterme.
+  const isLogin = pathname === "/login" || pathname.startsWith("/login/");
+  // Hangi sürümdeyiz? V3 > V2 > V1 öncelik sırası.
+  const isV3 = pathname === "/v3" || pathname.startsWith("/v3/");
+  const isV2 = !isV3 && (pathname === "/v2" || pathname.startsWith("/v2/"));
+  const items = isV3 ? itemsV3 : isV2 ? itemsV2 : itemsV1;
+  const version = isV3 ? "v3" : isV2 ? "v2" : "v1";
   // Tenant config — logo marka harfleri + ürün adı tenant-özel.
-  // FMCG demo'da "FM" + "Enroute Pusula", Pernod'da "EP" + "Enroute Pusula".
   const tenant = useTenant();
+  if (isLogin) return null;
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
@@ -68,10 +121,9 @@ export function Navbar() {
         <div className="flex items-center gap-1">
           <nav className="flex items-center gap-1">
             {items.map(({ href, label, icon: Icon }) => {
-              // V2'de /v2 home için tam-eşleşme; V1'de "/" için tam-eşleşme.
-              // Geri kalan için prefix match (örn. /reports/new aktifken
-              // /reports'un da highlight olmaması için tam path kontrolü).
-              const isRoot = href === "/" || href === "/v2";
+              // V2'de /v2 home, V3'te /v3 home, V1'de "/" için tam-eşleşme.
+              // Geri kalan için prefix match.
+              const isRoot = href === "/" || href === "/v2" || href === "/v3";
               const active = isRoot
                 ? pathname === href
                 : pathname === href || pathname.startsWith(href + "/");
@@ -94,8 +146,9 @@ export function Navbar() {
           </nav>
           <div className="ml-1 pl-1 border-l border-border h-7" />
           <GlobalRefreshButton />
-          <VersionToggle isV2={isV2} />
+          <VersionToggle current={version} />
           <ThemeToggle />
+          <UserChip />
         </div>
       </div>
     </header>
@@ -103,33 +156,40 @@ export function Navbar() {
 }
 
 /**
- * V1 ↔ V2 IA sürüm geçiş butonu. V1 = mevcut üretim layout'u (Radar,
- * Komuta, /risk, /ziyaret...); V2 = sadeleştirilmiş yeni IA (Müşteri,
- * Ürün, Saha sekme grupları). Her iki sürüm de aynı veriyi okur;
- * yalnızca panel yerleşimi farklı.
+ * V1 ↔ V2 ↔ V3 IA sürüm geçiş butonu — 3'lü cycle.
+ *   V1 = mevcut üretim layout'u (Radar, Komuta, /risk, /ziyaret...)
+ *   V2 = sadeleştirilmiş Müşteri / Ürün / Saha sekme grupları
+ *   V3 = Wietnauer dashboard yapısı (her madde kendi sayfası)
+ * Üç sürüm de aynı veriyi okur; yalnızca panel yerleşimi farklı.
  */
-function VersionToggle({ isV2 }: { isV2: boolean }) {
-  const href = isV2 ? "/" : "/v2";
-  const targetLabel = isV2 ? "V1" : "V2";
-  const targetHint = isV2
-    ? "Mevcut sürüme (V1) dön"
-    : "Yeni IA sürümü (V2 · Beta) — sadeleştirilmiş Müşteri / Ürün / Saha yapısı";
+function VersionToggle({ current }: { current: "v1" | "v2" | "v3" }) {
+  // V1 → V2 → V3 → V1 cycle
+  const next = current === "v1" ? "v2" : current === "v2" ? "v3" : "v1";
+  const nextHref = next === "v1" ? "/" : next === "v2" ? "/v2" : "/v3";
+  const nextLabel = next.toUpperCase();
+  const targetHint = {
+    v1: "V1 — mevcut üretim layout'u",
+    v2: "V2 — sadeleştirilmiş Müşteri/Ürün/Saha IA",
+    v3: "V3 — Wietnauer dashboard yapısı (her madde ayrı sayfa)",
+  }[next];
+  // Renk: V3 başka, V2 başka, V1 başka — kullanıcı hangi sürümde olduğunu görsün
+  const accentNext = next === "v3";
   return (
     <Link
-      href={href}
+      href={nextHref}
       title={targetHint}
       aria-label={targetHint}
       className={cn(
         "inline-flex items-center gap-1 h-8 px-2.5 rounded-md text-[11px] font-semibold tracking-tight border transition-colors",
-        isV2
+        accentNext
           ? "border-accent/40 bg-accent-soft text-accent hover:bg-surface-2"
           : "border-border bg-surface-2 text-fg-2 hover:border-accent/40 hover:text-accent",
       )}
     >
       <Sparkles size={12} className="opacity-80" />
-      {targetLabel}
-      <span className="hidden sm:inline text-muted-2 font-normal">
-        {isV2 ? "→ V1" : "→ V2 Beta"}
+      {nextLabel}
+      <span className="hidden md:inline text-muted-2 font-normal">
+        → {nextLabel}
       </span>
     </Link>
   );

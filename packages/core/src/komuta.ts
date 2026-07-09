@@ -12,6 +12,7 @@ import {
 import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { distFilterClause, type TenantScope } from "./auth.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -263,7 +264,7 @@ export type KomutaSnapshot = {
 // KPI Strip — 5 kart
 // ---------------------------------------------------------------------------
 
-async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
+async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpiCard[]> {
   // Son 30 gün vs önceki 30 gün karşılaştırma için tek seferde 4 metriği döner.
   // SQL unit'ten bağımsız — hem ciro (TL) hem miktar (9LE) her zaman hesaplanır.
   // Birim swap'i sadece UI çıktısında yapılır (primary KPI'nın value/label/unit'i).
@@ -276,6 +277,8 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     ),
     onceki AS (
       SELECT
@@ -285,6 +288,7 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
+        ${distClause}
     ),
     -- 9LE (9-Litre-Equivalent) — Pernod kendi resmi katsayısını TBLURUNEKSAHA
     -- saha 26 "9 LT Değer" alanında tutuyor. Her ürünün 1 adetinin kaç 9LE'ye
@@ -311,6 +315,8 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
         ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     ),
     miktar_onceki AS (
       SELECT ISNULL(SUM(
@@ -330,6 +336,7 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
+        ${distClause}
     ),
     top_grup AS (
       SELECT TOP 1
@@ -345,6 +352,8 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
     ),
@@ -360,6 +369,8 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
        AND d.LNGDISTKOD = f.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     )
     SELECT
       son.ciro       AS son_ciro,
@@ -498,7 +509,7 @@ async function fetchKpis(unit: ValueUnit): Promise<KomutaKpiCard[]> {
 // distribütör network'ü zaten bölgeye atanmış.
 // ---------------------------------------------------------------------------
 
-async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
+async function fetchRegions(unit: ValueUnit, distClause: string): Promise<KomutaRegionRow[]> {
   // /map sayfası ile tutarlılık için şehir-bazlı agregasyon. TBLDISTGRUP
   // (bayi grubu adı) yerine TBLMUSTERI.TXTSEHIR (müşterinin şehri) → klasik
   // 7 bölge mapping'i yapıyoruz. Kaynak: data/geo/tr-province-region.json.
@@ -523,7 +534,9 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL
+        ${distClause}
       GROUP BY m.TXTSEHIR
     ),
     onceki AS (
@@ -537,6 +550,7 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
         AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL
+        ${distClause}
       GROUP BY m.TXTSEHIR
     )
     SELECT
@@ -640,7 +654,7 @@ async function fetchRegions(unit: ValueUnit): Promise<KomutaRegionRow[]> {
 
 const CHANNEL_COLORS = ["#d4a857", "#58a6ff", "#c084fc", "#3fb950", "#f0c674"];
 
-async function fetchChannels(unit: ValueUnit): Promise<KomutaChannelSlice[]> {
+async function fetchChannels(unit: ValueUnit, distClause: string): Promise<KomutaChannelSlice[]> {
   const valueExpr = unitValueExpr(unit, {
     faturaTL: "f.DBLNETTUTAR",
     miktarAlias: "d9.DBLMIKTAR",
@@ -660,6 +674,8 @@ async function fetchChannels(unit: ValueUnit): Promise<KomutaChannelSlice[]> {
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND m.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      ${distClause}
     GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Grupsuz)')
     ORDER BY ciro DESC
   `;
@@ -674,6 +690,8 @@ async function fetchChannels(unit: ValueUnit): Promise<KomutaChannelSlice[]> {
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND m.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      ${distClause}
   `;
   const totOut = await runReadOnly(totSql, { limit: 1, timeoutMs: 20_000 });
   const total = Number((totOut.rows[0] ?? { tot: 0 }).tot ?? 0);
@@ -703,7 +721,7 @@ async function fetchChannels(unit: ValueUnit): Promise<KomutaChannelSlice[]> {
  *   - Baz: SUM(DBLNETTUTAR), BYTTUR=0 AND BYTDURUM=0, m.BYTDURUM=0
  *   - Kanal: ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)),''),'(Grupsuz)')
  */
-async function fetchChannelMonthly(unit: ValueUnit): Promise<KomutaChannelMonthlyRow[]> {
+async function fetchChannelMonthly(unit: ValueUnit, distClause: string): Promise<KomutaChannelMonthlyRow[]> {
   const rowExpr = unit === "9le"
     ? "d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
     : "f.DBLNETTUTAR";
@@ -722,6 +740,7 @@ async function fetchChannelMonthly(unit: ValueUnit): Promise<KomutaChannelMonthl
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(month, -12, ${sqlNow()})
+        ${distClause}
     ),
     top_kanal AS (
       SELECT TOP 5 kanal, SUM(tutar) AS toplam
@@ -772,7 +791,7 @@ async function fetchChannelMonthly(unit: ValueUnit): Promise<KomutaChannelMonthl
 //
 // Pencere: son 12 ay. Müşterinin Müşteri Tipi sahası boşsa "(Tanımsız)"
 // fallback kategorisine düşer.
-async function fetchChannelByCustomerType(unit: ValueUnit): Promise<KomutaChannelMonthlyRow[]> {
+async function fetchChannelByCustomerType(unit: ValueUnit, distClause: string): Promise<KomutaChannelMonthlyRow[]> {
   const rowExpr = unit === "9le"
     ? "d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
     : "f.DBLNETTUTAR";
@@ -798,6 +817,7 @@ async function fetchChannelByCustomerType(unit: ValueUnit): Promise<KomutaChanne
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(month, -12, ${sqlNow()})
+        ${distClause}
     ),
     top_kanal AS (
       SELECT TOP 7 kanal, SUM(tutar) AS toplam
@@ -837,7 +857,7 @@ async function fetchChannelByCustomerType(unit: ValueUnit): Promise<KomutaChanne
 // 12 aylık trend
 // ---------------------------------------------------------------------------
 
-async function fetchMonthlyTrend(unit: ValueUnit): Promise<KomutaMonthlyBar[]> {
+async function fetchMonthlyTrend(unit: ValueUnit, distClause: string): Promise<KomutaMonthlyBar[]> {
   const valueExpr = unitValueExpr(unit, {
     faturaTL: "f.DBLNETTUTAR",
     miktarAlias: "d9.DBLMIKTAR",
@@ -855,6 +875,7 @@ async function fetchMonthlyTrend(unit: ValueUnit): Promise<KomutaMonthlyBar[]> {
     ${joins}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(month, -24, ${sqlNow()})
+      ${distClause}
     GROUP BY DATEPART(year, f.TRHISLEMTARIHI), DATEPART(month, f.TRHISLEMTARIHI)
     ORDER BY yil, ay
   `;
@@ -1012,7 +1033,7 @@ type PeriodScales = {
   ikiYilOnce: number;
 };
 
-async function fetchPeriodScales(): Promise<PeriodScales> {
+async function fetchPeriodScales(distClause: string): Promise<PeriodScales> {
   const sql = `
     WITH fatura_per_period AS (
       SELECT
@@ -1024,6 +1045,8 @@ async function fetchPeriodScales(): Promise<PeriodScales> {
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     ),
     detay_per_period AS (
       SELECT
@@ -1039,6 +1062,8 @@ async function fetchPeriodScales(): Promise<PeriodScales> {
        AND d.LNGDISTKOD = f.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     )
     SELECT
       fpp.bu_fat, dpp.bu_det,
@@ -1068,7 +1093,7 @@ async function fetchPeriodScales(): Promise<PeriodScales> {
 // Marka × Dönem Matrisi (top 8 ürün grubu × 5 dönem)
 // ---------------------------------------------------------------------------
 
-async function fetchMatrix(scales: PeriodScales, unit: ValueUnit): Promise<KomutaMatrixRow[]> {
+async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaMatrixRow[]> {
   // Detay-bazlı per-row value — TL ise DBLNETFIYAT, 9LE ise DBLMIKTAR × çarpan.
   const rowExpr = unit === "9le"
     ? "d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
@@ -1093,7 +1118,9 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit): Promise<Komut
       ${eksahaJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
+        ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
     ),
@@ -1113,7 +1140,9 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit): Promise<Komut
       ${eksahaJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
+        ${distClause}
     )
     SELECT
       gr.grup,
@@ -1176,9 +1205,11 @@ function heatmapBucket(yoyPct: number | null): KomutaHeatmapCell["bucket"] {
   return "cold";
 }
 
-async function fetchHeatmap(unit: ValueUnit): Promise<KomutaHeatmapRow[]> {
+async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<KomutaHeatmapRow[]> {
   // Top bölgeler ve top gruplar tespit edilir, sonra pivot.
-  // dist_grup CTE: distribütör → bölge eşlemesi (TBLDIST.TXTGRUP → TBLDISTGRUP.TXTKOD)
+  // dist_grup CTE: distribütör → bölge eşlemesi (TBLDIST.TXTEKGRUP → TBLDISTEKGRUP.TXTKOD)
+  // Wietnauer'da bölge MARMARA/EGE/ANADOLU/AKDENİZ/GÜNEYDOĞU şeklinde
+  // TBLDISTEKGRUP'tan gelir; TBLDISTGRUP (bayi grubu) yerine.
   // 9LE modunda her aggregation TBLURUNEKSAHA (saha 26) çarpanına ihtiyaç duyar.
   const valExpr = unit === "9le"
     ? "SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0))"
@@ -1196,7 +1227,7 @@ async function fetchHeatmap(unit: ValueUnit): Promise<KomutaHeatmapRow[]> {
     WITH dist_grup AS (
       SELECT d.LNGKOD AS distKod, dg.TXTKOD AS bolgeKod, dg.TXTAD AS bolge
       FROM dbo.TBLDIST d
-      INNER JOIN dbo.TBLDISTGRUP dg ON dg.TXTKOD = d.TXTGRUP
+      INNER JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
       WHERE d.BYTDURUM = 0
     ),
     top_bolge AS (
@@ -1214,6 +1245,8 @@ async function fetchHeatmap(unit: ValueUnit): Promise<KomutaHeatmapRow[]> {
       ${topBolgeUrunJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
       GROUP BY dg.bolge, dg.bolgeKod
       ORDER BY ciro DESC
     ),
@@ -1232,47 +1265,57 @@ async function fetchHeatmap(unit: ValueUnit): Promise<KomutaHeatmapRow[]> {
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
+        ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
+    ),
+    -- VYK-02: iki correlated subquery (her biri TBLMSDFATURA+3 JOIN tekrar
+    -- tarayan) yerine, dist_grup x FATURA x URUN tek kez taranip hem
+    -- son 30 gun hem gecen yil ayni 30 gun pencerelerini CASE-WHEN ile
+    -- ayni GROUP BY da toplar. top_bolge/top_grup ile INNER filtresi
+    -- zaten 8x6=48 hucreye daraltir (Top-N secimi SQL de kalir).
+    agg AS (
+      SELECT
+        dg2.bolgeKod,
+        COALESCE(g.TXTAD, u.TXTAD) AS grup,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+                  AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+                 THEN ${unit === "9le" ? "dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)" : "dd.DBLNETFIYAT"}
+                 ELSE 0 END) AS son,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
+                  AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
+                 THEN ${unit === "9le" ? "dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)" : "dd.DBLNETFIYAT"}
+                 ELSE 0 END) AS onceki
+      FROM dist_grup dg2
+      INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
+      INNER JOIN dbo.TBLMSDBELGEDETAY dd
+        ON dd.LNGYIL = f.LNGYIL AND dd.LNGFATURAKOD = f.LNGBELGEKOD AND dd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
+      ${eksahaJoin}
+      LEFT JOIN dbo.TBLURUNGRUP g
+        ON g.TXTKOD = u.TXTURUNGRUPKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND (
+          (f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})  AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()}))
+          OR
+          (f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()}))
+        )
+        AND dg2.bolgeKod IN (SELECT bolgeKod FROM top_bolge)
+        AND COALESCE(g.TXTAD, u.TXTAD) IN (SELECT grup FROM top_grup)
+        ${distClause}
+      GROUP BY dg2.bolgeKod, COALESCE(g.TXTAD, u.TXTAD)
     )
     SELECT
       tb.bolge,
       tb.distSayisi,
       tg.grup,
-      ISNULL((
-        SELECT ${valExpr}
-        FROM dist_grup dg2
-        INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
-        INNER JOIN dbo.TBLMSDBELGEDETAY dd
-          ON dd.LNGYIL = f.LNGYIL AND dd.LNGFATURAKOD = f.LNGBELGEKOD AND dd.LNGDISTKOD = f.LNGDISTKOD
-        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
-        ${eksahaJoin}
-        LEFT JOIN dbo.TBLURUNGRUP g
-          ON g.TXTKOD = u.TXTURUNGRUPKOD
-        WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-          AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-          AND dg2.bolgeKod = tb.bolgeKod
-          AND COALESCE(g.TXTAD, u.TXTAD) = tg.grup
-      ), 0) AS son,
-      ISNULL((
-        SELECT ${valExpr}
-        FROM dist_grup dg2
-        INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
-        INNER JOIN dbo.TBLMSDBELGEDETAY dd
-          ON dd.LNGYIL = f.LNGYIL AND dd.LNGFATURAKOD = f.LNGBELGEKOD AND dd.LNGDISTKOD = f.LNGDISTKOD
-        INNER JOIN dbo.TBLURUN u ON u.LNGKOD = dd.LNGURUNKOD
-        ${eksahaJoin}
-        LEFT JOIN dbo.TBLURUNGRUP g
-          ON g.TXTKOD = u.TXTURUNGRUPKOD
-        WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-          AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
-          AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-          AND dg2.bolgeKod = tb.bolgeKod
-          AND COALESCE(g.TXTAD, u.TXTAD) = tg.grup
-      ), 0) AS onceki
+      ISNULL(a.son, 0) AS son,
+      ISNULL(a.onceki, 0) AS onceki
     FROM top_bolge tb
     CROSS JOIN top_grup tg
+    LEFT JOIN agg a ON a.bolgeKod = tb.bolgeKod AND a.grup = tg.grup
     ORDER BY tb.ciro DESC, tg.ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 100, timeoutMs: 120_000 });
@@ -1314,7 +1357,7 @@ async function fetchHeatmap(unit: ValueUnit): Promise<KomutaHeatmapRow[]> {
 // Top Satış Temsilcileri (Bölge Müdürü yerine)
 // ---------------------------------------------------------------------------
 
-async function fetchTopReps(unit: ValueUnit): Promise<KomutaRep[]> {
+async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<KomutaRep[]> {
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
     ? "ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)), 0)"
@@ -1346,7 +1389,9 @@ async function fetchTopReps(unit: ValueUnit): Promise<KomutaRep[]> {
     ${joins9le}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
       AND st.TXTSTAD IS NOT NULL
+      ${distClause}
     GROUP BY st.TXTSTAD, d.TXTAD
     ORDER BY ciro DESC
   `;
@@ -1364,7 +1409,7 @@ async function fetchTopReps(unit: ValueUnit): Promise<KomutaRep[]> {
 // Top Distribütörler — son 30g, net ciro sırası
 // ---------------------------------------------------------------------------
 
-async function fetchTopDists(unit: ValueUnit): Promise<KomutaTopDist[]> {
+async function fetchTopDists(unit: ValueUnit, distClause: string): Promise<KomutaTopDist[]> {
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
     ? "ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)), 0)"
@@ -1393,6 +1438,8 @@ async function fetchTopDists(unit: ValueUnit): Promise<KomutaTopDist[]> {
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      ${distClause}
     GROUP BY d.TXTAD, d.TXTGRUP
     ORDER BY ciro DESC
   `;
@@ -1410,7 +1457,7 @@ async function fetchTopDists(unit: ValueUnit): Promise<KomutaTopDist[]> {
 // Marka Portföyü · 2 Yıllık Yörünge
 // ---------------------------------------------------------------------------
 
-async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit): Promise<KomutaPortfolioRow[]> {
+async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaPortfolioRow[]> {
   // 9LE: detay miktar × ek saha 26 çarpanı; TL: detay net fiyat.
   // top10 + raw CTE'leri için ortak satır ifadesi.
   const satirExpr = unit === "9le"
@@ -1438,7 +1485,9 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit): Promise<Ko
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
+        ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
     ),
@@ -1458,6 +1507,8 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit): Promise<Ko
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
     )
     SELECT
       t.grup,
@@ -1773,25 +1824,75 @@ function applyOtvNet(snap: KomutaSnapshot, data: OtvData): KomutaSnapshot {
   };
 }
 
+/**
+ * VYK-01 (cache-key scope fragmentation) DEĞERLENDİRMESİ — bu snapshot JS-
+ * filtreye ÇEVRİLMEDİ, scope'lu (`distClause` enjekte edilmiş) kalıyor:
+ *
+ *   - `fetchHeatmap` bölge×grup hücrelerini (VYK-02 sonrası) TEK GROUP BY
+ *     (`agg` CTE, CASE-WHEN dönem-flag) ile hesaplıyor; `TOP 8 bölge`/`TOP 6
+ *     grup` SQL'de seçiliyor. dist_id eklemek bu Top-N seçimini kaldırmayı
+ *     gerektirir — JS-filtreye çevirmek mevcut per-dist sorgudan DAHA AĞIR
+ *     tek bir sorgu üretir (satır-seviyesine indirmek veri hacmini patlatır).
+ *   - `fetchMatrix` 800 günlük pencerede satır-seviyesi tarama yapıyor
+ *     (`raw` CTE) + `TOP 8` grup seçimi; aynı risk.
+ *   - `fetchPeriodScales`/`fetchRegions`/`fetchChannelMonthly`/
+ *     `fetchChannelByCustomerType` 12-24 aylık pencerelerde çalışıyor;
+ *     dist×ay×kanal×tier kombinasyonu kontrolsüz büyüyebilir.
+ *   - Ayrıca `fetchBrief` (Gemini AI çağrısı) snapshot'a bağlı — cache
+ *     semantiğini değiştirmek AI brief üretim maliyetini de etkiler.
+ *
+ * Karar: full-dataset satır sayısı makul değil (stok'un ~6000'i ile
+ * karşılaştırılamaz büyüklükte olurdu) → dokunulmadı.
+ *
+ * NOT: nightRefresh (apps/api/src/server.ts) yalnızca `allowedDistKods: null`
+ * (merkez) scope'unu ısıtıyor — 30 dist kullanıcısının kendi scope'lu cache
+ * anahtarı (`v7-...-d<n>`) hâlâ soğuk-cache MSSQL yüküne maruz kalıyor.
+ * server.ts'e bu görevde dokunma yetkim yok; **nightRefresh her dist için de
+ * (veya en azından en aktif dist'ler için) `getKomutaSnapshot({ allowedDistKods: [distId] })`
+ * çağıracak şekilde genişletilmeli** — bu ayrı bir görev/PR gerektirir.
+ */
 export async function getKomutaSnapshot(
   options: {
     forceRefresh?: boolean;
     reelTL?: boolean;
     otvNet?: boolean;
     unit?: ValueUnit;
+    /** Dist kullanıcının izinli distribütör kodları; null/undefined → merkez
+     *  (filtre yok). Sunucu-otoriter — server.ts JWT scope'undan geçirir. */
+    allowedDistKods?: number[] | null;
+    /** Tek bir dist'e drill-down (merkez) ya da dist kullanıcının tek izinli
+     *  dist'i (server.ts `scopeSingleDistId` ile hesaplar). */
+    distId?: number | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const unit: ValueUnit = options.unit === "9le" ? "9le" : "tl";
+
+  // Scope hesabı — wietnauer-satis.ts ile aynı desen: distId varsa tek dist,
+  // yoksa allowedDistKods (dist scope) ya da null (merkez, filtresiz).
+  const effectiveDistKods =
+    options.distId != null ? [options.distId] : (options.allowedDistKods ?? null);
+  const scope: TenantScope =
+    effectiveDistKods == null
+      ? { type: "merkez", distKods: null }
+      : { type: "dist", distKods: effectiveDistKods };
+  const distClause = distFilterClause(scope, "f.LNGDISTKOD");
+  const scopeKey =
+    effectiveDistKods == null
+      ? "all"
+      : "d" + [...effectiveDistKods].sort((a, b) => a - b).join("_");
+
   // CACHE_VERSION — snapshot shape veya temel SQL değiştiğinde bump et
   // ki eski entry'ler otomatik invalidate olsun (TTL yok, manuel refresh
   // tek geri kalan yol oluyor). v2: fetchRegions TBLDISTGRUP driver'a geçti
-  // ("Doğu Anadolu kayboldu" fix'i), 8 bölge garanti.
-  const CACHE_VERSION = "v5";
+  // ("Doğu Anadolu kayboldu" fix'i), 8 bölge garanti. v7: dist-bazlı veri
+  // izolasyonu — tüm fatura sorgularına distClause enjekte edildi.
+  const CACHE_VERSION = "v7";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
     options.otvNet ? "otv" : "gross",
     unit,
+    scopeKey,
   ].join("-");
   const cached = await withCache<KomutaSnapshot>(
     CACHE_DOMAIN,
@@ -1799,7 +1900,7 @@ export async function getKomutaSnapshot(
     async () => {
       // Önce her dönem için fatura/detay scale factor'ları çek — Matrix ve
       // Portfolio bunlarla detay-tabanı TL'leri fatura-tabanına çevirir.
-      const scales = await fetchPeriodScales().catch((e) => {
+      const scales = await fetchPeriodScales(distClause).catch((e) => {
         console.error("[komuta scales]", e);
         return { buAy: 1, gecenAy: 1, ucAyOnce: 1, gecenYil: 1, ikiYilOnce: 1 };
       });
@@ -1819,48 +1920,48 @@ export async function getKomutaSnapshot(
         topDists,
         portfolio,
       ] = await Promise.all([
-        fetchKpis(unit).catch((e) => {
+        fetchKpis(unit, distClause).catch((e) => {
           console.error("[komuta kpis]", e);
           return [] as KomutaKpiCard[];
         }),
-        fetchRegions(unit).catch((e) => {
+        fetchRegions(unit, distClause).catch((e) => {
           console.error("[komuta regions]", e);
           return [] as KomutaRegionRow[];
         }),
-        fetchChannels(unit).catch((e) => {
+        fetchChannels(unit, distClause).catch((e) => {
           console.error("[komuta channels]", e);
           return [] as KomutaChannelSlice[];
         }),
-        fetchChannelMonthly(unit).catch((e) => {
+        fetchChannelMonthly(unit, distClause).catch((e) => {
           console.error("[komuta channelMonthly]", e);
           return [] as KomutaChannelMonthlyRow[];
         }),
-        fetchChannelByCustomerType(unit).catch((e) => {
+        fetchChannelByCustomerType(unit, distClause).catch((e) => {
           console.error("[komuta channelByType]", e);
           return [] as KomutaChannelMonthlyRow[];
         }),
-        fetchMonthlyTrend(unit).catch((e) => {
+        fetchMonthlyTrend(unit, distClause).catch((e) => {
           console.error("[komuta trend]", e);
           return [] as KomutaMonthlyBar[];
         }),
         fetchUpcomingEvent().catch(() => null),
-        fetchMatrix(scales, unit).catch((e) => {
+        fetchMatrix(scales, unit, distClause).catch((e) => {
           console.error("[komuta matrix]", e);
           return [] as KomutaMatrixRow[];
         }),
-        fetchHeatmap(unit).catch((e) => {
+        fetchHeatmap(unit, distClause).catch((e) => {
           console.error("[komuta heatmap]", e);
           return [] as KomutaHeatmapRow[];
         }),
-        fetchTopReps(unit).catch((e) => {
+        fetchTopReps(unit, distClause).catch((e) => {
           console.error("[komuta reps]", e);
           return [] as KomutaRep[];
         }),
-        fetchTopDists(unit).catch((e) => {
+        fetchTopDists(unit, distClause).catch((e) => {
           console.error("[komuta topDists]", e);
           return [] as KomutaTopDist[];
         }),
-        fetchPortfolio(scales, unit).catch((e) => {
+        fetchPortfolio(scales, unit, distClause).catch((e) => {
           console.error("[komuta portfolio]", e);
           return [] as KomutaPortfolioRow[];
         }),
@@ -1913,6 +2014,8 @@ export async function getKomutaSnapshot(
       reelTL: options.reelTL,
       otvNet: options.otvNet,
       unit: options.unit,
+      allowedDistKods: options.allowedDistKods,
+      distId: options.distId,
     });
   }
   // Veri var ama Gemini brief üretilememiş (network/key/timeout) → retry et.
@@ -1927,6 +2030,8 @@ export async function getKomutaSnapshot(
       reelTL: options.reelTL,
       otvNet: options.otvNet,
       unit: options.unit,
+      allowedDistKods: options.allowedDistKods,
+      distId: options.distId,
     });
   }
   return cached.value;

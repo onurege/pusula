@@ -74,17 +74,40 @@ function inferCacheTag(path: string): string {
   return "default";
 }
 
+const AUTH_COOKIE = "enroute_auth";
+
+/**
+ * Server component bağlamında gelen isteğin auth cookie'sini oku. Hono API'ye
+ * `Authorization: Bearer` olarak iletilir → sunucu-otoriter dist filtresi.
+ * Client bağlamında next/headers yoktur; sessizce null döner.
+ */
+async function readAuthToken(): Promise<string | null> {
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    return store.get(AUTH_COOKIE)?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isReadOp = method === "GET" || method === "HEAD";
   // refresh=1 query param → SQLite cache'i bypass eden istek; Next.js Data
   // Cache'i de bypass etmeli ki taze sonuç dönsün.
   const isForceRefresh = path.includes("refresh=1");
+
+  // Auth token varsa Bearer olarak ilet. Token'lı istekler kullanıcıya-özel
+  // (dist kullanıcı alt küme görür); Next Data Cache URL bazlı olduğundan
+  // token'lı okumalar CACHE'LENMEMELİ — aksi halde bir kullanıcının cevabı
+  // başkasına sızar. Bu yüzden token varken no-store zorlanır.
+  const token = await readAuthToken();
+
   // Cache stratejisi:
-  //   - Yazma (POST/PUT/...) → her zaman no-store
-  //   - refresh=1 işaretli okumalar → no-store (taze sonuç istenmiş)
-  //   - Diğer okumalar → 5 dk revalidate + domain tag (revalidateTag ile invalidate)
-  const cacheConfig: RequestInit = isReadOp && !isForceRefresh
+  //   - Yazma / refresh=1 / token'lı istek → no-store
+  //   - Diğer (anonim) okumalar → 5 dk revalidate + domain tag
+  const cacheConfig: RequestInit = isReadOp && !isForceRefresh && !token
     ? {
         next: {
           revalidate: 300,
@@ -97,6 +120,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
     ...cacheConfig,
@@ -712,4 +736,368 @@ export async function runRadarApi(
     method: "POST",
     body: JSON.stringify(params),
   });
+}
+
+// -- WIETNAUER / V3 -----------------------------------------------------------
+// V3 IA: her dashboard kendi sayfası. Wietnauer'ın 7-madde dashboard listesine
+// karşılık gelen endpoint'ler. Tenant config'ten brandTable + strategicBrands
+// okur, tenant başına farklı SQL çalışır.
+
+export type WietnauerTopCustomer = {
+  id: number;
+  unvan: string;
+  sehir: string | null;
+  bolge: string | null;
+  ciro: number;
+  faturaSayisi: number;
+  payPct: number;
+  rank: number;
+};
+
+export type WietnauerBrandContribution = {
+  marka: string;
+  markaKod: string;
+  ciro: number;
+  musteriSayi: number;
+  payPct: number;
+  rank: number;
+  isStratejik: boolean;
+};
+
+export type WietnauerDiscountKpi = {
+  brut: number;
+  iskonto: number;
+  net: number;
+  iskontoOraniPct: number;
+  faturaCount: number;
+  aktifMusteriCount: number;
+};
+
+export type WietnauerYonetimSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  topCustomers: WietnauerTopCustomer[];
+  brands: WietnauerBrandContribution[];
+  discount: WietnauerDiscountKpi;
+};
+
+export async function getWietnauerYonetim(
+  options: { refresh?: boolean } = {},
+): Promise<WietnauerYonetimSnapshot> {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request<WietnauerYonetimSnapshot>(`/api/wietnauer/yonetim${qs}`);
+}
+
+// V3 Dashboards — paralel agent'lar dolduruyor.
+// Tip her sayfa kendi türünü declare etsin diye `unknown` döner;
+// agent'lar page.tsx içinde kendi type guard'larını yazar.
+async function fetchV3<T = unknown>(name: string, refresh = false): Promise<T> {
+  const qs = refresh ? "?refresh=1" : "";
+  return request<T>(`/api/wietnauer/${name}${qs}`);
+}
+export const getWietnauerMarka = <T = unknown>(o: { refresh?: boolean } = {}) =>
+  fetchV3<T>("marka", o.refresh);
+export const getWietnauerAktivasyon = <T = unknown>(o: { refresh?: boolean } = {}) =>
+  fetchV3<T>("aktivasyon", o.refresh);
+export const getWietnauerIskonto = <T = unknown>(o: { refresh?: boolean } = {}) =>
+  fetchV3<T>("iskonto", o.refresh);
+export const getWietnauerSegment = <T = unknown>(o: { refresh?: boolean } = {}) =>
+  fetchV3<T>("segment", o.refresh);
+// `getWietnauerSaha` typed signature aşağıda; jenerik kalmasın diye burada
+// kaldırılmıştır.
+export const getWietnauerSatis = <T = unknown>(o: { refresh?: boolean } = {}) =>
+  fetchV3<T>("satis", o.refresh);
+// Stok endpoint'i distId query param'ı destekler — UI dropdown'undan gelir.
+// distId verilmezse portföy toplamı, verilirse o distribütörün kırılımı döner.
+export const getWietnauerStok = <T = unknown>(
+  o: { refresh?: boolean; distId?: number | null } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/stok${qs ? `?${qs}` : ""}`);
+};
+
+// -- WIETNAUER / V3 / Dashboard #2 — Satış Performansı -----------------------
+// Tipler `packages/core/src/wietnauer-satis.ts` ile aynaya yansıtılır. Snapshot
+// JSON üzerinden geldiği için Date alanı yok; tüm tarihler string.
+
+export type SatisDistRow = {
+  id: number;
+  ad: string;
+  region: string | null;
+  ciro: number;
+  musteriSayi: number;
+  faturaSayi: number;
+  ortSepet: number;
+  prevCiro: number;
+  deltaPct: number;
+  rank: number;
+};
+
+export type SatisRepRow = {
+  id: number;
+  ad: string;
+  distAd: string | null;
+  region: string | null;
+  ciro: number;
+  musteriSayi: number;
+  faturaSayi: number;
+  ortSepet: number;
+  prevCiro: number;
+  deltaPct: number;
+  rank: number;
+};
+
+export type DropSizeRow = {
+  id: number;
+  ad: string;
+  region: string | null;
+  ciro: number;
+  musteriSayi: number;
+  dropSize: number;
+  rank: number;
+};
+
+export type NewCustomerRow = {
+  distId: number;
+  distAd: string;
+  region: string | null;
+  yeniMusteriSayi: number;
+  yeniMusteriCiro: number;
+};
+
+export type AvgOrderTrendPoint = {
+  ay: string;
+  ayBaslangic: string;
+  ortSepet: number;
+  faturaSayi: number;
+  toplamCiro: number;
+};
+
+export type WietnauerSatisSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  distLeaderboard: SatisDistRow[];
+  repLeaderboard: SatisRepRow[];
+  dropSize: DropSizeRow[];
+  newCustomers: {
+    items: NewCustomerRow[];
+    totalYeniMusteri: number;
+    totalYeniCiro: number;
+  };
+  avgOrderTrend: AvgOrderTrendPoint[];
+};
+
+// -- WIETNAUER / V3 / Dashboard #8 — Stok Tükenme ---------------------------
+
+export type StockRiskTier = "critical" | "risk" | "watch" | "healthy" | "unknown";
+
+export type DemandPattern = "smooth" | "intermittent" | "erratic" | "lumpy" | "unknown";
+
+export type StockConfidence = "high" | "medium" | "low";
+
+export type LeadTimeSource = "dist-table" | "default";
+
+export type StockDataQuality =
+  | "ok"
+  | "no-demand"
+  | "no-stock-signal"
+  | "negative-stock"
+  | "turnover-unreliable";
+
+export type WietnauerStockSkuRow = {
+  skuId: number;
+  skuCode: string;
+  skuName: string;
+  brand: string | null;
+  category: string | null;
+  distId: number;
+  distName: string;
+  region: string | null;
+  onHandQty: number;
+  soldQty90d: number;
+  avgDailyQty: number;
+  soldQty180d: number;
+  demandDays180: number;
+  avgDemandInterval: number | null;
+  demandCv2: number | null;
+  demandPattern: DemandPattern;
+  crostonDailyQty: number;
+  trendFactor: number;
+  seasonalityFactor: number;
+  seasonalityReason: string | null;
+  forecastDailyQty: number;
+  daysLeft: number | null;
+  estimatedStockoutDate: string | null;
+  turnover90d: number | null;
+  stockStartQty: number;
+  stockEndQty: number;
+  avgStockQty: number;
+  openOrderQty: number;
+  inventoryPositionQty: number;
+  projectedDaysLeft: number | null;
+  projectedStockoutDate: string | null;
+  lastInboundDate: string | null;
+  lastInboundDays: number | null;
+  leadTimeDays: number;
+  leadTimeSource: LeadTimeSource;
+  safetyStockQty: number;
+  reorderPointQty: number;
+  reorderGapQty: number;
+  stockConfidence: StockConfidence;
+  stockConfidenceScore: number;
+  netSignalPct: number | null;
+  lowConfidence: boolean;
+  riskTier: StockRiskTier;
+  dataQuality: StockDataQuality;
+};
+
+export type WietnauerStockBrandSummary = {
+  brand: string;
+  skuCount: number;
+  criticalCount: number;
+  riskCount: number;
+  watchCount: number;
+  healthyCount: number;
+  unknownCount: number;
+  totalOnHandQty: number;
+  totalSoldQty90d: number;
+  avgDaysLeft: number | null;
+};
+
+export type WietnauerStockDistributorSummary = {
+  distId: number;
+  distName: string;
+  region: string | null;
+  skuCount: number;
+  criticalCount: number;
+  riskCount: number;
+  watchCount: number;
+  healthyCount: number;
+  unknownCount: number;
+  totalOnHandQty: number;
+  totalSoldQty90d: number;
+};
+
+export type WietnauerStockSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  windowDays: 90;
+  distFilter: {
+    distId: number;
+    distName: string;
+    region: string | null;
+  } | null;
+  distributors: WietnauerStockDistributorSummary[];
+  totals: {
+    activeSkuCount: number;
+    soldSkuCount90d: number;
+    positiveStockSkuCount: number;
+    criticalSkuCount: number;
+    riskSkuCount: number;
+    watchSkuCount: number;
+    healthySkuCount: number;
+    unknownSkuCount: number;
+    negativeStockSkuCount: number;
+    noDemandSkuCount: number;
+    turnoverComputableSkuCount: number;
+    lowConfidenceSkuCount: number;
+    lowConfidenceRatePct: number;
+    incomingOrderSkuCount: number;
+    totalIncomingQty: number;
+    leadTimeConfiguredSkuCount: number;
+  };
+  critical: WietnauerStockSkuRow[];
+  items: WietnauerStockSkuRow[];
+  brandSummary: WietnauerStockBrandSummary[];
+  quality: {
+    stockSignalSkuCount: number;
+    zeroStockSkuCount: number;
+    negativeStockSkuCount: number;
+    turnoverUnreliableSkuCount: number;
+    incomingOrderSkuCount: number;
+    leadTimeConfiguredSkuCount: number;
+    snapshotTablesEmpty: boolean;
+  };
+};
+
+// -- WIETNAUER / V3 / Dashboard #5 — Distribütör & Saha Operasyon -----------
+// Tipler `packages/core/src/wietnauer-saha.ts` ile aynaya yansıtılır.
+
+export type SahaVisitDailyRow = {
+  gun: string;
+  toplam: number;
+  rutIci: number;
+  rutDisi: number;
+};
+
+export type SahaCoverageSegment = {
+  segment: string;
+  ziyaretEdilen: number;
+  aktif: number;
+  kapsamaPct: number;
+};
+
+export type SahaRepRow = {
+  repId: number;
+  ad: string;
+  distributor: string | null;
+  ziyaret: number;
+  uniqueMusteri: number;
+  siparisliZiyaret: number;
+  donusumPct: number;
+  rutDisiPct: number;
+  rank: number;
+};
+
+export type SahaConversionRow = {
+  tip: "Rut İçi" | "Rut Dışı";
+  ziyaret: number;
+  siparisli: number;
+  faturali: number;
+  irsaliyeli: number;
+  donusumPct: number;
+};
+
+export type SahaDistributorRow = {
+  distKod: number;
+  distributor: string;
+  bolge: string | null;
+  aktifTemsilci: number;
+  ziyaret: number;
+  kapsananMusteri: number;
+  donusumPct: number;
+  rank: number;
+};
+
+export type SahaVisitKpi = {
+  son7gZiyaret: number;
+  son7gUniqueMusteri: number;
+  son7gAktifTemsilci: number;
+  son7gDonusumPct: number;
+};
+
+export type WietnauerSahaSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  visitDaily: SahaVisitDailyRow[];
+  kpi: SahaVisitKpi;
+  coverage: {
+    totalZiyaretEdilen: number;
+    totalAktif: number;
+    kapsamaPct: number;
+    segments: SahaCoverageSegment[];
+  };
+  reps: SahaRepRow[];
+  conversion: SahaConversionRow[];
+  distributors: SahaDistributorRow[];
+};
+
+export async function getWietnauerSaha(
+  options: { refresh?: boolean } = {},
+): Promise<WietnauerSahaSnapshot> {
+  const qs = options.refresh ? "?refresh=1" : "";
+  return request<WietnauerSahaSnapshot>(`/api/wietnauer/saha${qs}`);
 }

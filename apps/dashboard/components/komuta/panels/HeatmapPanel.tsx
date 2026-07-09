@@ -13,7 +13,7 @@ export function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
           <span className="icon">🔥</span> Bölge × Ürün Grubu · YoY Değişim Heatmap
           <InfoHint
             title="Heatmap YoY hesaplaması"
-            source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP × TBLDIST × TBLDISTEKGRUP"
             window="Son 30g vs -395..-365g (geçen yıl aynı pencere)"
             base="SUM(DBLNETFIYAT) her bölge × her grup hücresi"
             notes={[

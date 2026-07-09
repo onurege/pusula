@@ -17,9 +17,19 @@ import {
   analyzeRegionAnomaly,
   closePool,
   formatRetrievalForPrompt,
+  customerInScope,
   getCustomerSales,
   getKomutaSnapshot,
   getMapFacets,
+  getWietnauerYonetimSnapshot,
+  getWietnauerMarkaSnapshot,
+  getWietnauerAktivasyonSnapshot,
+  getWietnauerIskontoSnapshot,
+  getWietnauerSegmentSnapshot,
+  getWietnauerSahaSnapshot,
+  getWietnauerSatisSnapshot,
+  getWietnauerStokSnapshot,
+  getTenantConfig,
   getRadarDefinition,
   getReport,
   getSyncStatus,
@@ -39,6 +49,14 @@ import {
   syncMapData,
   cacheStats,
   cachedClear,
+  authenticateUser,
+  signSession,
+  verifySession,
+  resolveTenantScope,
+  listAllowedDistributors,
+  AUTH_COOKIE_NAME,
+  scopeSingleDistId,
+  type TenantScope,
 } from "@enroute/core";
 
 const app = new Hono();
@@ -47,6 +65,224 @@ app.use("/api/*", cors({ origin: ["http://localhost:3000", "http://127.0.0.1:300
 app.get("/api/health", (c) =>
   c.json({ ok: true, repoRoot: REPO_ROOT, db: process.env.MSSQL_DATABASE }),
 );
+
+// ---------------------------------------------------------------------------
+// Auth — kullanıcı girişi + dist-bazlı yetkilendirme
+//
+// Hono API = güvenlik otoritesi. Dashboard (Next) yalnızca cookie köprüsü:
+// login token'ını :3000 cookie'sine yazar ve sonraki her veri isteğinde
+// `Authorization: Bearer <token>` olarak buraya geri gönderir. Dist kullanıcı
+// doğrudan API'ye ham istek atsa bile scope JWT'den çözülür — filtre atlanamaz.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// GUV-06 — basit in-memory rate limiter (harici bağımlılık yok)
+//
+// Sabit pencereli sayaç: her IP+bucket için `count` ve `resetAt` (pencere
+// bitiş zamanı, epoch ms) tutulur. Pencere dolduğunda (`now >= resetAt`)
+// sayaç sıfırlanır. Tek process / tek instance için yeterli — burada Redis
+// gibi paylaşımlı bir store gerektirecek ölçek yok (dashboard iç kullanım
+// aracı, yatay ölçeklenen public API değil).
+//
+// Bellek büyümesi: `buckets` Map'i asla temizlenmiyormuş gibi görünse de her
+// giriş sabit boyutlu ({count,resetAt}) ve anahtar sayısı gerçek dünyada
+// benzersiz-IP sayısıyla sınırlı (saha personeli + birkaç merkez kullanıcısı
+// — binlerce değil). Yine de sınırsız büyümeyi önlemek için basit bir LRU-ish
+// temizlik: periyodik olarak süresi dolmuş kayıtları sil.
+// ---------------------------------------------------------------------------
+type RateBucket = { count: number; resetAt: number };
+const rateBuckets = new Map<string, RateBucket>();
+
+// Süresi dolmuş bucket'ları periyodik temizle — sınırsız Map büyümesini önler.
+setInterval(
+  () => {
+    const now = Date.now();
+    for (const [key, b] of rateBuckets) {
+      if (now >= b.resetAt) rateBuckets.delete(key);
+    }
+  },
+  5 * 60 * 1000,
+).unref();
+
+/** İstek IP'sini çıkar: x-forwarded-for → x-real-ip → "unknown" (yine de bucket'lanır, tek havuzda sınırlanır). */
+function clientIp(c: { req: { header: (k: string) => string | undefined } }): string {
+  const fwd = c.req.header("x-forwarded-for");
+  if (fwd) {
+    // "client, proxy1, proxy2" — ilk (en sol) gerçek istemci IP'si.
+    const first = fwd.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  const real = c.req.header("x-real-ip");
+  if (real) return real.trim();
+  return "unknown";
+}
+
+/** Bucket'ın şu an limiti aşıp aşmadığını kontrol eder — sayacı ARTIRMAZ (salt-okunur). */
+function isRateLimited(bucketPrefix: string, ip: string, maxRequests: number): boolean {
+  const key = `${bucketPrefix}:${ip}`;
+  const existing = rateBuckets.get(key);
+  if (!existing || Date.now() >= existing.resetAt) return false;
+  return existing.count >= maxRequests;
+}
+
+/** Bucket sayacını bir artırır (pencere dolmuşsa/yoksa yeniden başlatır). */
+function recordRateLimitHit(bucketPrefix: string, ip: string, windowMs: number): void {
+  const key = `${bucketPrefix}:${ip}`;
+  const now = Date.now();
+  const existing = rateBuckets.get(key);
+  if (!existing || now >= existing.resetAt) {
+    rateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return;
+  }
+  existing.count += 1;
+}
+
+/**
+ * Sabit pencereli rate-limit kontrolü: kontrol + artırım tek adımda.
+ * Aşıldıysa `false` döner (çağıran 429 üretir, sayaç artmaz); aksi halde
+ * sayaç artırılır ve `true` döner. Ağır uçlar (generate/explain/run-sql) gibi
+ * "her istekte say" senaryoları için; login'in "yalnızca başarısızda say"
+ * davranışı `isRateLimited` + `recordRateLimitHit` ikilisiyle ayrı kurulur.
+ */
+function checkRateLimit(
+  bucketPrefix: string,
+  ip: string,
+  maxRequests: number,
+  windowMs: number,
+): boolean {
+  if (isRateLimited(bucketPrefix, ip, maxRequests)) return false;
+  recordRateLimitHit(bucketPrefix, ip, windowMs);
+  return true;
+}
+
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const LOGIN_RATE_LIMIT = 10; // IP başına dakikada ~10 deneme
+const HEAVY_RATE_LIMIT = 20; // IP başına dakikada ~20 (generate/explain/run-sql)
+
+/** İstekten oturum token'ını çıkar: önce Authorization: Bearer, sonra cookie. */
+function tokenFromRequest(c: { req: { header: (k: string) => string | undefined } }): string | null {
+  const auth = c.req.header("authorization") ?? c.req.header("Authorization");
+  if (auth && /^Bearer\s+/i.test(auth)) return auth.replace(/^Bearer\s+/i, "").trim();
+  const cookie = c.req.header("cookie") ?? c.req.header("Cookie");
+  if (cookie) {
+    const m = cookie.match(new RegExp(`(?:^|;\\s*)${AUTH_COOKIE_NAME}=([^;]+)`));
+    if (m) return decodeURIComponent(m[1]!);
+  }
+  return null;
+}
+
+/**
+ * İstekten TenantScope çöz. Oturum yoksa Error("UNAUTHENTICATED") fırlatır —
+ * çağıran 401'e çevirir. `selectedDistKod` merkez kullanıcı için drill-down.
+ */
+async function scopeFromRequest(
+  c: { req: { header: (k: string) => string | undefined } },
+  selectedDistKod?: number | null,
+): Promise<TenantScope> {
+  const session = await verifySession(tokenFromRequest(c));
+  return resolveTenantScope(session, selectedDistKod ?? null);
+}
+
+// POST /api/auth/login — kimlik doğrula, JWT üret. Token body'de döner;
+// dashboard onu :3000 HttpOnly cookie'sine yazar.
+//
+// GUV-06: IP başına dakikada ~10 BAŞARISIZ deneme. Sayaç yalnızca kimlik
+// doğrulama başarısız olduğunda artar — meşru kullanıcı doğru şifreyle art
+// arda giriş yapsa (ör. çoklu sekme/cihaz) rate-limit'e takılmaz; brute-force
+// deneme dizisi ise 10 hatalı denemeden sonra 429'a düşer.
+app.post("/api/auth/login", async (c) => {
+  try {
+    const ip = clientIp(c);
+    if (isRateLimited("login", ip, LOGIN_RATE_LIMIT)) {
+      return c.json({ error: "Çok fazla başarısız deneme. Lütfen bir dakika sonra tekrar deneyin." }, 429);
+    }
+    const body = (await c.req.json()) as { username?: string; password?: string };
+    const username = (body.username ?? "").trim();
+    const password = body.password ?? "";
+    if (!username || !password) {
+      return c.json({ error: "Kullanıcı adı ve şifre gerekli" }, 400);
+    }
+    const user = await authenticateUser(username, password);
+    if (!user) {
+      recordRateLimitHit("login", ip, RATE_LIMIT_WINDOW_MS);
+      return c.json({ error: "Geçersiz kullanıcı adı veya şifre" }, 401);
+    }
+    const token = await signSession(user);
+    return c.json({
+      token,
+      user: {
+        userId: user.userId,
+        username: user.username,
+        displayName: user.displayName,
+        role: user.role,
+        allowedDistKods: user.allowedDistKods,
+      },
+    });
+  } catch (err) {
+    console.error("[/api/auth/login] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// GET /api/auth/me — token doğrula, kullanıcıyı döner.
+app.get("/api/auth/me", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum bulunamadı" }, 401);
+  return c.json({
+    user: {
+      userId: session.userId,
+      username: session.username,
+      displayName: session.displayName,
+      role: session.role,
+      allowedDistKods: session.allowedDistKods,
+    },
+  });
+});
+
+// GET /api/auth/distributors — kullanıcının izinli distribütörleri (dropdown).
+app.get("/api/auth/distributors", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum bulunamadı" }, 401);
+  try {
+    const distributors = await listAllowedDistributors(session);
+    return c.json({ distributors, role: session.role });
+  } catch (err) {
+    console.error("[/api/auth/distributors] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST /api/auth/logout — stateless JWT; dashboard cookie'yi siler. Burada
+// yalnızca 200 döner (simetri için).
+app.post("/api/auth/logout", (c) => c.json({ ok: true }));
+
+// ---------------------------------------------------------------------------
+// GLOBAL AUTH GUARD — GUV-03
+//
+// Bu middleware'den SONRA tanımlanan her `/api/*` route, geçerli bir oturum
+// zorunlu kılar (401 if none). PUBLIC_ROUTES allowlist'i login akışını ve
+// health check'i açık tutar; bunların dışındaki HER ŞEY (run-sql, retrieve,
+// reports*, radars*, map*, komuta*, wietnauer*, cache*) buradan geçer.
+//
+// Not: endpoint-içi `scopeFromRequest` çağrıları (401/403 + dist-scope
+// zorlaması) hâlâ yerinde duruyor — çift kontrol zararsız, guard yalnızca
+// dış katmanı kapatıyor. Guard'dan SONRA eklenen route'lar korumasız kalır;
+// yeni route eklerken bu satırın ALTINDA olduğundan emin ol.
+// ---------------------------------------------------------------------------
+const PUBLIC_ROUTES = new Set<string>([
+  "/api/health",
+  "/api/auth/login",
+  "/api/auth/me",
+  "/api/auth/logout",
+  "/api/auth/distributors",
+]);
+
+app.use("/api/*", async (c, next) => {
+  if (PUBLIC_ROUTES.has(c.req.path)) return next();
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  return next();
+});
 
 const RetrieveBody = z.object({
   query: z.string().min(1),
@@ -88,7 +324,28 @@ const RunSqlBody = z.object({
   timeoutMs: z.number().int().min(1000).max(120_000).default(30_000),
 });
 
+// GÜVENLİK: guard yukarıda zaten oturum zorunlu kılıyor (401 if none). Ek
+// olarak: (1) yalnızca merkez rolü serbest SQL çalıştırabilir — dist
+// kullanıcı için 403; (2) üretimde varsayılan KAPALI — açmak isteyen
+// ENABLE_RUN_SQL=1 vermeli.
+// GUV-06: IP başına dakikada ~20 istek — ağır uç (serbest SQL çalıştırır).
 app.post("/api/run-sql", async (c) => {
+  if (process.env.NODE_ENV === "production" && process.env.ENABLE_RUN_SQL !== "1") {
+    return c.json({ error: "not found" }, 404);
+  }
+  if (!checkRateLimit("heavy", clientIp(c), HEAVY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
+    return c.json({ error: "Çok fazla istek. Lütfen bir dakika sonra tekrar deneyin." }, 429);
+  }
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  if (scope.type !== "merkez") {
+    return c.json({ error: "Bu işlem yalnızca merkez kullanıcılara açık" }, 403);
+  }
   try {
     const body = RunSqlBody.parse(await c.req.json());
     const result = await runReadOnly(body.query, {
@@ -149,7 +406,11 @@ const GenerateReportBody = z.object({
   name: z.string().optional(),
 });
 
+// GUV-06: IP başına dakikada ~20 istek — ağır uç (Gemini agent loop + SQL).
 app.post("/api/reports/generate", async (c) => {
+  if (!checkRateLimit("heavy", clientIp(c), HEAVY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
+    return c.json({ error: "Çok fazla istek. Lütfen bir dakika sonra tekrar deneyin." }, 429);
+  }
   try {
     const body = GenerateReportBody.parse(await c.req.json());
 
@@ -247,7 +508,12 @@ app.post("/api/radars/:id/run", async (c) => {
 // Click-to-explain: a radar anomaly (or any chart cell) hands its self-contained
 // "explainPrompt" to the same agent loop that powers /reports/generate. The
 // agent retrieves schema, runs SQL, and returns a Turkish 2-3 sentence cause.
+//
+// GUV-06: IP başına dakikada ~20 istek — ağır uç (Gemini agent loop + SQL).
 app.post("/api/radars/:id/explain", async (c) => {
+  if (!checkRateLimit("heavy", clientIp(c), HEAVY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
+    return c.json({ error: "Çok fazla istek. Lütfen bir dakika sonra tekrar deneyin." }, 429);
+  }
   try {
     const body = (await c.req.json()) as { question?: string };
     const question = body.question?.trim();
@@ -305,7 +571,19 @@ function parseTier(raw: string | undefined): TierV2 | undefined {
     : undefined;
 }
 
+// Harita endpoint'leri — GÜVENLİK: her biri auth ister (401 if no session).
+// Dist kullanıcı yalnızca kendi izinli dist'lerinin müşteri/bölge verisini
+// görür; `allowedDistKods` scope'tan zorlanır (sunucu-otoriter), mevcut
+// query filtreleri (sehir/bolge/riskTier vb.) korunur ve bunlarla birlikte
+// AND'lenir.
 app.get("/api/map/customers", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const sehir = c.req.query("sehir") ?? undefined;
     const distKodRaw = c.req.query("distKod");
@@ -339,6 +617,7 @@ app.get("/api/map/customers", async (c) => {
       tier,
       minDaysSinceVisit,
       limit,
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
     });
     return c.json({ count: customers.length, customers });
   } catch (err) {
@@ -350,6 +629,13 @@ app.get("/api/map/customers", async (c) => {
 // Aynı filter parametreleri (sehir/distKod/sales/risk/minVisit) burada da
 // geçerli; region aggregation bunlardan etkilenir.
 app.get("/api/map/regions", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const sehir = c.req.query("sehir") ?? undefined;
     const distKodRaw = c.req.query("distKod");
@@ -374,6 +660,7 @@ app.get("/api/map/regions", async (c) => {
       riskTier,
       tier,
       minDaysSinceVisit,
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
     });
     return c.json({ count: regions.length, regions });
   } catch (err) {
@@ -385,16 +672,31 @@ app.get("/api/map/regions", async (c) => {
 // MSSQL'den taze hesaplar: son 30g vs geçen yıl aynı 30g (cache yok, ağır
 // değil — 81 il agregasyonu).
 app.get("/api/map/cities", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const region = c.req.query("region")?.trim() || undefined;
-    const cities = await listMapCityYoY(region);
+    const cities = await listMapCityYoY(region, scope.type === "merkez" ? null : scope.distKods);
     return c.json({ count: cities.length, cities });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
   }
 });
 
-app.get("/api/map/facets", (c) => {
+// Facets/sync — meta ve aksiyon uçları; dist-filtre gerektirmez (sync tüm
+// mirror'ı tazeler, merkez işi) ama yine de oturum zorunlu.
+app.get("/api/map/facets", async (c) => {
+  try {
+    await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     return c.json(getMapFacets(REPO_ROOT));
   } catch (err) {
@@ -402,7 +704,13 @@ app.get("/api/map/facets", (c) => {
   }
 });
 
-app.get("/api/map/sync-status", (c) => {
+app.get("/api/map/sync-status", async (c) => {
+  try {
+    await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     return c.json(getSyncStatus(REPO_ROOT));
   } catch (err) {
@@ -411,6 +719,12 @@ app.get("/api/map/sync-status", (c) => {
 });
 
 app.post("/api/map/sync", async (c) => {
+  try {
+    await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const status = await syncMapData(REPO_ROOT);
     return c.json(status);
@@ -431,10 +745,24 @@ app.post("/api/map/sync", async (c) => {
   }
 });
 
+// Tek-müşteri detay uçları — dist kullanıcı BAŞKA dist'in müşterisini
+// göremez. `customerInScope` SQLite mirror'daki dist_kod'a bakarak kontrol
+// eder; kapsam dışıysa 403 döner (mevcut olmayan id zaten 404'e düşer).
 app.get("/api/map/customers/:id/sales", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const id = parseInt(c.req.param("id"), 10);
     if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
+    const allowedDistKods = scope.type === "merkez" ? null : scope.distKods;
+    if (!customerInScope(REPO_ROOT, id, allowedDistKods)) {
+      return c.json({ error: "Bu müşteriye erişim yetkiniz yok" }, 403);
+    }
     const distKodRaw = c.req.query("distKod");
     const distKod = distKodRaw ? parseInt(distKodRaw, 10) : null;
     const daysRaw = c.req.query("days");
@@ -451,9 +779,20 @@ app.get("/api/map/customers/:id/sales", async (c) => {
 // cohort) stitched into a brief + 2-3 actions by a single Gemini call.
 // No agent loop — signals are the source of truth, LLM only phrases.
 app.post("/api/map/customers/:id/foresight", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const id = parseInt(c.req.param("id"), 10);
     if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
+    const allowedDistKods = scope.type === "merkez" ? null : scope.distKods;
+    if (!customerInScope(REPO_ROOT, id, allowedDistKods)) {
+      return c.json({ error: "Bu müşteriye erişim yetkiniz yok" }, 403);
+    }
     const body = (await c.req.json().catch(() => ({}))) as {
       label?: string;
       windowDays?: number;
@@ -474,7 +813,21 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
 
 // Komuta Köprüsü — CEO/Satış Direktörü ekranı için tek atışta tüm agregat.
 // Pahalı (8 paralel SQL + Gemini brief); cache'lenir, "Yenile" ile invalidate.
+//
+// GÜVENLİK: v3 dashboard'larla aynı desen — auth ister (401 if no session),
+// TenantScope snapshot fonksiyonuna geçirilir. Dist kullanıcı yalnızca kendi
+// dist(ler)inin bölge/leaderboard/heatmap verisini görür.
 app.get("/api/komuta", async (c) => {
+  let scope: TenantScope;
+  try {
+    const distIdRaw = c.req.query("distId");
+    const distIdParsed = distIdRaw != null && distIdRaw !== "" ? Number(distIdRaw) : null;
+    const requestedDistId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+    scope = await scopeFromRequest(c, requestedDistId);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const forceRefresh = c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
@@ -482,7 +835,14 @@ app.get("/api/komuta", async (c) => {
     // unit=9le → tüm value alanları 9-Liter-Equivalent volume bazında döner;
     // boş veya başka değer → TL (default).
     const unit = c.req.query("unit") === "9le" ? "9le" as const : "tl" as const;
-    const snap = await getKomutaSnapshot({ forceRefresh, reelTL, otvNet, unit });
+    const snap = await getKomutaSnapshot({
+      forceRefresh,
+      reelTL,
+      otvNet,
+      unit,
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      distId: scopeSingleDistId(scope),
+    });
     return c.json(snap);
   } catch (err) {
     console.error("[/api/komuta] failed:", err);
@@ -490,9 +850,141 @@ app.get("/api/komuta", async (c) => {
   }
 });
 
+// Wietnauer Yönetim Kurulu Dashboard (Faz A) — Top müşteri, marka katkısı,
+// iskonto KPI. Tenant'tan stratejik marka listesi alınıp marka panelinde
+// vurgulanır.
+app.get("/api/wietnauer/yonetim", async (c) => {
+  let scope: TenantScope;
+  try {
+    const distIdRaw = c.req.query("distId");
+    const distIdParsed = distIdRaw != null && distIdRaw !== "" ? Number(distIdRaw) : null;
+    const requestedDistId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+    scope = await scopeFromRequest(c, requestedDistId);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  try {
+    const forceRefresh = c.req.query("refresh") === "1";
+    const tenant = getTenantConfig();
+    const snap = await getWietnauerYonetimSnapshot({
+      forceRefresh,
+      strategicBrands: tenant.strategicBrands ?? [],
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      distId: scopeSingleDistId(scope),
+    });
+    return c.json(snap);
+  } catch (err) {
+    console.error("[/api/wietnauer/yonetim] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// V3 Dashboards #2-#7 — paralel agent'lar tarafından dolduruluyor.
+//
+// GÜVENLİK: her v3 endpoint auth ister (401 if no session) ve TenantScope'u
+// snapshot fonksiyonuna geçirir. `allowedDistKods`:
+//   - merkez → null (tüm distribütörler)
+//   - dist   → izinli dist kodları (yalnızca kendi verisi)
+// `distId` merkez drill-down / dist tek-dist seçimi. Snapshot fonksiyonları
+// bu iki alanı uygulayarak dist izolasyonunu sağlar.
+type V3SnapshotOpts = {
+  forceRefresh?: boolean;
+  strategicBrands?: string[];
+  allowedDistKods?: number[] | null;
+  distId?: number | null;
+};
+function makeV3Handler(
+  name: string,
+  fn: (o: V3SnapshotOpts) => Promise<unknown>,
+) {
+  return async (c: {
+    req: { query: (k: string) => string | undefined; header: (k: string) => string | undefined };
+    json: (...args: unknown[]) => Response;
+  }) => {
+    let scope: TenantScope;
+    try {
+      const distIdRaw = c.req.query("distId");
+      const parsed = distIdRaw != null && distIdRaw !== "" ? Number(distIdRaw) : null;
+      const requestedDistId = parsed != null && Number.isFinite(parsed) ? parsed : null;
+      scope = await scopeFromRequest(c, requestedDistId);
+    } catch (err) {
+      if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+      return c.json({ error: (err as Error).message }, 500);
+    }
+    try {
+      const forceRefresh = c.req.query("refresh") === "1";
+      const tenant = getTenantConfig();
+      const snap = await fn({
+        forceRefresh,
+        strategicBrands: tenant.strategicBrands ?? [],
+        allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+        distId: scopeSingleDistId(scope),
+      });
+      return c.json(snap);
+    } catch (err) {
+      console.error(`[/api/wietnauer/${name}] failed:`, err);
+      return c.json({ error: (err as Error).message }, 500);
+    }
+  };
+}
+// @ts-expect-error — Hono context tip uyumu; runtime'da çalışır.
+app.get("/api/wietnauer/marka", makeV3Handler("marka", getWietnauerMarkaSnapshot));
+// @ts-expect-error
+app.get("/api/wietnauer/aktivasyon", makeV3Handler("aktivasyon", getWietnauerAktivasyonSnapshot));
+// @ts-expect-error
+app.get("/api/wietnauer/iskonto", makeV3Handler("iskonto", getWietnauerIskontoSnapshot));
+// @ts-expect-error
+app.get("/api/wietnauer/segment", makeV3Handler("segment", getWietnauerSegmentSnapshot));
+// @ts-expect-error
+app.get("/api/wietnauer/saha", makeV3Handler("saha", getWietnauerSahaSnapshot));
+// @ts-expect-error
+app.get("/api/wietnauer/satis", makeV3Handler("satis", getWietnauerSatisSnapshot));
+// Stok endpoint'i distId query param'ı (merkez drill-down) + yetki kapsamı
+// destekler. Dist kullanıcı yalnızca kendi dist(ler)ini görür; başka distId
+// gönderse bile scope JWT'den zorlanır (sunucu-otoriter).
+app.get("/api/wietnauer/stok", async (c) => {
+  let scope: TenantScope;
+  try {
+    const distIdRaw = c.req.query("distId");
+    const distIdParsed = distIdRaw != null && distIdRaw !== "" ? Number(distIdRaw) : null;
+    const requestedDistId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+    scope = await scopeFromRequest(c, requestedDistId);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  try {
+    const forceRefresh = c.req.query("refresh") === "1";
+    const tenant = getTenantConfig();
+    const snap = await getWietnauerStokSnapshot({
+      forceRefresh,
+      strategicBrands: tenant.strategicBrands ?? [],
+      // merkez tam görünürlük → allowedDistKods null; dist → izinli liste.
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      // merkez drill-down / dist tek-dist seçimi → scope'tan tek dist.
+      distId: scopeSingleDistId(scope),
+    });
+    return c.json(snap);
+  } catch (err) {
+    console.error("[/api/wietnauer/stok] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // Finans Agentı — bölge YoY anomalisini decompose eden Gemini analizi.
 // `region` path segment: TBLDIST.TXTGRUP değeri (case-insensitive eşleştirilir).
+//
+// GÜVENLİK: auth ister (401 if no session). Dist kullanıcı bir bölgeyi
+// açtığında sadece KENDİ dist'inin o bölgedeki dilimini görür.
 app.get("/api/komuta/finance/:region", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
   try {
     const region = decodeURIComponent(c.req.param("region") ?? "").trim();
     if (!region) return c.json({ error: "region parametresi boş." }, 400);
@@ -504,6 +996,7 @@ app.get("/api/komuta/finance/:region", async (c) => {
     const analysis = await analyzeRegionAnomaly(region, {
       forceRefresh,
       productGroup,
+      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
     });
     return c.json(analysis);
   } catch (err) {
@@ -514,7 +1007,21 @@ app.get("/api/komuta/finance/:region", async (c) => {
 
 // Cache observability + manual wipe. GET → stats per domain; DELETE → clear.
 // Lets us wire a global "tüm cache'i temizle" affordance later if needed.
-app.get("/api/cache", (c) => {
+//
+// GÜVENLİK (LOW ek): guard yukarıda oturum zorunlu kılıyor ama rol kontrolü
+// yoktu — herhangi bir dist kullanıcı diğer tüm tenant'ların/dashboard'ların
+// cache'ini görebiliyor/silebiliyordu. Merkez-only'e indirgendi.
+app.get("/api/cache", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  if (scope.type !== "merkez") {
+    return c.json({ error: "Bu işlem yalnızca merkez kullanıcılara açık" }, 403);
+  }
   try {
     return c.json({ entries: cacheStats() });
   } catch (err) {
@@ -522,7 +1029,17 @@ app.get("/api/cache", (c) => {
   }
 });
 
-app.delete("/api/cache/:domain", (c) => {
+app.delete("/api/cache/:domain", async (c) => {
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  if (scope.type !== "merkez") {
+    return c.json({ error: "Bu işlem yalnızca merkez kullanıcılara açık" }, 403);
+  }
   try {
     const domain = c.req.param("domain");
     const cleared = cachedClear(domain);
@@ -533,8 +1050,11 @@ app.delete("/api/cache/:domain", (c) => {
 });
 
 const PORT = parseInt(process.env.API_PORT ?? "8080", 10);
-serve({ fetch: app.fetch, port: PORT });
-console.log(`[enroute-api] listening on http://localhost:${PORT}`);
+// Varsayılan yalnız-localhost bind — Next köprüsü (aynı makine) erişir, dış
+// ağ kapalı. Kasıtlı olarak dışa açmak isteyen API_HOST=0.0.0.0 verir.
+const HOST = process.env.API_HOST ?? "127.0.0.1";
+serve({ fetch: app.fetch, port: PORT, hostname: HOST });
+console.log(`[enroute-api] listening on http://${HOST}:${PORT}`);
 
 // ---------------------------------------------------------------------------
 // GECE CRON — saha dışında snapshot warm-up

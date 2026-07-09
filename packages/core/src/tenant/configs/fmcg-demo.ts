@@ -46,6 +46,11 @@ export const FMCG_DEMO_CONFIG: TenantConfig = {
   },
   currencySymbol: "₺",
 
+  // FMCG demo MSSQL'e bağlanmaz (synth data); ama tip uyumluluğu için
+  // varsayılan değerler. Pernod ile aynı katmanlama: marka = ek grup.
+  brandTable: "TBLURUNEKGRUP",
+  brandJoinColumn: "TXTURUNEKGRUPKOD",
+
   labels: {
     morningHeadline: "Bu Sabah Sahada Ne Oluyor",
     channelTypeTitle: "Müşteri Tipi · Son 12 Ay",
