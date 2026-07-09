@@ -1,18 +1,19 @@
 // PM2 process yöneticisi — Enroute Pusula (API + Dashboard).
-// Kullanım:  pm2 start ecosystem.config.cjs  →  pm2 save  →  pm2 startup
+// Kullanım:  pm2 start ecosystem.config.cjs  →  pm2 save
 //
-// Mimari (IIS reverse proxy ile):
-//   Browser (HTTPS) → IIS (443, TLS termination + ARR reverse proxy)
-//                       → Next dashboard (127.0.0.1:3000)
-//                           → (sunucu-taraflı) Hono API (127.0.0.1:8080)
-//                               → MSSQL (Univera, VPN)
-//   IIS YALNIZCA dashboard'a (3000) proxy yapar. API dış ağa AÇILMAZ
-//   (127.0.0.1 bind — GUV-03). Dashboard API'yi localhost'tan çağırır.
+// NOT (Windows): PM2'ye "npm" verilmez — Windows'ta npm.cmd'yi node'a JS
+// olarak geçirir ve patlar (Unexpected token ':'). Bu yüzden doğrudan node
+// entry'leri kullanılır:
+//   - API:       node <tsx/cli.mjs> apps/api/src/server.ts
+//   - Dashboard: node <next/bin/next> start   (önce: next build)
 //
-// ÖNKOŞUL:  cd apps/dashboard && npm run build   (next start için gerekli)
-// ÖNKOŞUL:  repo-kök .env'de → JWT_SECRET (32+ rastgele), UNIVERA_PW_KEY,
-//           W_MSSQL_* (VPN), TENANT. NODE_ENV=production iken bunlar yoksa
-//           API boot'ta fail-fast eder (GUV-01/02 — bilinçli).
+// Mimari (IIS reverse proxy):
+//   Browser (HTTPS) → IIS (443) → Next dashboard (127.0.0.1:3000)
+//                                   → Hono API (127.0.0.1:8080) → MSSQL
+//
+// ÖNKOŞUL:  cd apps/dashboard && npm run build
+// ÖNKOŞUL:  repo-kök .env → NODE_ENV=production, TENANT=wietnauer,
+//           JWT_SECRET, (UNIVERA_PW_KEY ya da ALLOW_DEMO_AUTH=1), W_MSSQL_*
 
 const path = require("node:path");
 const ROOT = __dirname;
@@ -21,32 +22,36 @@ module.exports = {
   apps: [
     {
       name: "enroute-api",
+      // tsx CLI'yi node ile çalıştır (npm shim'i yok) — Windows-güvenilir.
+      script: path.join(ROOT, "node_modules", "tsx", "dist", "cli.mjs"),
+      args: "apps/api/src/server.ts",
+      interpreter: "node",
       cwd: ROOT,
-      script: "npm",
-      args: "run api:start",              // tsx apps/api/src/server.ts
       env: {
-        NODE_ENV: "production",           // ← TÜM sertleştirmeyi bu aktive eder
+        NODE_ENV: "production",
         TENANT: "wietnauer",
         API_PORT: "8080",
-        API_HOST: "127.0.0.1",            // dış ağa kapalı (GUV-03)
-        MSSQL_READ_UNCOMMITTED: "1",      // canlı OLTP'yi bloke etme (VYK-04)
+        API_HOST: "127.0.0.1",
+        MSSQL_READ_UNCOMMITTED: "1",
         // JWT_SECRET / UNIVERA_PW_KEY / W_MSSQL_* → repo-kök .env'den yüklenir
-        // (server.ts açılışta dotenv ile okur). Buraya da yazılabilir.
       },
       max_memory_restart: "600M",
       autorestart: true,
-      time: true,                          // log satırlarına zaman damgası
-      kill_timeout: 8000,                  // SIGINT sonrası closePool için süre
+      time: true,
+      kill_timeout: 8000,
     },
     {
       name: "enroute-dashboard",
+      // Next binary'sini node ile çalıştır. cwd apps/dashboard (build + config
+      // orada), script kök node_modules'teki next (monorepo hoist).
+      script: path.join(ROOT, "node_modules", "next", "dist", "bin", "next"),
+      args: "start",
+      interpreter: "node",
       cwd: path.join(ROOT, "apps", "dashboard"),
-      script: "npm",
-      args: "run start",                  // next start  (önce: next build)
       env: {
-        NODE_ENV: "production",           // next start zaten set eder; açık tutuldu
+        NODE_ENV: "production",
         TENANT: "wietnauer",
-        ENROUTE_API_URL: "http://127.0.0.1:8080",  // API_PORT ile eşleşmeli
+        ENROUTE_API_URL: "http://127.0.0.1:8080",
         PORT: "3000",
       },
       max_memory_restart: "800M",
