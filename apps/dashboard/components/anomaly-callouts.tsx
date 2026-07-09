@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { AnomalyItem } from "@/lib/api";
-import { explainOnRadar } from "@/lib/api";
+import { explainOnRadar } from "@/lib/api-actions";
 import { formatCompact, formatPct } from "@/lib/format";
 
 type Tone = AnomalyItem["tone"];

@@ -17,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
-import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
+import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api-actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
