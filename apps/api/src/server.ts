@@ -2,12 +2,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
 
-// Always look for .env at the repo root, regardless of cwd. `dotenv/config`
-// resolves relative to cwd, which broke `npm run -w apps/api dev` (cwd became
-// apps/api) and `tsx watch` invocations from other directories.
+// .env yükleme — iki kaynaktan (dotenv override etmez; ilk bulan kazanır):
+//   1) REPO_ROOT/.env  → import.meta.url'den türetilir (dev + monorepo).
+//   2) process.cwd()/.env → PM2/Windows'ta tsx'in import.meta.url yolu
+//      beklenenden farklı çözülebildiği için sağlam fallback. PM2 cwd'yi
+//      repo köküne set eder; oradaki .env burada garanti yakalanır.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 loadDotenv({ path: path.join(REPO_ROOT, ".env") });
+loadDotenv({ path: path.join(process.cwd(), ".env") });
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
