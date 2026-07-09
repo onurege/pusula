@@ -1,5 +1,5 @@
 // PM2 process yöneticisi — Enroute Pusula (API + Dashboard).
-// Kullanım:  pm2 start ecosystem.config.js  →  pm2 save  →  pm2 startup
+// Kullanım:  pm2 start ecosystem.config.cjs  →  pm2 save  →  pm2 startup
 //
 // Mimari (IIS reverse proxy ile):
 //   Browser (HTTPS) → IIS (443, TLS termination + ARR reverse proxy)
