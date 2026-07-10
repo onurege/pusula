@@ -8,7 +8,7 @@
 //   - Dashboard: node <next/bin/next> start   (önce: next build)
 //
 // Mimari (IIS reverse proxy):
-//   Browser (HTTPS) → IIS (443) → Next dashboard (127.0.0.1:3000)
+//   Browser (HTTPS) → IIS (443) → Next dashboard (127.0.0.1:9090)
 //                                   → Hono API (127.0.0.1:8080) → MSSQL
 //
 // ÖNKOŞUL:  cd apps/dashboard && npm run build
@@ -52,7 +52,7 @@ module.exports = {
         NODE_ENV: "production",
         TENANT: "wietnauer",
         ENROUTE_API_URL: "http://127.0.0.1:8080",
-        PORT: "3000",
+        PORT: "9090",
       },
       max_memory_restart: "800M",
       autorestart: true,
