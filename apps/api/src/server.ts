@@ -60,7 +60,7 @@ import {
 } from "@enroute/core";
 
 const app = new Hono();
-app.use("/api/*", cors({ origin: ["http://localhost:9090", "http://127.0.0.1:9090"] }));
+app.use("/api/*", cors({ origin: ["http://localhost:3000", "http://127.0.0.1:3000"] }));
 
 app.get("/api/health", (c) =>
   c.json({ ok: true, repoRoot: REPO_ROOT, db: process.env.MSSQL_DATABASE }),

@@ -8,7 +8,7 @@
 //   - Dashboard: node <next/bin/next> start   (önce: next build)
 //
 // Mimari (IIS reverse proxy):
-//   Browser (HTTPS) → IIS (443) → Next dashboard (127.0.0.1:9090)
+//   Browser → IIS (9090) → Next dashboard (127.0.0.1:3000)
 //                                   → Hono API (127.0.0.1:8080) → MSSQL
 //
 // ÖNKOŞUL:  cd apps/dashboard && npm run build
@@ -52,7 +52,10 @@ module.exports = {
         NODE_ENV: "production",
         TENANT: "wietnauer",
         ENROUTE_API_URL: "http://127.0.0.1:8080",
-        PORT: "9090",
+        PORT: "3000",
+        // IIS 9090'ı HTTP (SSL yok) proxy'liyor → Secure cookie tarayıcıda
+        // saklanmaz, login döngüye girer. HTTPS ekleyince bunu kaldır.
+        COOKIE_INSECURE: "1",
       },
       max_memory_restart: "800M",
       autorestart: true,

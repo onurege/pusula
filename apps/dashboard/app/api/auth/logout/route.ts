@@ -2,7 +2,8 @@
 const AUTH_COOKIE = "enroute_auth";
 
 export async function POST() {
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  const forceInsecure = process.env.COOKIE_INSECURE === "1";
+  const secure = process.env.NODE_ENV === "production" && !forceInsecure ? "; Secure" : "";
 
   const response = Response.json({ ok: true });
   response.headers.set(

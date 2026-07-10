@@ -30,7 +30,10 @@ export async function POST(request: Request) {
     return Response.json({ error: data.error ?? "Giriş başarısız" }, { status: res.status || 401 });
   }
 
-  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  // HTTPS yoksa (HTTP-only IIS proxy, ör. :9090) Secure cookie tarayıcıda
+  // saklanmaz → login döngüye girer. COOKIE_INSECURE=1 ile Secure'ı kapat.
+  const forceInsecure = process.env.COOKIE_INSECURE === "1";
+  const secure = process.env.NODE_ENV === "production" && !forceInsecure ? "; Secure" : "";
 
   const response = Response.json({ user: data.user });
   response.headers.set(
