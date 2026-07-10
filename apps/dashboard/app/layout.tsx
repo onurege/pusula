@@ -40,11 +40,18 @@ const THEME_BOOTSTRAP_SCRIPT = `
 })();
 `;
 
+// Light-only tenant (ör. Wietnauer): localStorage/OS tercihini yok say, her
+// zaman "light" uygula. Tema butonu navbar'da zaten gizli.
+const THEME_FORCE_LIGHT_SCRIPT = `document.documentElement.setAttribute('data-theme','light');`;
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   // Server tarafı tenant config'ini layout'ta okuyup TenantProvider'a geçir.
   // RSC sınırından plain object olarak geçer; client component'ler `useTenant()`
   // ile bu değeri çeker. Her request'te yeniden okunur (process.env stable).
   const tenant = getTenantConfig();
+  const themeBootstrap = tenant.ui?.forceLightTheme
+    ? THEME_FORCE_LIGHT_SCRIPT
+    : THEME_BOOTSTRAP_SCRIPT;
   return (
     <html lang="tr" className={inter.variable} suppressHydrationWarning>
       <head>
@@ -52,7 +59,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             ilk paint öncesi çalışır, FOUC olmaz. React tree'nin dışında
             (hydration ile alakasız). */}
         <script
-          dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP_SCRIPT }}
+          dangerouslySetInnerHTML={{ __html: themeBootstrap }}
         />
       </head>
       <body suppressHydrationWarning>

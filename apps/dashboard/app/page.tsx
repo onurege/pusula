@@ -1,6 +1,8 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { Activity, AlertCircle, ArrowRight, FilePlus2, FileText } from "lucide-react";
 import { listRadars } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { Card } from "@/components/ui/card";
 
 // `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
@@ -16,6 +18,13 @@ const RADAR_GRADIENTS: Record<string, string> = {
 };
 
 export default async function HomePage() {
+  // Tenant varsayılan iniş yolu ayarlıysa (ör. Wietnauer → /v3), kök `/`
+  // oraya yönlendirilir. Tanımsız tenant'lar (Pernod) V1 ana ekranını görür.
+  const { ui } = getTenantConfig();
+  if (ui?.defaultLanding && ui.defaultLanding !== "/") {
+    redirect(ui.defaultLanding);
+  }
+
   let radars: Awaited<ReturnType<typeof listRadars>> = [];
   let apiError: string | null = null;
   try {

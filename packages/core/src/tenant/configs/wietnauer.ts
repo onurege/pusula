@@ -22,6 +22,14 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   logoMark: "WT",
   productName: "Enroute Pusula",
 
+  // Wietnauer sadece V3 dashboard yapısını kullanır: login/kök V3'e iner,
+  // V1/V2 sürüm geçişi gizli, arayüz light-only.
+  ui: {
+    defaultLanding: "/v3",
+    hideVersionToggle: true,
+    forceLightTheme: true,
+  },
+
   sqliteFileName: "wietnauer.sqlite",
 
   // MSSQL credentials — `.env`'de W_MSSQL_SERVER, W_MSSQL_DATABASE,

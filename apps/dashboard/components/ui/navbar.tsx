@@ -109,7 +109,7 @@ export function Navbar() {
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2.5 group">
+        <Link href={tenant.ui?.defaultLanding ?? "/"} className="flex items-center gap-2.5 group">
           <div className="size-7 rounded-lg bg-accent text-accent-fg font-bold flex items-center justify-center text-sm shadow-sm group-hover:shadow-md transition-shadow">
             {tenant.logoMark}
           </div>
@@ -146,8 +146,8 @@ export function Navbar() {
           </nav>
           <div className="ml-1 pl-1 border-l border-border h-7" />
           <GlobalRefreshButton />
-          <VersionToggle current={version} />
-          <ThemeToggle />
+          {!tenant.ui?.hideVersionToggle && <VersionToggle current={version} />}
+          {!tenant.ui?.forceLightTheme && <ThemeToggle />}
           <UserChip />
         </div>
       </div>

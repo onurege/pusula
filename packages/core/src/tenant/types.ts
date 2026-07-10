@@ -126,4 +126,23 @@ export type TenantConfig = {
    * panelleri bu liste üzerinden render edilir.
    */
   strategicBrands?: string[];
+
+  // -- UI davranışı (tenant-özel arayüz kısıtları) ----------------------------
+
+  /**
+   * Arayüz davranış flag'leri. Tanımsız bırakılırsa tüm sürümler/tema açık
+   * (varsayılan çok-kiracılı davranış — Pernod böyle kalır). Tek-sürüm ürünler
+   * (ör. Wietnauer sadece V3) için burada kısıtlanır.
+   */
+  ui?: {
+    /**
+     * Login sonrası ve kök `/` için varsayılan iniş yolu (ör. "/v3").
+     * Tanımsızsa `/` mevcut V1 ana ekranını gösterir.
+     */
+    defaultLanding?: string;
+    /** V1/V2/V3 sürüm geçiş butonunu gizle — kullanıcı tek sürümde kalır. */
+    hideVersionToggle?: boolean;
+    /** Dark mode'u kapat: tema "light"e sabitlenir, tema butonu gizlenir. */
+    forceLightTheme?: boolean;
+  };
 };
