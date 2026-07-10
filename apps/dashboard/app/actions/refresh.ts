@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidateTag } from "next/cache";
+import { cookies } from "next/headers";
 import { triggerMapSync } from "@/lib/api";
 
 const API_URL = process.env.ENROUTE_API_URL ?? "http://localhost:8080";
@@ -41,11 +42,15 @@ export async function refreshAllData(): Promise<
     //    Bu Gemini brief'i de yeniden üretir; sonuç SQLite withCache'e yazılır.
     //    fetch burada no-store: Next.js Data Cache'e girmesin (zaten next adımda
     //    invalidate edilecek; ayrıca refresh=1 path'i lib/api.ts'te de no-store).
-    await fetch(`${API_URL}/api/komuta?refresh=1`, { cache: "no-store" }).catch(
-      () => {
-        /* network sorunu olsa bile mirror sync zaten yapılmış olur */
-      },
-    );
+    // Auth cookie'sini Bearer olarak ilet — komuta dist scope kullanıcıya göre
+    // hesaplansın (token'sız istek guard'a/yanlış scope'a düşer).
+    const token = (await cookies()).get("enroute_auth")?.value;
+    await fetch(`${API_URL}/api/komuta?refresh=1`, {
+      cache: "no-store",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    }).catch(() => {
+      /* network sorunu olsa bile mirror sync zaten yapılmış olur */
+    });
 
     // 3. Next.js Data Cache invalidate — bir sonraki page render'da fetch'ler
     //    Hono'ya gidip yeni SQLite snapshot'ını alacak. Coarse-grained tag'lar
