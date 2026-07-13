@@ -9,24 +9,8 @@ const AUTH_COOKIE = "enroute_auth";
  *
  * Muaf yollar: /login, /api/auth/*, Next statikleri.
  */
-// Girişsiz açık demo (fmcg-demo): NEXT_PUBLIC_OPEN_ACCESS build zamanında set
-// edilir → middleware'e inline gömülür (edge runtime process.env okuyamayabilir).
-// Bu modda login zorunluluğu tamamen kapalı; /login açılırsa ana ekrana atılır.
-const OPEN_ACCESS = process.env.NEXT_PUBLIC_OPEN_ACCESS === "1";
-
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
-
-  // Açık demo: hiçbir yönlendirme yapma; /login'i ana ekrana çevir.
-  if (OPEN_ACCESS) {
-    if (pathname === "/login") {
-      const url = req.nextUrl.clone();
-      url.pathname = "/";
-      url.search = "";
-      return NextResponse.redirect(url);
-    }
-    return NextResponse.next();
-  }
 
   const isPublic =
     pathname === "/login" ||
@@ -44,10 +28,11 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Zaten girişliyse /login'i dashboard'a çevir.
+  // Zaten girişliyse /login'i kök'e çevir; kök tenant defaultLanding'ine
+  // (varsa) yönlendirir (app/page.tsx). Böylece tenant'a göre doğru iner.
   if (hasSession && pathname === "/login") {
     const url = req.nextUrl.clone();
-    url.pathname = "/v3";
+    url.pathname = "/";
     url.search = "";
     return NextResponse.redirect(url);
   }

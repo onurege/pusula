@@ -101,10 +101,15 @@ export function Navbar() {
   // Hangi sürümdeyiz? V3 > V2 > V1 öncelik sırası.
   const isV3 = pathname === "/v3" || pathname.startsWith("/v3/");
   const isV2 = !isV3 && (pathname === "/v2" || pathname.startsWith("/v2/"));
-  const items = isV3 ? itemsV3 : isV2 ? itemsV2 : itemsV1;
   const version = isV3 ? "v3" : isV2 ? "v2" : "v1";
-  // Tenant config — logo marka harfleri + ürün adı tenant-özel.
+  // Tenant config — logo/ürün adı + demo nav kısıtları tenant-özel.
   const tenant = useTenant();
+  // Tenant'ın gizlediği nav href'lerini çıkar (ör. demo: /reports, /schema).
+  const hiddenHrefs = tenant.ui?.hiddenNavHrefs ?? [];
+  const baseItems = isV3 ? itemsV3 : isV2 ? itemsV2 : itemsV1;
+  const items = hiddenHrefs.length
+    ? baseItems.filter((i) => !hiddenHrefs.includes(i.href))
+    : baseItems;
   if (isLogin) return null;
   return (
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">

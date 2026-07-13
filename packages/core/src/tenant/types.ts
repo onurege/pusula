@@ -144,16 +144,19 @@ export type TenantConfig = {
     hideVersionToggle?: boolean;
     /** Dark mode'u kapat: tema "light"e sabitlenir, tema butonu gizlenir. */
     forceLightTheme?: boolean;
+    /** Navbar'dan gizlenecek nav href'leri (ör. demo'da /reports, /schema). */
+    hiddenNavHrefs?: string[];
   };
 
   /**
-   * Açık-erişim (girişsiz) demo tenant'ı. `true` ise API auth guard'ı bu
-   * tenant için bypass edilir ve tüm istekler tam merkez scope alır.
+   * Sentetik/demo verili tenant (MSSQL'e bağlanmaz). `true` ise:
+   *   - Kimlik doğrulama MSSQL yerine statik demo kullanıcısıyla yapılır
+   *     (env DEMO_LOGIN_USER/DEMO_LOGIN_PASSWORD).
+   *   - Komuta night-refresh + force-refresh devre dışı (MSSQL yok, veri
+   *     pre-baked cache'te; refresh boş snapshot üretip seed'i ezerdi).
    *
-   * GÜVENLİK: Yalnızca sentetik/demo verili tenant'larda `true` olmalı. Gerçek
-   * müşteri verili tenant'lar (Pernod, Wietnauer) bu flag'i ASLA almaz — bu
-   * sayede `PUBLIC_DEMO` env'i yanlışlıkla set edilse bile gerçek veri açığa
-   * çıkmaz (bypass tenant config'ine bağlı, env'e değil).
+   * Yalnızca sentetik verili tenant'ta `true`. Gerçek verili tenant'lar
+   * (Pernod, Wietnauer) bu flag'i almaz → normal MSSQL auth + refresh.
    */
-  demoOpenAccess?: boolean;
+  demoData?: boolean;
 };

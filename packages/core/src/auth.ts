@@ -20,6 +20,7 @@
 import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { runReadOnly } from "./db.js";
+import { getTenantConfig } from "./tenant/index.js";
 
 const DEV_JWT_SECRET_FALLBACK = "enroute-pusula-secret-change-in-production";
 const MIN_JWT_SECRET_LENGTH = 16;
@@ -200,6 +201,28 @@ export async function authenticateUser(
   username: string,
   password: string,
 ): Promise<UserSession | null> {
+  // Demo tenant (MSSQL yok): yalnızca statik demo kullanıcısıyla doğrula,
+  // MSSQL'e HİÇ gidilmez. Kimlik env'den (DEMO_LOGIN_USER/PASSWORD).
+  if (getTenantConfig().demoData) {
+    const demoUser = process.env.DEMO_LOGIN_USER?.trim();
+    const demoPass = process.env.DEMO_LOGIN_PASSWORD;
+    if (
+      demoUser &&
+      demoPass &&
+      username.trim() === demoUser &&
+      password === demoPass
+    ) {
+      return {
+        userId: 0,
+        username: demoUser,
+        displayName: "Demo Kullanıcı",
+        role: "merkez",
+        allowedDistKods: [],
+      };
+    }
+    return null;
+  }
+
   const uname = escapeSqlLiteral(username.trim());
   if (!uname) return null;
 

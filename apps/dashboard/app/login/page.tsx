@@ -34,7 +34,8 @@ function LoginForm() {
       setLoading(false);
     } else {
       const next = searchParams?.get("next");
-      router.push(next && next.startsWith("/") ? next : "/v3");
+      const fallback = tenant.ui?.defaultLanding ?? "/";
+      router.push(next && next.startsWith("/") ? next : fallback);
       router.refresh();
     }
   }

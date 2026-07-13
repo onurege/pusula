@@ -175,23 +175,16 @@ function tokenFromRequest(c: { req: { header: (k: string) => string | undefined 
  * İstekten TenantScope çöz. Oturum yoksa Error("UNAUTHENTICATED") fırlatır —
  * çağıran 401'e çevirir. `selectedDistKod` merkez kullanıcı için drill-down.
  */
-// Açık-erişim demo tenant'ı mı? Yalnızca `demoOpenAccess=true` config'inde
-// (fmcg-demo). Bu flag'e bağlı olduğu için gerçek verili tenant asla açılmaz.
-const OPEN_ACCESS = getTenantConfig().demoOpenAccess === true;
+// Sentetik demo tenant'ı mı (MSSQL yok)? Yalnızca `demoData=true` config'inde
+// (fmcg-demo). Login normal işler (statik demo kullanıcısı auth.ts'te); bu flag
+// sadece komuta refresh yollarını kapatmak için (aşağıda).
+const DEMO_DATA = getTenantConfig().demoData === true;
 
 async function scopeFromRequest(
   c: { req: { header: (k: string) => string | undefined } },
   selectedDistKod?: number | null,
 ): Promise<TenantScope> {
   const session = await verifySession(tokenFromRequest(c));
-  // Girişsiz demo: oturum yoksa tam merkez scope (tüm sentetik veri görünür).
-  // selectedDistKod verilirse merkez drill-down (tek dist), yoksa filtresiz.
-  if (!session && OPEN_ACCESS) {
-    return {
-      type: "merkez",
-      distKods: selectedDistKod != null ? [selectedDistKod] : null,
-    };
-  }
   return resolveTenantScope(session, selectedDistKod ?? null);
 }
 
@@ -291,8 +284,6 @@ const PUBLIC_ROUTES = new Set<string>([
 
 app.use("/api/*", async (c, next) => {
   if (PUBLIC_ROUTES.has(c.req.path)) return next();
-  // Girişsiz demo tenant'ı: oturum zorunluluğu yok (scope tarafında merkez).
-  if (OPEN_ACCESS) return next();
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
   return next();
@@ -843,9 +834,9 @@ app.get("/api/komuta", async (c) => {
     return c.json({ error: (err as Error).message }, 500);
   }
   try {
-    // Demo (open-access, MSSQL yok): force-refresh boş snapshot üretip pre-baked
-    // seed'i ezer. Demo'da refresh yok sayılır → hep cache'ten servis edilir.
-    const forceRefresh = !OPEN_ACCESS && c.req.query("refresh") === "1";
+    // Demo (MSSQL yok): force-refresh boş snapshot üretip pre-baked seed'i ezer.
+    // Demo'da refresh yok sayılır → hep cache'ten servis edilir.
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
     const otvNet = c.req.query("otv") === "1";
     // unit=9le → tüm value alanları 9-Liter-Equivalent volume bazında döner;
@@ -1122,10 +1113,10 @@ async function nightRefresh() {
 }
 
 // İlk tetikleme — bir sonraki 03:00'e kadar bekle.
-// Demo (open-access): MSSQL yok → nightRefresh boş snapshot üretip pre-baked
-// seed cache'ini ezer. Bu yüzden demo'da night-refresh HİÇ planlanmaz.
-if (OPEN_ACCESS) {
-  console.log("[night-refresh] demo (open-access) tenant — devre dışı (veri pre-baked)");
+// Demo (MSSQL yok) → nightRefresh boş snapshot üretip pre-baked seed cache'ini
+// ezer. Bu yüzden demo'da night-refresh HİÇ planlanmaz.
+if (DEMO_DATA) {
+  console.log("[night-refresh] demo tenant — devre dışı (veri pre-baked)");
 } else {
   const initialDelay = msUntilNextNightRefresh();
   const hoursUntil = (initialDelay / 1000 / 60 / 60).toFixed(1);

@@ -4,15 +4,14 @@
 // Bu config AYRI bir demo sunucusu içindir:
 //   - Tenant: fmcg-demo (sentetik veri, data/fmcg-demo.sqlite — repo'da commit'li)
 //   - MSSQL YOK: demo canlı DB'ye bağlanmaz
-//   - GİRİŞSİZ AÇIK: demoOpenAccess=true → API auth guard bypass, tam merkez scope
+//   - LOGIN: statik demo kullanıcısı (DEMO_LOGIN_USER/PASSWORD, MSSQL yok)
 //
 // ÖNKOŞUL (yeni sunucuda):
 //   1. Node 22 LTS
 //   2. repo klonu + `npm install` (fmcg-demo.sqlite klonla birlikte gelir)
 //   3. Dashboard build'i MUTLAKA açık-erişim flag'i ile:
 //        cd apps/dashboard
-//        $env:TENANT="fmcg-demo"; $env:NEXT_PUBLIC_OPEN_ACCESS="1"; npm run build
-//      (NEXT_PUBLIC_* build zamanında gömülür — runtime'da set etmek yetmez.)
+//        $env:TENANT="fmcg-demo"; npm run build
 //   4. repo-kök .env → NODE_ENV=production, JWT_SECRET (dummy 16+ char, açık
 //      erişimde kullanılmaz ama modül init'i için gerekli), ALLOW_DEMO_AUTH=1
 //
@@ -38,7 +37,10 @@ module.exports = {
         API_PORT: "3200",
         API_HOST: "127.0.0.1",
         ALLOW_DEMO_AUTH: "1", // MSSQL/UNIVERA_PW_KEY yok — modül init'i geçsin
-        // JWT_SECRET → repo-kök .env'den (açık erişimde kullanılmaz, init için)
+        // Statik demo login (MSSQL yok) — auth.ts bunları demoData tenant'ında okur.
+        DEMO_LOGIN_USER: "pusula@univera.com.tr",
+        DEMO_LOGIN_PASSWORD: "pusula123",
+        // JWT_SECRET → repo-kök .env'den (login token imzası)
       },
       max_memory_restart: "600M",
       autorestart: true,
@@ -56,8 +58,7 @@ module.exports = {
         TENANT: "fmcg-demo",
         ENROUTE_API_URL: "http://127.0.0.1:3200", // demo API iç portu
         PORT: "3100", // dışa açılan dashboard portu (3000 mevcut uygulamada)
-        NEXT_PUBLIC_OPEN_ACCESS: "1", // runtime fallback (asıl gömme build'de)
-        COOKIE_INSECURE: "1", // HTTP-only (login yok ama tutarlılık)
+        COOKIE_INSECURE: "1", // HTTP-only → Secure cookie olmadan login tutar
       },
       max_memory_restart: "800M",
       autorestart: true,
