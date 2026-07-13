@@ -918,9 +918,11 @@ function main() {
   console.log("[seed-fmcg-demo] Komuta snapshot oluşturuluyor...");
   const snap = generateKomutaSnapshot(customers);
 
-  // Cache key formatı `getKomutaSnapshot` ile birebir — CACHE_VERSION+reel+otv+unit
-  // v5 + nominal + gross + tl → default Komuta görünümü
-  cachedWrite("komuta", "v5-nominal-gross-tl", snap, 850);
+  // Cache key formatı `getKomutaSnapshot` ile BİREBİR olmalı:
+  //   CACHE_VERSION-reel|nominal-otv|gross-unit-scopeKey
+  // Merkez/açık-erişim (distKods=null) → scopeKey="all". CACHE_VERSION komuta.ts'te
+  // bump edilirse (şu an v7) BURASI da güncellenmeli, yoksa demo cache miss'e düşer.
+  cachedWrite("komuta", "v7-nominal-gross-tl-all", snap, 850);
 
   // Risk dağılımı özet log
   const tierCounts = customers.reduce<Record<string, number>>((a, c) => {
