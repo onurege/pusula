@@ -843,7 +843,9 @@ app.get("/api/komuta", async (c) => {
     return c.json({ error: (err as Error).message }, 500);
   }
   try {
-    const forceRefresh = c.req.query("refresh") === "1";
+    // Demo (open-access, MSSQL yok): force-refresh boş snapshot üretip pre-baked
+    // seed'i ezer. Demo'da refresh yok sayılır → hep cache'ten servis edilir.
+    const forceRefresh = !OPEN_ACCESS && c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
     const otvNet = c.req.query("otv") === "1";
     // unit=9le → tüm value alanları 9-Liter-Equivalent volume bazında döner;
@@ -1119,13 +1121,19 @@ async function nightRefresh() {
   setTimeout(nightRefresh, 24 * 60 * 60 * 1000);
 }
 
-// İlk tetikleme — bir sonraki 03:00'e kadar bekle
-const initialDelay = msUntilNextNightRefresh();
-const hoursUntil = (initialDelay / 1000 / 60 / 60).toFixed(1);
-console.log(
-  `[night-refresh] sonraki refresh ${hoursUntil}h içinde (${NIGHT_REFRESH_HOUR}:00)`,
-);
-setTimeout(nightRefresh, initialDelay);
+// İlk tetikleme — bir sonraki 03:00'e kadar bekle.
+// Demo (open-access): MSSQL yok → nightRefresh boş snapshot üretip pre-baked
+// seed cache'ini ezer. Bu yüzden demo'da night-refresh HİÇ planlanmaz.
+if (OPEN_ACCESS) {
+  console.log("[night-refresh] demo (open-access) tenant — devre dışı (veri pre-baked)");
+} else {
+  const initialDelay = msUntilNextNightRefresh();
+  const hoursUntil = (initialDelay / 1000 / 60 / 60).toFixed(1);
+  console.log(
+    `[night-refresh] sonraki refresh ${hoursUntil}h içinde (${NIGHT_REFRESH_HOUR}:00)`,
+  );
+  setTimeout(nightRefresh, initialDelay);
+}
 
 process.on("SIGINT", async () => {
   await closePool().catch(() => {});
