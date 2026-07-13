@@ -85,7 +85,16 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       attributionControl: false,
+      // Harita sabit: sayfa scroll'u haritaya takılmasın, harita kaymasın.
+      // interactive:true kalır → il polygon click (map'e drill-down) çalışır;
+      // yalnızca pan/zoom kapatılır.
       interactive: true,
+      scrollZoom: false,
+      dragPan: false,
+      doubleClickZoom: false,
+      touchZoomRotate: false,
+      boxZoom: false,
+      keyboard: false,
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,

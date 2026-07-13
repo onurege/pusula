@@ -535,6 +535,21 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
     Kıbrıs: "#84cc16",
   };
 
+  // Demo: bölge YoY'unu renk buketlerine YAY — gerçek data-birth artefaktında
+  // hepsi negatif çıkıp harita tek renk (kırmızı) oluyordu. Sunum için canlı,
+  // karışık bir tablo daha çarpıcı. deltaColor buketleri:
+  //   +15+ yeşil · +5..15 açık yeşil · ±5 gri · -5..-15 turuncu · -15- kırmızı
+  const REGION_YOY: Record<string, number> = {
+    Marmara: 23.4,
+    Akdeniz: 16.8,
+    Kıbrıs: 12.0,
+    Ege: 9.1,
+    Karadeniz: 6.3,
+    "İç Anadolu": -2.7,
+    "Güneydoğu Anadolu": -11.5,
+    "Doğu Anadolu": -19.2,
+  };
+
   const byRegion = new Map<string, Customer[]>();
   for (const c of customers) {
     const arr = byRegion.get(c.bolge) ?? [];
@@ -569,11 +584,15 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
             cityPrev > 0 ? ((cityCiro - cityPrev) / cityPrev) * 100 : null,
         };
       });
+      // Bölge YoY'unu renk-dağıtımlı hedefe çek; ciroPrev'i tutarlı geri-hesapla.
+      const targetYoy = REGION_YOY[bolge] ?? delta;
+      const ciroPrevAdj =
+        targetYoy != null ? Math.round(ciro / (1 + targetYoy / 100)) : ciroPrev;
       return {
         bolge,
         ciro,
-        ciroPrev,
-        deltaPct: delta,
+        ciroPrev: ciroPrevAdj,
+        deltaPct: targetYoy,
         color: REGION_COLORS[bolge] ?? "#78716c",
         sehirler: Array.from(byCity.keys()),
         cities,
