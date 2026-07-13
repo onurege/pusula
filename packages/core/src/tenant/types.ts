@@ -145,4 +145,15 @@ export type TenantConfig = {
     /** Dark mode'u kapat: tema "light"e sabitlenir, tema butonu gizlenir. */
     forceLightTheme?: boolean;
   };
+
+  /**
+   * Açık-erişim (girişsiz) demo tenant'ı. `true` ise API auth guard'ı bu
+   * tenant için bypass edilir ve tüm istekler tam merkez scope alır.
+   *
+   * GÜVENLİK: Yalnızca sentetik/demo verili tenant'larda `true` olmalı. Gerçek
+   * müşteri verili tenant'lar (Pernod, Wietnauer) bu flag'i ASLA almaz — bu
+   * sayede `PUBLIC_DEMO` env'i yanlışlıkla set edilse bile gerçek veri açığa
+   * çıkmaz (bypass tenant config'ine bağlı, env'e değil).
+   */
+  demoOpenAccess?: boolean;
 };

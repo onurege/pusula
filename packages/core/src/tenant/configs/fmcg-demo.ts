@@ -27,6 +27,10 @@ export const FMCG_DEMO_CONFIG: TenantConfig = {
   logoMark: "FM",
   productName: "Enroute Pusula",
 
+  // Girişsiz açık demo — sentetik veri olduğu için auth guard bypass edilebilir.
+  // Bu flag SADECE demo/synth tenant'larda; gerçek verili tenant asla almaz.
+  demoOpenAccess: true,
+
   // Demo data ayrı dosyaya yazılır — Pernod canlı verisi etkilenmez.
   sqliteFileName: "fmcg-demo.sqlite",
 

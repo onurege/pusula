@@ -175,11 +175,23 @@ function tokenFromRequest(c: { req: { header: (k: string) => string | undefined 
  * İstekten TenantScope çöz. Oturum yoksa Error("UNAUTHENTICATED") fırlatır —
  * çağıran 401'e çevirir. `selectedDistKod` merkez kullanıcı için drill-down.
  */
+// Açık-erişim demo tenant'ı mı? Yalnızca `demoOpenAccess=true` config'inde
+// (fmcg-demo). Bu flag'e bağlı olduğu için gerçek verili tenant asla açılmaz.
+const OPEN_ACCESS = getTenantConfig().demoOpenAccess === true;
+
 async function scopeFromRequest(
   c: { req: { header: (k: string) => string | undefined } },
   selectedDistKod?: number | null,
 ): Promise<TenantScope> {
   const session = await verifySession(tokenFromRequest(c));
+  // Girişsiz demo: oturum yoksa tam merkez scope (tüm sentetik veri görünür).
+  // selectedDistKod verilirse merkez drill-down (tek dist), yoksa filtresiz.
+  if (!session && OPEN_ACCESS) {
+    return {
+      type: "merkez",
+      distKods: selectedDistKod != null ? [selectedDistKod] : null,
+    };
+  }
   return resolveTenantScope(session, selectedDistKod ?? null);
 }
 
@@ -279,6 +291,8 @@ const PUBLIC_ROUTES = new Set<string>([
 
 app.use("/api/*", async (c, next) => {
   if (PUBLIC_ROUTES.has(c.req.path)) return next();
+  // Girişsiz demo tenant'ı: oturum zorunluluğu yok (scope tarafında merkez).
+  if (OPEN_ACCESS) return next();
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
   return next();
