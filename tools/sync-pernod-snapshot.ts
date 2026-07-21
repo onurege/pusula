@@ -26,6 +26,7 @@ const v3Opts = {
 
 const jobs: [string, () => Promise<unknown>][] = [
   ["komuta-tl", () => getKomutaSnapshot({ forceRefresh: true, unit: "tl" })],
+  ["komuta-9le", () => getKomutaSnapshot({ forceRefresh: true, unit: "9le" })],
   ["satis", () => getWietnauerSatisSnapshot(v3Opts)],
   ["segment", () => getWietnauerSegmentSnapshot(v3Opts)],
   ["marka", () => getWietnauerMarkaSnapshot(v3Opts)],

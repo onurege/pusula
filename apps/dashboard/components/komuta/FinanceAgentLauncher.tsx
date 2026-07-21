@@ -88,9 +88,19 @@ export function FinanceAgentLauncher({ regions }: Props) {
         type="button"
         className="fa-launcher-btn"
         onClick={() => setPickerOpen((v) => !v)}
-        title="Finans agentı ile bölge analizi"
+        title="Finans agentı ile bölge analizi · Ücretli içerik"
       >
         💼 Finans Agentı
+        <span
+          title="Ücretli içerik"
+          style={{
+            marginLeft: 6, fontSize: 11, fontWeight: 700, color: "#15803d",
+            background: "rgba(22,163,74,0.12)", border: "1px solid rgba(22,163,74,0.35)",
+            borderRadius: 4, padding: "0 4px", lineHeight: "16px",
+          }}
+        >
+          $
+        </span>
       </button>
 
       {pickerOpen && (

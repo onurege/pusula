@@ -482,7 +482,14 @@ export function CustomerModal({ customer, onClose }: Props) {
                     loading={explain.kind === "loading"}
                     iconLeft={explain.kind !== "loading" ? <Sparkles size={15} /> : undefined}
                   >
-                    {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
+                    {explain.kind === "loading" ? (
+                      "Analiz ediliyor…"
+                    ) : (
+                      <>
+                        AI Analizi al
+                        <span title="Ücretli içerik" className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                      </>
+                    )}
                   </Button>
                   <Button
                     variant="outline"
@@ -492,7 +499,14 @@ export function CustomerModal({ customer, onClose }: Props) {
                     iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
                     className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
                   >
-                    {foresight.kind === "loading" ? "Öngörü çıkarılıyor…" : "Öngörü al (14 gün)"}
+                    {foresight.kind === "loading" ? (
+                      "Öngörü çıkarılıyor…"
+                    ) : (
+                      <>
+                        Öngörü al (14 gün)
+                        <span title="Ücretli içerik" className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                      </>
+                    )}
                   </Button>
                 </div>
 

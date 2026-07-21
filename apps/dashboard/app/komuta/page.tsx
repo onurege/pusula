@@ -62,9 +62,8 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} otvNet={snap.otvNet} />
+        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} otvNet={snap.otvNet} demo={!!snap.demoDate} />
         <FilterBar reelTL={snap.reelTL} otvNet={snap.otvNet} />
-        {snap.demoDate && <DemoBanner date={snap.demoDate} />}
         {snap.reelTL && <ReelTlBanner />}
         {snap.otvNet && <OtvNetBanner avgRate={snap.otvAvgRate} reelActive={snap.reelTL} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
@@ -139,10 +138,12 @@ function Header({
   generatedAt,
   reelTL,
   otvNet,
+  demo,
 }: {
   generatedAt: string;
   reelTL: boolean;
   otvNet: boolean;
+  demo?: boolean;
 }) {
   const rel = formatRelative(generatedAt);
   const modeLabel = [
@@ -169,6 +170,7 @@ function Header({
         </p>
       </div>
       <div className="komuta-page-header-actions">
+        {demo && <DemoBanner />}
         <span className="live-indicator">
           <span className="live-dot" />
           {rel}
@@ -311,25 +313,12 @@ function KpiValue({ k }: { k: KomutaKpiCard }) {
 
 // -- DEMO MODE BANNER --------------------------------------------------------
 
-function DemoBanner({ date }: { date: string }) {
-  // YYYY-MM-DD → "17 Nis 2026" gibi okunaklı
-  const monthsTR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
-  const [y, m, d] = date.split("-");
-  const pretty = `${Number(d)} ${monthsTR[Number(m) - 1] ?? m} ${y}`;
+function DemoBanner() {
   return (
-    <div className="demo-banner">
-      <div className="demo-banner-icon">🧪</div>
-      <div className="demo-banner-text">
-        <strong>Demo modu</strong> · Tüm hesaplamalar <strong>{pretty}</strong>{" "}
-        tarihini bugün kabul ediyor.{" "}
-        <span style={{ color: "#78716c" }}>
-          Pilot DB'de veri akışı bu tarihte kesildiği için sabit tutuldu — canlıya
-          geçince <code>.env</code> içindeki <code>DEMO_DATE</code> satırı
-          kaldırılır, tüm proje (komuta, radar, foresight, harita, agent) gerçek
-          tarihe döner.
-        </span>
-      </div>
-    </div>
+    <span className="demo-badge" title="Demo modu — örnek veri">
+      <span className="demo-badge-dot" />
+      Demo modu
+    </span>
   );
 }
 
@@ -1694,24 +1683,18 @@ const KOMUTA_CSS = `
 }
 
 /* REEL TL banner (toggle aktif olduğunda) */
-.komuta-root .demo-banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px; margin-bottom: 14px;
-  background: rgba(217, 119, 6, 0.08);
-  border: 1px solid rgba(217, 119, 6, 0.3);
-  border-left: 3px solid #d97706;
-  border-radius: 6px;
-  font-size: 12px;
+.komuta-root .demo-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  background: rgba(217, 119, 6, 0.10);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: #b45309;
+  letter-spacing: 0.2px; white-space: nowrap;
 }
-.komuta-root .demo-banner-icon { font-size: 16px; flex-shrink: 0; }
-.komuta-root .demo-banner-text { flex: 1; color: #44403c; line-height: 1.5; }
-.komuta-root .demo-banner-text strong { color: #1c1917; font-weight: 600; }
-.komuta-root .demo-banner-text code {
-  font-family: var(--font-mono, monospace);
-  background: rgba(217, 119, 6, 0.12);
-  border: 1px solid rgba(217, 119, 6, 0.25);
-  padding: 1px 4px; border-radius: 3px; font-size: 11px;
-  color: #b45309;
+.komuta-root .demo-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #d97706; flex-shrink: 0;
 }
 
 .komuta-root .reel-banner {

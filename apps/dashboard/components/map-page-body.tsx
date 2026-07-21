@@ -295,15 +295,45 @@ export async function MapPageBody({
               Bu filtrelerle koordinatlı müşteri yok.
             </div>
           ) : (
-            <SalesMap
-              customers={data.customers}
-              regions={regionsData.regions}
-              cities={citiesData.cities}
-              viewMode={viewMode}
-            />
+            <>
+              <SalesMap
+                customers={data.customers}
+                regions={regionsData.regions}
+                cities={citiesData.cities}
+                viewMode={viewMode}
+              />
+              <MapRiskLegend />
+            </>
           )}
         </main>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Harita nokta renk açıklaması — müşteri noktaları composite "kayıp riski"
+ * skoruna (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
+ * packages/core/src/map.ts `tierForScore` ile birebir.
+ */
+function MapRiskLegend() {
+  const items = [
+    { c: "#16a34a", t: "Sağlıklı", r: "skor 0–29" },
+    { c: "#d97706", t: "İzlemede", r: "30–54" },
+    { c: "#ea580c", t: "Riskli", r: "55–74" },
+    { c: "#dc2626", t: "Kritik", r: "75–100" },
+    { c: "#a1a1aa", t: "Bilinmiyor", r: "veri yok" },
+  ];
+  return (
+    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[5] flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-surface/90 backdrop-blur px-3.5 py-2 shadow-md text-[11px] max-w-[95%]">
+      <span className="font-semibold text-muted mr-1">Kayıp riski:</span>
+      {items.map((i) => (
+        <span key={i.t} className="inline-flex items-center gap-1.5 whitespace-nowrap">
+          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: i.c }} />
+          <span className="text-fg font-medium">{i.t}</span>
+          <span className="text-muted">{i.r}</span>
+        </span>
+      ))}
     </div>
   );
 }
