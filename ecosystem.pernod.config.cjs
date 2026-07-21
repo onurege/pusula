@@ -1,28 +1,23 @@
-// PM2 process yöneticisi — Enroute Pusula PERNOD (gerçek Univera verisi).
+// PM2 process yöneticisi — Enroute Pusula PERNOD (OFFLINE snapshot).
 // Kullanım:  pm2 start ecosystem.pernod.config.cjs  →  pm2 save
 //
-// Pernod = uygulamanın VARSAYILAN tenant'ı:
-//   - MSSQL: MSSQL_* prefix (repo-kök .env) — gerçek Pernod Univera DB'si
-//   - SQLite mirror: data/local.sqlite — MSSQL'den senkronlanır (ilk çalıştırmada
-//     "Verileri yenile" / map sync ile dolar; gitignore'da, klonla gelmez)
+// Bu sunucunun Pernod MSSQL'ine (bulutistan) ağ erişimi YOK. Bu yüzden
+// TENANT=pernod-demo: gerçek Pernod verisini CACHE-ONLY servis eder.
+//   - Veri: data/local.sqlite — erişimi olan bir makinede senkronlanıp
+//     buraya KOPYALANIR (map_customers + v7 komuta snapshot). MSSQL'e gidilmez.
+//   - Login: statik demo kullanıcısı (DEMO_LOGIN_USER/PASSWORD) — Pernod'un
+//     gerçek MSSQL auth'u bu sunucuda çalışamaz.
+//   - Branding: Pernod (pernod-demo config, PERNOD_CONFIG spread'i).
+//   - Çalışan ekranlar: Komuta + Harita. Canlı MSSQL isteyenler (risk/ziyaret/
+//     raporlar) bu modda boştur.
 //
-// ÖNKOŞUL (.env, repo kökü):
-//   NODE_ENV=production
-//   TENANT=pernod
-//   JWT_SECRET=<32+ karakter rastgele>
-//   MSSQL_SERVER=<host\instance>
-//   MSSQL_DATABASE=<db adı>
-//   MSSQL_USER=<kullanıcı>          # SALT-OKUNUR öneririz (read-only kuralı)
-//   MSSQL_PASSWORD=<şifre>
-//   MSSQL_PORT=1433
-//   MSSQL_ENCRYPT=true
-//   MSSQL_TRUST_SERVER_CERT=true    # self-signed cert varsa
-//   UNIVERA_PW_KEY=<AES anahtarı>   # gerçek kullanıcı login'i için (yoksa ALLOW_DEMO_AUTH=1)
+// ÖNKOŞUL:
+//   1. data/local.sqlite'ı (gerçek Pernod snapshot'ı) buraya kopyala.
+//   2. .env: NODE_ENV=production, JWT_SECRET=<32+ char>. (MSSQL_* gerekmez;
+//      varsa da kullanılmaz — demoData MSSQL'e gitmez.)
+//   3. cd apps/dashboard && $env:TENANT="pernod-demo" && npm run build
 //
-// ÖNKOŞUL: cd apps/dashboard && (TENANT=pernod) npm run build
-//
-// Portlar bu sunucuya özel seçildi (demo 3100/3200'ü kullanıyor; 8080/8090/9090
-// rezerve). Pernod: dashboard 3300, API 3400 — çakışmazsa böyle kalsın.
+// Portlar: dashboard 3300, API 3400 (demo 3100/3200; 8080/8090/9090 rezerve).
 
 const path = require("node:path");
 const ROOT = __dirname;
@@ -37,11 +32,14 @@ module.exports = {
       cwd: ROOT,
       env: {
         NODE_ENV: "production",
-        TENANT: "pernod",
+        TENANT: "pernod-demo",
         API_PORT: "3400",
         API_HOST: "127.0.0.1",
-        MSSQL_READ_UNCOMMITTED: "1", // saha DB'yi kilitleme (read-only raporlama)
-        // MSSQL_* / JWT_SECRET / UNIVERA_PW_KEY → repo-kök .env'den
+        ALLOW_DEMO_AUTH: "1", // MSSQL/UNIVERA_PW_KEY yok — modül init'i geçsin
+        // Statik login (MSSQL yok) — auth.ts pernod-demo (demoData) tenant'ında okur.
+        DEMO_LOGIN_USER: "pusula@univera.com.tr",
+        DEMO_LOGIN_PASSWORD: "pusula123",
+        // JWT_SECRET → repo-kök .env'den (login token imzası)
       },
       max_memory_restart: "800M",
       autorestart: true,
@@ -56,10 +54,10 @@ module.exports = {
       cwd: path.join(ROOT, "apps", "dashboard"),
       env: {
         NODE_ENV: "production",
-        TENANT: "pernod",
+        TENANT: "pernod-demo",
         ENROUTE_API_URL: "http://127.0.0.1:3400",
         PORT: "3300",
-        COOKIE_INSECURE: "1", // HTTP-only erişim → Secure cookie olmadan login tutar
+        COOKIE_INSECURE: "1", // HTTP proxy arkası → Secure cookie olmadan login tutar
       },
       max_memory_restart: "1000M",
       autorestart: true,

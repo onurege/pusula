@@ -1,5 +1,6 @@
 import type { TenantConfig } from "./types";
 import { PERNOD_CONFIG } from "./configs/pernod";
+import { PERNOD_DEMO_CONFIG } from "./configs/pernod-demo";
 import { FMCG_DEMO_CONFIG } from "./configs/fmcg-demo";
 import { WIETNAUER_CONFIG } from "./configs/wietnauer";
 
@@ -15,6 +16,7 @@ export type { TenantConfig, Industry, VolumeUnit, TaxToggle, TenantLabels } from
  */
 const REGISTRY: Record<string, TenantConfig> = {
   pernod: PERNOD_CONFIG,
+  "pernod-demo": PERNOD_DEMO_CONFIG,
   "fmcg-demo": FMCG_DEMO_CONFIG,
   wietnauer: WIETNAUER_CONFIG,
 };
