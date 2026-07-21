@@ -502,7 +502,7 @@ app.post("/api/radars/:id/run", async (c) => {
     for (const [k, v] of Object.entries(body ?? {})) {
       if (typeof v === "string" || typeof v === "number") params[k] = v;
     }
-    const forceRefresh = c.req.query("refresh") === "1";
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const run = await runRadar(def, params, { forceRefresh });
     return c.json(run);
   } catch (err) {
@@ -772,7 +772,7 @@ app.get("/api/map/customers/:id/sales", async (c) => {
     const distKod = distKodRaw ? parseInt(distKodRaw, 10) : null;
     const daysRaw = c.req.query("days");
     const days = daysRaw ? parseInt(daysRaw, 10) : 30;
-    const forceRefresh = c.req.query("refresh") === "1";
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const sales = await getCustomerSales(id, distKod, days, { forceRefresh });
     return c.json(sales);
   } catch (err) {
@@ -872,7 +872,7 @@ app.get("/api/wietnauer/yonetim", async (c) => {
     return c.json({ error: (err as Error).message }, 500);
   }
   try {
-    const forceRefresh = c.req.query("refresh") === "1";
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const tenant = getTenantConfig();
     const snap = await getWietnauerYonetimSnapshot({
       forceRefresh,
@@ -920,7 +920,7 @@ function makeV3Handler(
       return c.json({ error: (err as Error).message }, 500);
     }
     try {
-      const forceRefresh = c.req.query("refresh") === "1";
+      const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
       const tenant = getTenantConfig();
       const snap = await fn({
         forceRefresh,
@@ -962,7 +962,7 @@ app.get("/api/wietnauer/stok", async (c) => {
     return c.json({ error: (err as Error).message }, 500);
   }
   try {
-    const forceRefresh = c.req.query("refresh") === "1";
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const tenant = getTenantConfig();
     const snap = await getWietnauerStokSnapshot({
       forceRefresh,
@@ -995,7 +995,7 @@ app.get("/api/komuta/finance/:region", async (c) => {
   try {
     const region = decodeURIComponent(c.req.param("region") ?? "").trim();
     if (!region) return c.json({ error: "region parametresi boş." }, 400);
-    const forceRefresh = c.req.query("refresh") === "1";
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     // productGroup query param — heatmap hücresinden gelir; verilirse
     // analiz o ürün grubuyla filtrelenir.
     const productGroup =
