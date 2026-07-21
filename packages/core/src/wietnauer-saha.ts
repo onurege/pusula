@@ -554,6 +554,11 @@ function aggregateConversion(rows: VisitConversionRawRow[]): VisitConversionRow[
  * API'de yapılır.
  */
 async function fetchDistributorComparison(): Promise<Omit<DistributorComparisonRow, "rank">[]> {
+  // Bölge kaynağı tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge,
+  // Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge. (komuta fetchHeatmap ile aynı.)
+  const tenant = getTenantConfig();
+  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
+  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
   const sql = `
     WITH baz AS (
       SELECT
@@ -583,7 +588,7 @@ async function fetchDistributorComparison(): Promise<Omit<DistributorComparisonR
       SUM(b.siparis_var)                                           AS siparisli
     FROM baz b
     LEFT JOIN dbo.TBLDIST       d ON d.LNGKOD = b.LNGDISTKOD
-    LEFT JOIN dbo.TBLDISTEKGRUP g ON g.TXTKOD = d.TXTEKGRUP
+    LEFT JOIN dbo.${distRegionTable} g ON g.TXTKOD = d.${distRegionColumn}
     GROUP BY b.LNGDISTKOD, d.TXTAD, g.TXTAD
     ORDER BY COUNT(*) DESC
   `;

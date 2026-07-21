@@ -472,6 +472,10 @@ function mapStockRow(row: RawStockRow): WietnauerStockSkuRow {
 
 async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerStockSkuRow[]> {
   const { brandTable, brandJoinCol, categoryTable, categoryJoinCol } = getBrandAndCategoryMeta();
+  // Bölge etiketi tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP), Wietnauer
+  // TBLDISTEKGRUP(TXTEKGRUP). (komuta/saha ile aynı desen.)
+  const distRegionTable = getTenantConfig().distRegionTable ?? "TBLDISTGRUP";
+  const distRegionColumn = getTenantConfig().distRegionColumn ?? "TXTGRUP";
   // Dist filter için WHERE fragment'ları — SQL injection risksiz (parametre int).
   const stockDistFilter = distIdFilter != null
     ? `AND ((f.LNGDISTKOD = ${distIdFilter}) OR (h.LNGDISTKOD = ${distIdFilter}))`
@@ -622,7 +626,7 @@ async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerSto
     FROM combos cb
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = cb.sku_id AND u.BYTDURUM = 0
     INNER JOIN dbo.TBLDIST dst ON dst.LNGKOD = cb.dist_id
-    LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = dst.TXTEKGRUP
+    LEFT JOIN dbo.${distRegionTable} dg ON dg.TXTKOD = dst.${distRegionColumn}
     LEFT JOIN stock st ON st.sku_id = cb.sku_id AND st.dist_id = cb.dist_id
     LEFT JOIN sales s ON s.sku_id = cb.sku_id AND s.dist_id = cb.dist_id
     LEFT JOIN open_orders oo ON oo.sku_id = cb.sku_id AND oo.dist_id = cb.dist_id

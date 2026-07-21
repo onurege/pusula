@@ -131,6 +131,13 @@ export type TenantConfig = {
   distRegionColumn?: "TXTGRUP" | "TXTEKGRUP";
 
   /**
+   * Müşteri → perakende format (ekGrup) bağı. Pernod'da doğrudan FK
+   * (TBLMUSTERI.TXTEKGRUPKOD → TBLMUSTERIEKGRUP.TXTKOD); Wietnauer m2m köprü
+   * (TBLSBMUSTERIEKGRUPBAGLANTI). Tanımsızsa "direct" (Pernod default).
+   */
+  customerEkGrupLink?: "direct" | "m2m";
+
+  /**
    * Tenant'ın stratejik takip ettiği marka adları (`brandTable`.TXTAD ile
    * birebir eşleşir, case-insensitive). Wietnauer dashboards'unda özel zoom
    * panelleri bu liste üzerinden render edilir.

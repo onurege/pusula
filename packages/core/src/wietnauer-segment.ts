@@ -262,6 +262,19 @@ type EkGrupSegmentRawRow = {
  * Grup sayısı küçük (~10-50) × 31 dist — ucuz.
  */
 async function fetchEkGrupSegmentRaw(): Promise<EkGrupSegmentRawRow[]> {
+  // Müşteri → perakende format bağı tenant'a göre: Pernod doğrudan FK
+  // (TBLMUSTERI.TXTEKGRUPKOD), Wietnauer m2m köprü. Pernod'da m2m yanlış
+  // anahtar yüzünden 0 satır dönüyordu.
+  const link = getTenantConfig().customerEkGrupLink ?? "direct";
+  const grupJoin =
+    link === "m2m"
+      ? `FROM dbo.TBLMUSTERIEKGRUP eg
+      INNER JOIN dbo.TBLSBMUSTERIEKGRUPBAGLANTI bg
+        ON bg.LNGGRUPKOD = CAST(eg.TXTKOD AS INT)
+      INNER JOIN dbo.TBLMUSTERI m
+        ON m.LNGKOD = bg.LNGMUSTERIKOD`
+      : `FROM dbo.TBLMUSTERI m
+      INNER JOIN dbo.TBLMUSTERIEKGRUP eg ON eg.TXTKOD = m.TXTEKGRUPKOD`;
   const sql = `
     WITH grup_musterileri AS (
       SELECT
@@ -269,11 +282,7 @@ async function fetchEkGrupSegmentRaw(): Promise<EkGrupSegmentRawRow[]> {
         eg.TXTAD AS grup_ad,
         m.LNGKOD AS musteri_kod,
         m.LNGDISTKOD AS dist_id
-      FROM dbo.TBLMUSTERIEKGRUP eg
-      INNER JOIN dbo.TBLSBMUSTERIEKGRUPBAGLANTI bg
-        ON bg.LNGGRUPKOD = CAST(eg.TXTKOD AS INT)
-      INNER JOIN dbo.TBLMUSTERI m
-        ON m.LNGKOD = bg.LNGMUSTERIKOD
+      ${grupJoin}
       WHERE eg.BYTUYGULAMAYERI IN (0, 4)
         AND m.BYTDURUM = 0
     ),

@@ -77,6 +77,9 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   distRegionTable: "TBLDISTEKGRUP",
   distRegionColumn: "TXTEKGRUP",
 
+  // Wietnauer perakende format bağı m2m köprü tablosuyla (mevcut davranış).
+  customerEkGrupLink: "m2m",
+
   // Wietnauer talebi: Jagermeister, Edrington, Beluga.
   // "Edrington" tek marka değil — Edrington Group portföyü. Wietnauer DB'sinde
   // ayrı markalar olarak duruyor (Macallan, Highland Park, Famous Grouse,

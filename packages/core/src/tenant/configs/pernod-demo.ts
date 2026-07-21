@@ -25,18 +25,11 @@ export const PERNOD_DEMO_CONFIG: TenantConfig = {
   // sqliteFileName "local.sqlite" — Pernod snapshot'ı (spread'den gelir).
   demoData: true,
 
-  // Sunum arayüzü: V3'e iner, sürüm geçişi gizli. V3'ün Pernod şemasında
-  // DOĞRU çalışan ekranları gösterilir; denetimde bozuk çıkanlar (Segment,
-  // Stok, Saha, Risk — ekGrup/critical/riskTiers boş ya da dist-tipi) GİZLİ.
-  // Bu ekranlar Pernod-şema düzeltmesi yapılınca hiddenNavHrefs'ten çıkarılır.
+  // Sunum arayüzü: V3'e iner, sürüm geçişi gizli. Tüm V3 ekranları Pernod
+  // şemasına göre düzeltildi (saha/stok bölge join'i tenant-aware, segment
+  // ekGrup direct FK) → hiçbir ekran gizli değil, hepsi doğru veri gösterir.
   ui: {
     defaultLanding: "/v3",
     hideVersionToggle: true,
-    hiddenNavHrefs: [
-      "/v3/musteri-segmentasyon",
-      "/v3/stok-tukenme",
-      "/v3/saha-operasyon",
-      "/v3/aktivasyon-risk",
-    ],
   },
 };
