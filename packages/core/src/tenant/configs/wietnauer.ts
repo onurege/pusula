@@ -72,6 +72,11 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   brandTable: "TBLURUNGRUP",
   brandJoinColumn: "TXTURUNGRUPKOD",
 
+  // Wietnauer: bölge TBLDISTEKGRUP'ta (MARMARA/EGE/ANADOLU...) — Pernod'un
+  // tersine. TBLDISTGRUP burada bayi grubudur.
+  distRegionTable: "TBLDISTEKGRUP",
+  distRegionColumn: "TXTEKGRUP",
+
   // Wietnauer talebi: Jagermeister, Edrington, Beluga.
   // "Edrington" tek marka değil — Edrington Group portföyü. Wietnauer DB'sinde
   // ayrı markalar olarak duruyor (Macallan, Highland Park, Famous Grouse,

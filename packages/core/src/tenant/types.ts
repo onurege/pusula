@@ -121,6 +121,16 @@ export type TenantConfig = {
   brandJoinColumn: "TXTURUNEKGRUPKOD" | "TXTURUNGRUPKOD";
 
   /**
+   * Distribütör → coğrafi bölge eşlemesi (komuta heatmap satırları). Univera'da
+   * bu hiyerarşi tenant'a göre TERS kurulu:
+   *   - Pernod:    TBLDISTGRUP (TXTGRUP)   = bölge   · TBLDISTEKGRUP = dist tipi
+   *   - Wietnauer: TBLDISTEKGRUP (TXTEKGRUP) = bölge · TBLDISTGRUP  = bayi grubu
+   * Tanımsızsa TBLDISTGRUP/TXTGRUP (Pernod default).
+   */
+  distRegionTable?: "TBLDISTGRUP" | "TBLDISTEKGRUP";
+  distRegionColumn?: "TXTGRUP" | "TXTEKGRUP";
+
+  /**
    * Tenant'ın stratejik takip ettiği marka adları (`brandTable`.TXTAD ile
    * birebir eşleşir, case-insensitive). Wietnauer dashboards'unda özel zoom
    * panelleri bu liste üzerinden render edilir.

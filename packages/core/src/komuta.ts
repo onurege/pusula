@@ -13,6 +13,7 @@ import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
 import { distFilterClause, type TenantScope } from "./auth.js";
+import { getTenantConfig } from "./tenant/index.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -1207,9 +1208,11 @@ function heatmapBucket(yoyPct: number | null): KomutaHeatmapCell["bucket"] {
 
 async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<KomutaHeatmapRow[]> {
   // Top bölgeler ve top gruplar tespit edilir, sonra pivot.
-  // dist_grup CTE: distribütör → bölge eşlemesi (TBLDIST.TXTEKGRUP → TBLDISTEKGRUP.TXTKOD)
-  // Wietnauer'da bölge MARMARA/EGE/ANADOLU/AKDENİZ/GÜNEYDOĞU şeklinde
-  // TBLDISTEKGRUP'tan gelir; TBLDISTGRUP (bayi grubu) yerine.
+  // dist_grup CTE: distribütör → coğrafi bölge eşlemesi. Kaynak tenant'a göre
+  // TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge, Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge.
+  const tenant = getTenantConfig();
+  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
+  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
   // 9LE modunda her aggregation TBLURUNEKSAHA (saha 26) çarpanına ihtiyaç duyar.
   const valExpr = unit === "9le"
     ? "SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0))"
@@ -1227,7 +1230,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
     WITH dist_grup AS (
       SELECT d.LNGKOD AS distKod, dg.TXTKOD AS bolgeKod, dg.TXTAD AS bolge
       FROM dbo.TBLDIST d
-      INNER JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
+      INNER JOIN dbo.${distRegionTable} dg ON dg.TXTKOD = d.${distRegionColumn}
       WHERE d.BYTDURUM = 0
     ),
     top_bolge AS (

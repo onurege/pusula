@@ -54,6 +54,11 @@ export const PERNOD_CONFIG: TenantConfig = {
   brandTable: "TBLURUNEKGRUP",
   brandJoinColumn: "TXTURUNEKGRUPKOD",
 
+  // Pernod: bölge TBLDISTGRUP'ta (AKDENIZ, EGE, MARMARA...); TBLDISTEKGRUP
+  // dağıtıcı tipidir (DİSTRİBÜTÖR / TALİ BAYİ).
+  distRegionTable: "TBLDISTGRUP",
+  distRegionColumn: "TXTGRUP",
+
   // Pernod portföyünden son 30g ciro lider 4 markası — TBLURUNEKGRUP.TXTAD
   // ile birebir eşleşmeli. probe-wietnauer.ts canlı veriden teyit eder.
   strategicBrands: ["Chivas Regal", "Ballantine's", "Absolut", "Olmeca"],
