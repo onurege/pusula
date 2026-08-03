@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { runReadOnly } from "@enroute/core";
 (async () => {
   const s = await runReadOnly("SELECT @@SERVERNAME srv, DB_NAME() db, GETDATE() simdi", {limit:1});
