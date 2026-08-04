@@ -1090,24 +1090,59 @@ function msUntilNextNightRefresh(): number {
   return next.getTime() - now.getTime();
 }
 
-async function nightRefresh() {
-  console.log(`[night-refresh] başlıyor (${new Date().toISOString()})`);
+// Tüm merkez-kapsam cache'lerini tek seferde tazeler: komuta + V3 snapshot'ları
+// + harita müşteri aynası. Hem gece job'ı hem açılış warm'ı bunu çağırır.
+// Dist-kullanıcı kapsamları (allowedDistKods dolu) ilk istekte lazy üretilir —
+// nadir olduğu için job'da toplu tazelemeye gerek yok.
+async function refreshAllSnapshots(reason: string) {
+  const tag = `[refresh:${reason}]`;
+  console.log(`${tag} başlıyor (${new Date().toISOString()})`);
+  const tenant = getTenantConfig();
+  const merkezOpts: V3SnapshotOpts = {
+    forceRefresh: true,
+    strategicBrands: tenant.strategicBrands ?? [],
+    allowedDistKods: null, // merkez → tam görünürlük
+    distId: null,
+  };
   try {
-    // Hem TL hem 9L modu için snapshot refresh
+    // 1) Komuta (TL + 9L)
     for (const unit of ["tl", "9le"] as const) {
-      await getKomutaSnapshot({
-        forceRefresh: true,
-        unit,
-      }).catch((err) => {
-        console.error(`[night-refresh] komuta ${unit} fail:`, err);
+      await getKomutaSnapshot({ forceRefresh: true, unit }).catch((err) => {
+        console.error(`${tag} komuta ${unit} fail:`, err);
       });
     }
-    console.log(
-      `[night-refresh] başarılı (${new Date().toISOString()})`,
-    );
+
+    // 2) V3 snapshot'ları — merkez kapsam. Bunlar daha önce gece job'ında
+    //    tazelenMİYORdu; "son güncelleme" bu yüzden ilk hesap tarihinde donuyordu.
+    const v3: Array<[string, (o: V3SnapshotOpts) => Promise<unknown>]> = [
+      ["yonetim", getWietnauerYonetimSnapshot],
+      ["marka", getWietnauerMarkaSnapshot],
+      ["aktivasyon", getWietnauerAktivasyonSnapshot],
+      ["iskonto", getWietnauerIskontoSnapshot],
+      ["segment", getWietnauerSegmentSnapshot],
+      ["saha", getWietnauerSahaSnapshot],
+      ["satis", getWietnauerSatisSnapshot],
+      ["stok", getWietnauerStokSnapshot],
+    ];
+    for (const [name, fn] of v3) {
+      await fn(merkezOpts).catch((err) => {
+        console.error(`${tag} v3 ${name} fail:`, err);
+      });
+    }
+
+    // 3) Harita müşteri aynası — "Verileri yenile" butonuyla aynı sync.
+    await syncMapData(REPO_ROOT).catch((err) => {
+      console.error(`${tag} map sync fail:`, err);
+    });
+
+    console.log(`${tag} başarılı (${new Date().toISOString()})`);
   } catch (err) {
-    console.error("[night-refresh] beklenmeyen hata:", err);
+    console.error(`${tag} beklenmeyen hata:`, err);
   }
+}
+
+async function nightRefresh() {
+  await refreshAllSnapshots("night");
   // Sonraki gün için tekrar planla
   setTimeout(nightRefresh, 24 * 60 * 60 * 1000);
 }
@@ -1124,6 +1159,13 @@ if (DEMO_DATA) {
     `[night-refresh] sonraki refresh ${hoursUntil}h içinde (${NIGHT_REFRESH_HOUR}:00)`,
   );
   setTimeout(nightRefresh, initialDelay);
+
+  // Açılış warm'ı — server dinlemeye başladıktan ~10s sonra tüm cache'leri
+  // bir kez tazele. Böylece `pm2 restart` = anında güncel veri (V3 dahil),
+  // 03:00'ı beklemeden. Boot'u bloklamamak için await edilmez.
+  setTimeout(() => {
+    void refreshAllSnapshots("startup");
+  }, 10_000);
 }
 
 process.on("SIGINT", async () => {

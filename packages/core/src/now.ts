@@ -61,6 +61,20 @@ export function sqlNow(): string {
   if (demo) {
     return `CAST('${demo} 23:59:59' AS DATETIME)`;
   }
+  // Bozuk DB saati modu: bazı pilot/replika DB'lerde host'un GETDATE()'i
+  // aylarca geride donabiliyor (ör. GETDATE=17 Nis) ama ETL güncel tarihli
+  // fatura eklemeye devam ediyor. Böyle DB'lerde "now" olarak en son fatura
+  // tarihini (gün sonu) baz alırız — pencere her gün kendiliğinden ilerler,
+  // DEMO_DATE'i elle güncellemeye gerek kalmaz.
+  //   NOW_MODE=max-invoice  → aç
+  // Uncorrelated scalar subquery; DATEADD/karşılaştırma bağlamında geçerli.
+  if (process.env.NOW_MODE?.trim() === "max-invoice") {
+    return (
+      "(SELECT DATEADD(second, -1, DATEADD(day, 1, " +
+      "CAST(CAST(MAX(TRHISLEMTARIHI) AS DATE) AS DATETIME))) " +
+      "FROM dbo.TBLMSDFATURA WHERE BYTTUR = 0 AND BYTDURUM = 0)"
+    );
+  }
   return "GETDATE()";
 }
 
