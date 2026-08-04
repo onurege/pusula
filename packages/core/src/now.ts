@@ -56,24 +56,48 @@ function readDemoDate(): string | null {
  * Demo modda günün sonuna sabitlemek için 23:59:59 ekliyoruz; aksi takdirde
  * `>=` filter'ı o günün satırlarını dahil etmez.
  */
+/**
+ * NOW_MODE=max-invoice anchor'ı. Bozuk DB saatine (GETDATE aylarca geride
+ * donuk) karşı "now" = en son fatura tarihi. Bu değer DB'den BİR KEZ çözülüp
+ * (resolveNowAnchor, db.ts) buraya yazılır; sqlNow() onu LITERAL basar.
+ *
+ * Neden literal, subquery değil: sqlNow() çıktısı ~30 sorguya `${sqlNow()}`
+ * ile gömülüyor; subquery gömmek (a) agregat içinde "aggregate on subquery"
+ * SQL hatası, (b) her sorguda tekrar MAX taraması → timeout yaratıyordu.
+ * Literal tarih ikisini de ortadan kaldırır.
+ */
+let nowAnchor: string | null = null;
+
+/** YYYY-MM-DD anchor'ı set eder (geçersizse null'lar). db.ts/resolveNowAnchor çağırır. */
+export function setNowAnchor(d: string | null): void {
+  nowAnchor = d && DATE_RX.test(d) ? d : null;
+}
+
+/** NOW_MODE=max-invoice aktif mi (env). */
+function nowModeMax(): boolean {
+  return process.env.NOW_MODE?.trim() === "max-invoice";
+}
+
+/** Aktif anchor tarihi (çözülmüşse). Banner/log için. */
+export function nowAnchorDate(): string | null {
+  return nowModeMax() ? nowAnchor : null;
+}
+
+/**
+ * "now" GETDATE()'ten sapıyor mu — DEMO_DATE ya da çözülmüş max-invoice anchor.
+ * db.ts'teki GETDATE→sqlNow replace guard'ı bunu kullanır.
+ */
+export function nowIsOverridden(): boolean {
+  return readDemoDate() != null || (nowModeMax() && nowAnchor != null);
+}
+
 export function sqlNow(): string {
   const demo = readDemoDate();
   if (demo) {
     return `CAST('${demo} 23:59:59' AS DATETIME)`;
   }
-  // Bozuk DB saati modu: bazı pilot/replika DB'lerde host'un GETDATE()'i
-  // aylarca geride donabiliyor (ör. GETDATE=17 Nis) ama ETL güncel tarihli
-  // fatura eklemeye devam ediyor. Böyle DB'lerde "now" olarak en son fatura
-  // tarihini (gün sonu) baz alırız — pencere her gün kendiliğinden ilerler,
-  // DEMO_DATE'i elle güncellemeye gerek kalmaz.
-  //   NOW_MODE=max-invoice  → aç
-  // Uncorrelated scalar subquery; DATEADD/karşılaştırma bağlamında geçerli.
-  if (process.env.NOW_MODE?.trim() === "max-invoice") {
-    return (
-      "(SELECT DATEADD(second, -1, DATEADD(day, 1, " +
-      "CAST(CAST(MAX(TRHISLEMTARIHI) AS DATE) AS DATETIME))) " +
-      "FROM dbo.TBLMSDFATURA WHERE BYTTUR = 0 AND BYTDURUM = 0)"
-    );
+  if (nowModeMax() && nowAnchor) {
+    return `CAST('${nowAnchor} 23:59:59' AS DATETIME)`;
   }
   return "GETDATE()";
 }
@@ -86,6 +110,9 @@ export function currentDate(): Date {
   const demo = readDemoDate();
   if (demo) {
     return new Date(`${demo}T23:59:59`);
+  }
+  if (nowModeMax() && nowAnchor) {
+    return new Date(`${nowAnchor}T23:59:59`);
   }
   return new Date();
 }

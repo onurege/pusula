@@ -39,6 +39,7 @@ import {
   listRadarDefinitions,
   listReports,
   loadSnapshot,
+  resolveNowAnchor,
   retrieve,
   runAgent,
   runForesight,
@@ -1094,6 +1095,29 @@ function msUntilNextNightRefresh(): number {
 // + harita müşteri aynası. Hem gece job'ı hem açılış warm'ı bunu çağırır.
 // Dist-kullanıcı kapsamları (allowedDistKods dolu) ilk istekte lazy üretilir —
 // nadir olduğu için job'da toplu tazelemeye gerek yok.
+// Bir warm adımını izole eder: başla/bitti(ms) logu + hata yakalama + timeout.
+// Böylece tek bir yavaş/hatalı snapshot zinciri bloke edemez ve log tam olarak
+// hangisinin nerede takıldığını gösterir.
+async function warmStep(
+  tag: string,
+  name: string,
+  fn: () => Promise<unknown>,
+  timeoutMs = 90_000,
+): Promise<void> {
+  const t0 = Date.now();
+  try {
+    await Promise.race([
+      fn(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`warm timeout ${timeoutMs}ms`)), timeoutMs),
+      ),
+    ]);
+    console.log(`${tag} ${name} ok (${Date.now() - t0}ms)`);
+  } catch (err) {
+    console.error(`${tag} ${name} fail (${Date.now() - t0}ms):`, (err as Error).message);
+  }
+}
+
 async function refreshAllSnapshots(reason: string) {
   const tag = `[refresh:${reason}]`;
   console.log(`${tag} başlıyor (${new Date().toISOString()})`);
@@ -1105,11 +1129,17 @@ async function refreshAllSnapshots(reason: string) {
     distId: null,
   };
   try {
+    // 0) "now" anchor'ını çöz (NOW_MODE=max-invoice) — snapshot'lar doğru
+    //    pencereyle hesaplansın diye HER ŞEYDEN ÖNCE.
+    await resolveNowAnchor().catch((err) => {
+      console.error(`${tag} now-anchor fail:`, (err as Error).message);
+    });
+
     // 1) Komuta (TL + 9L)
     for (const unit of ["tl", "9le"] as const) {
-      await getKomutaSnapshot({ forceRefresh: true, unit }).catch((err) => {
-        console.error(`${tag} komuta ${unit} fail:`, err);
-      });
+      await warmStep(tag, `komuta ${unit}`, () =>
+        getKomutaSnapshot({ forceRefresh: true, unit }),
+      );
     }
 
     // 2) V3 snapshot'ları — merkez kapsam. Bunlar daha önce gece job'ında
@@ -1125,15 +1155,11 @@ async function refreshAllSnapshots(reason: string) {
       ["stok", getWietnauerStokSnapshot],
     ];
     for (const [name, fn] of v3) {
-      await fn(merkezOpts).catch((err) => {
-        console.error(`${tag} v3 ${name} fail:`, err);
-      });
+      await warmStep(tag, `v3 ${name}`, () => fn(merkezOpts));
     }
 
     // 3) Harita müşteri aynası — "Verileri yenile" butonuyla aynı sync.
-    await syncMapData(REPO_ROOT).catch((err) => {
-      console.error(`${tag} map sync fail:`, err);
-    });
+    await warmStep(tag, "map sync", () => syncMapData(REPO_ROOT));
 
     console.log(`${tag} başarılı (${new Date().toISOString()})`);
   } catch (err) {
@@ -1159,6 +1185,10 @@ if (DEMO_DATA) {
     `[night-refresh] sonraki refresh ${hoursUntil}h içinde (${NIGHT_REFRESH_HOUR}:00)`,
   );
   setTimeout(nightRefresh, initialDelay);
+
+  // "now" anchor'ını (NOW_MODE=max-invoice) boot'ta HEMEN çöz — 10s warm'ı
+  // beklemeden normal istekler de doğru pencereyi (en son fatura günü) alsın.
+  void resolveNowAnchor().catch(() => {});
 
   // Açılış warm'ı — server dinlemeye başladıktan ~10s sonra tüm cache'leri
   // bir kez tazele. Böylece `pm2 restart` = anında güncel veri (V3 dahil),

@@ -1,5 +1,5 @@
 import sql from "mssql";
-import { sqlNow, isDemoMode } from "./now.js";
+import { sqlNow, nowIsOverridden, setNowAnchor } from "./now.js";
 import { getTenantConfig } from "./tenant/index.js";
 
 let pool: sql.ConnectionPool | null = null;
@@ -122,8 +122,38 @@ export type RunResult = {
  * yapmamak için açılış parantezi de zorunlu.
  */
 function applyDemoDate(query: string): string {
-  if (!isDemoMode()) return query;
+  // DEMO_DATE ya da çözülmüş max-invoice anchor aktifse, ham GETDATE()
+  // literallerini de (ör. Gemini'nin ürettiği SQL) sqlNow() ile hizala.
+  if (!nowIsOverridden()) return query;
   return query.replace(/\bGETDATE\s*\(\s*\)/gi, sqlNow());
+}
+
+/**
+ * NOW_MODE=max-invoice anchor'ını DB'den BİR KEZ çözer ve now.ts'e yazar.
+ * Bozuk DB saatinde (GETDATE donuk) "now" = en son fatura günü. Server boot'ta
+ * ve her gece/açılış refresh'inde çağrılır — anchor günlük ilerler.
+ * NOW_MODE kapalıysa no-op (anchor null → sqlNow GETDATE'e düşer).
+ */
+export async function resolveNowAnchor(): Promise<string | null> {
+  if (process.env.NOW_MODE?.trim() !== "max-invoice") {
+    setNowAnchor(null);
+    return null;
+  }
+  try {
+    // Bu sorgunun kendisinde sqlNow/GETDATE yok — chicken-egg yok.
+    const r = await runReadOnly(
+      "SELECT CONVERT(varchar(10), MAX(TRHISLEMTARIHI), 23) AS d " +
+        "FROM dbo.TBLMSDFATURA WHERE BYTTUR = 0 AND BYTDURUM = 0",
+      { limit: 1, timeoutMs: 30_000 },
+    );
+    const d = (r.rows[0]?.d as string | undefined) ?? null;
+    setNowAnchor(d);
+    console.log(`[now-anchor] max-invoice = ${d ?? "(çözülemedi)"}`);
+    return d;
+  } catch (err) {
+    console.error("[now-anchor] çözümlenemedi:", (err as Error).message);
+    return null;
+  }
 }
 
 /**
