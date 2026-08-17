@@ -1205,7 +1205,11 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
     LEFT JOIN urun_grup_30     AS ug30  ON ug30.LNGMUSTERIKOD  = m.LNGKOD
     LEFT JOIN urun_grup_prev_30 AS ugp30 ON ugp30.LNGMUSTERIKOD = m.LNGKOD
     LEFT JOIN son_ziyaret      AS z    ON z.LNGMUSTERIKOD    = m.LNGKOD
+    -- md19: sadece AKTİF müşteri + AKTİF distribütör altındakiler.
+    -- Pasif müşteri (m.BYTDURUM) veya pasif/eksik dist (d.BYTDURUM) haritaya
+    -- girmesin — aksi halde nokta sayısı gerçek aktiften fazla çıkıyordu.
     WHERE m.DBLKOORDINATX > 0 AND m.DBLKOORDINATY > 0
+      AND m.BYTDURUM = 0 AND d.BYTDURUM = 0
     ORDER BY hasSales DESC, m.LNGKOD
   `;
   const cityFacetSql = `

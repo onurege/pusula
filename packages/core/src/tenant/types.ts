@@ -31,6 +31,12 @@ export type VolumeUnit = {
   hint: string;
   /** false ise Komuta UnitToggle gizlenir (sadece TL gösterilir). */
   showInToggle: boolean;
+  /**
+   * Hacim böleni: `Hacim = Σ(DBLMIKTAR × DBLLITRE / divisor)`.
+   * Pernod 9LE → 9. Wietnauer'da DBLLITRE zaten 70cl-eşdeğeri
+   * (70cl→1, 75cl→1.071) olduğundan → 1. Verilmezse 9 varsayılır (geri uyum).
+   */
+  divisor?: number;
 };
 
 /**

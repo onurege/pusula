@@ -759,8 +759,8 @@ function buildBrandSummary(rows: WietnauerStockSkuRow[]): WietnauerStockBrandSum
       const riskDelta = b.criticalCount + b.riskCount - (a.criticalCount + a.riskCount);
       if (riskDelta !== 0) return riskDelta;
       return b.totalSoldQty90d - a.totalSoldQty90d;
-    })
-    .slice(0, 20);
+    });
+  // md40: tüm markalar gösterilir (eski slice(0,20) kaldırıldı).
 }
 
 function buildQuality(

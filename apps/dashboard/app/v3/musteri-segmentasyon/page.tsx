@@ -9,10 +9,6 @@ import {
   type EkGrupSegmentRow,
 } from "@/components/v3/segment/EkGrupPanel";
 import {
-  CirosalSegmentPanel,
-  type CirosalSegmentRow,
-} from "@/components/v3/segment/CirosalSegmentPanel";
-import {
   SegmentBrandCrossPanel,
   type SegmentBrandCell,
 } from "@/components/v3/segment/SegmentBrandCrossPanel";
@@ -24,7 +20,6 @@ type SegmentSnapshot = {
   demoDate: string | null;
   ekSaha: EkSahaSegmentRow[];
   ekGrup: EkGrupSegmentRow[];
-  cirosal: CirosalSegmentRow[];
   cross: {
     tipler: string[];
     markalar: string[];
@@ -76,10 +71,10 @@ export default async function V3MusteriSegmentasyonPage() {
       {snap && (
         <>
           {/* Üst sıra: 3 bağımsız segment boyutu yan yana. */}
+          {/* md32: cirosal segment kaldırıldı → 2 kırılım (md24'te 3'e çıkacak). */}
           <div className="seg-triple-grid">
             <EkSahaPanel rows={snap.ekSaha} />
             <EkGrupPanel rows={snap.ekGrup} />
-            <CirosalSegmentPanel rows={snap.cirosal} />
           </div>
 
           {/* Alt sıra: tam genişlik cross-segment heatmap. */}

@@ -6,7 +6,6 @@ import { BrandPortfolioPanel } from "@/components/v3/marka/BrandPortfolioPanel";
 import { TopSkusPanel } from "@/components/v3/marka/TopSkusPanel";
 import { BrandPenetrationPanel } from "@/components/v3/marka/BrandPenetrationPanel";
 import { StrategicBrandZoom } from "@/components/v3/marka/StrategicBrandZoom";
-import { BrandWindowCompare } from "@/components/v3/marka/BrandWindowCompare";
 import type { WietnauerMarkaSnapshot } from "@/components/v3/marka/types";
 
 export const metadata = { title: "Marka & SKU · V3 · Enroute Pusula" };
@@ -111,8 +110,7 @@ export default async function V3MarkaSkuPage() {
             </div>
 
             <StrategicBrandZoom brands={snap.strategic} />
-
-            <BrandWindowCompare rows={snap.windowComparison} />
+            {/* md31: 30g/90g/YTD karşılaştırma paneli kaldırıldı. */}
           </div>
         </>
       )}

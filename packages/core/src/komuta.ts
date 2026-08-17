@@ -303,7 +303,7 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
       SELECT ISNULL(SUM(
         d.DBLMIKTAR * ISNULL(
           TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA),
-          ISNULL(u.DBLLITRE, 0) / 9.0
+          ISNULL(u.DBLLITRE, 0) / ${vd()}
         )
       ), 0) AS adet
       FROM dbo.TBLMSDFATURA f
@@ -323,7 +323,7 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
       SELECT ISNULL(SUM(
         d.DBLMIKTAR * ISNULL(
           TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA),
-          ISNULL(u.DBLLITRE, 0) / 9.0
+          ISNULL(u.DBLLITRE, 0) / ${vd()}
         )
       ), 0) AS adet
       FROM dbo.TBLMSDFATURA f
@@ -724,7 +724,7 @@ async function fetchChannels(unit: ValueUnit, distClause: string): Promise<Komut
  */
 async function fetchChannelMonthly(unit: ValueUnit, distClause: string): Promise<KomutaChannelMonthlyRow[]> {
   const rowExpr = unit === "9le"
-    ? "d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
+    ? `d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "f.DBLNETTUTAR";
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
   const sql = `
@@ -794,7 +794,7 @@ async function fetchChannelMonthly(unit: ValueUnit, distClause: string): Promise
 // fallback kategorisine düşer.
 async function fetchChannelByCustomerType(unit: ValueUnit, distClause: string): Promise<KomutaChannelMonthlyRow[]> {
   const rowExpr = unit === "9le"
-    ? "d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
+    ? `d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "f.DBLNETTUTAR";
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
   const sql = `
@@ -985,6 +985,9 @@ async function fetchUpcomingEvent(): Promise<KomutaUpcomingEvent | null> {
 
 /** 9LE çarpan ifadesi — detay (`bd` veya `dd` veya `d`) + ürün (`u`) +
  *  ek saha (`ue`) alias'ları halihazırda JOIN'lenmiş olmalı. */
+/** Hacim böleni (tenant): Pernod 9LE→9, Wietnauer 70cl→1 (DBLLITRE zaten 70cl-eşdeğeri). md7. */
+function vd(): string { return String(getTenantConfig().volume.divisor ?? 9); }
+
 function unitValueExpr(unit: ValueUnit, opts: {
   /** Fatura toplam alias'ı (örn. `f.DBLNETTUTAR`) — TL modunda kullanılır. */
   faturaTL?: string;
@@ -998,7 +1001,7 @@ function unitValueExpr(unit: ValueUnit, opts: {
   urunAlias: string;
 }): string {
   if (unit === "9le") {
-    return `SUM(${opts.miktarAlias} * COALESCE(TRY_CONVERT(decimal(18,8), ${opts.eksahaAlias}), ISNULL(${opts.urunAlias}.DBLLITRE, 0) / 9.0))`;
+    return `SUM(${opts.miktarAlias} * COALESCE(TRY_CONVERT(decimal(18,8), ${opts.eksahaAlias}), ISNULL(${opts.urunAlias}.DBLLITRE, 0) / ${vd()}))`;
   }
   // TL — fatura tabanı tercih edilir; verilmemişse detay TL alternatifi
   if (opts.faturaTL) return `SUM(${opts.faturaTL})`;
@@ -1097,7 +1100,7 @@ async function fetchPeriodScales(distClause: string): Promise<PeriodScales> {
 async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaMatrixRow[]> {
   // Detay-bazlı per-row value — TL ise DBLNETFIYAT, 9LE ise DBLMIKTAR × çarpan.
   const rowExpr = unit === "9le"
-    ? "d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
+    ? `d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "d.DBLNETFIYAT";
   const eksahaJoin = unit === "9le"
     ? "LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26"
@@ -1215,7 +1218,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
   const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
   // 9LE modunda her aggregation TBLURUNEKSAHA (saha 26) çarpanına ihtiyaç duyar.
   const valExpr = unit === "9le"
-    ? "SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0))"
+    ? `SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()}))`
     : "SUM(dd.DBLNETFIYAT)";
   // top_bolge: TL modunda TBLURUN gerekmez; 9LE modunda gerekir
   const topBolgeUrunJoin = unit === "9le"
@@ -1285,11 +1288,11 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
         COALESCE(g.TXTAD, u.TXTAD) AS grup,
         SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
                   AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-                 THEN ${unit === "9le" ? "dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)" : "dd.DBLNETFIYAT"}
+                 THEN ${unit === "9le" ? `dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})` : "dd.DBLNETFIYAT"}
                  ELSE 0 END) AS son,
         SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
                   AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
-                 THEN ${unit === "9le" ? "dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)" : "dd.DBLNETFIYAT"}
+                 THEN ${unit === "9le" ? `dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})` : "dd.DBLNETFIYAT"}
                  ELSE 0 END) AS onceki
       FROM dist_grup dg2
       INNER JOIN dbo.TBLMSDFATURA f ON f.LNGDISTKOD = dg2.distKod
@@ -1363,7 +1366,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
 async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<KomutaRep[]> {
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
-    ? "ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)), 0)"
+    ? `ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})), 0)`
     : "ISNULL(SUM(f.DBLNETTUTAR), 0)";
   const joins9le = unit === "9le"
     ? `
@@ -1415,7 +1418,7 @@ async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<Komuta
 async function fetchTopDists(unit: ValueUnit, distClause: string): Promise<KomutaTopDist[]> {
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
-    ? "ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)), 0)"
+    ? `ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})), 0)`
     : "ISNULL(SUM(f.DBLNETTUTAR), 0)";
   const joins9le = unit === "9le"
     ? `
@@ -1464,7 +1467,7 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
   // 9LE: detay miktar × ek saha 26 çarpanı; TL: detay net fiyat.
   // top10 + raw CTE'leri için ortak satır ifadesi.
   const satirExpr = unit === "9le"
-    ? "d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / 9.0)"
+    ? `d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "d.DBLNETFIYAT";
   const top10Sum = unit === "9le"
     ? `SUM(${satirExpr})`

@@ -2,7 +2,6 @@ import { getWietnauerSatis } from "@/lib/api";
 import type { WietnauerSatisSnapshot } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
-import { DistLeaderboardPanel } from "@/components/v3/satis/DistLeaderboardPanel";
 import { RepLeaderboardPanel } from "@/components/v3/satis/RepLeaderboardPanel";
 import { DropSizePanel } from "@/components/v3/satis/DropSizePanel";
 import { NewCustomersPanel } from "@/components/v3/satis/NewCustomersPanel";
@@ -94,7 +93,7 @@ export default async function V3SatisPerformansPage() {
           {/* Asıl içerik: leaderboard'lar üstte (full width), altta drop+yeni,
               en altta trend grafiği. */}
           <div className="v3-content-stack">
-            <DistLeaderboardPanel rows={snap.distLeaderboard} />
+            {/* md25: Distribütör leaderboard kaldırıldı (veri KPI için korunuyor). */}
             <RepLeaderboardPanel rows={snap.repLeaderboard} />
 
             <div className="v3-row-2col">

@@ -41,10 +41,11 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   // Toggle gizli, sadece TL gösterilir.
   volume: {
     key: "9le",
-    short: "9L",
-    longLabel: "9-Litre Eşdeğer",
-    hint: "Hacim birimi henüz teyit edilmedi — TBLURUNEKSAHA çarpanı kontrol edilmeli.",
-    showInToggle: false,
+    short: "70cl",
+    longLabel: "Hacim (70cl eşdeğer)",
+    hint: "Hacim = Σ(miktar × TBLURUN.DBLLITRE). DBLLITRE = kapasite_cl/70 (70cl→1, 75cl→1.071).",
+    showInToggle: false, // Faz 2'de açılacak (birim toggle omurgası)
+    divisor: 1, // DBLLITRE zaten 70cl-eşdeğeri → bölme yok (Pernod'da 9)
   },
   tax: {
     key: "otv",
@@ -77,8 +78,11 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   distRegionTable: "TBLDISTEKGRUP",
   distRegionColumn: "TXTEKGRUP",
 
-  // Wietnauer perakende format bağı m2m köprü tablosuyla (mevcut davranış).
-  customerEkGrupLink: "m2m",
+  // Wietnauer perakende format bağı: müşteri-master doğrudan FK
+  // (TBLMUSTERI.TXTEKGRUPKOD → TBLMUSTERIEKGRUP.TXTKOD). Eski "m2m" köprü
+  // (TBLSBMUSTERIEKGRUPBAGLANTI) bu DB'de BOŞ → panel boş dönüyordu (md33).
+  // Direct link 15.483 müşteri-grup satırı döndürür (TEKEL/BÜFE/MARKET/BAR…).
+  customerEkGrupLink: "direct",
 
   // Wietnauer talebi: Jagermeister, Edrington, Beluga.
   // "Edrington" tek marka değil — Edrington Group portföyü. Wietnauer DB'sinde

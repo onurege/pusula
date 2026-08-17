@@ -95,12 +95,7 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
                   : `${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU×dist içinde`
               }
             />
-            <KpiTile
-              label="Yoldaki Miktar"
-              value={formatQty(snap.totals.totalIncomingQty)}
-              sub={`${snap.totals.incomingOrderSkuCount.toLocaleString("tr-TR")} SKU açık sipariş`}
-              tone={snap.totals.incomingOrderSkuCount > 0 ? "accent" : "neutral"}
-            />
+            {/* md39: "Yoldaki Miktar" KPI kaldırıldı. */}
             <KpiTile
               label="Devir Hesaplanan"
               value={snap.totals.turnoverComputableSkuCount.toLocaleString("tr-TR")}
@@ -415,7 +410,7 @@ function StockoutTable({ rows }: { rows: WietnauerStockSkuRow[] }) {
               <th className="num">Kalan</th>
               <th>Tükenme</th>
               <th className="num">Stok</th>
-              <th className="num">Yolda</th>
+              {/* md39: "Yolda" kolonu kaldırıldı */}
               <th className="num">90g Satış</th>
               <th className="num">Tahmin/gün</th>
               <th className="num">Devir</th>
@@ -453,7 +448,7 @@ function StockoutTable({ rows }: { rows: WietnauerStockSkuRow[] }) {
                 <td className="num">{formatDays(row.daysLeft)}</td>
                 <td>{row.estimatedStockoutDate ? formatDate(row.estimatedStockoutDate) : "-"}</td>
                 <td className="num">{formatQty(row.onHandQty)}</td>
-                <td className="num">{row.openOrderQty > 0 ? formatQty(row.openOrderQty) : "-"}</td>
+                {/* md39: "Yolda" kolonu kaldırıldı */}
                 <td className="num">{formatQty(row.soldQty90d)}</td>
                 <td className="num">
                   <span title={`Croston 180g: ${formatQty(row.crostonDailyQty)} · trend x${row.trendFactor.toFixed(2)} · mevsim x${row.seasonalityFactor.toFixed(2)}${row.seasonalityReason ? ` (${row.seasonalityReason})` : ""}`}>
