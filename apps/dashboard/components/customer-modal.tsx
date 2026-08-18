@@ -873,25 +873,25 @@ function ForesightDashboard({
       <div className="grid grid-cols-4 gap-3">
         <DashKpi
           icon={<AlertCircle size={14} />}
-          label="Risk sinyali"
+          label="Risk uyarısı"
           value={data.riskFlags.length}
           tone={data.riskFlags.length > 0 ? "bad" : "muted"}
         />
         <DashKpi
           icon={<Calendar size={14} />}
-          label="14 günde olay"
+          label="Yaklaşan olay (14g)"
           value={data.events.length}
           tone={data.events.length > 0 ? "accent" : "muted"}
         />
         <DashKpi
           icon={<TrendingDown size={14} />}
-          label="Düşmüş kategori"
+          label="Bıraktığı kategori"
           value={data.dropped.length}
           tone={data.dropped.length > 0 ? "warn" : "muted"}
         />
         <DashKpi
           icon={<Users size={14} />}
-          label="Segment fırsatı"
+          label="Benzerinin aldığı"
           value={data.cohort.length}
           tone={data.cohort.length > 0 ? "accent" : "muted"}
         />

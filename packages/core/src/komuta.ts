@@ -405,32 +405,27 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
 
   // Birim-bağımlı KPI seçimi — 9LE modunda Ciro yerine Hacim primary olur.
   const isVolume = unit === "9le";
-  const primaryValue = isVolume ? sonAdet : sonCiro;
-  const primaryPrev = isVolume ? oncekiAdet : oncekiCiro;
-  const primaryLabel = isVolume
-    ? "Toplam Hacim (9L) · 30 gün"
-    : "Toplam Net Ciro · 30 gün";
-  const primaryUnit = isVolume ? "9L" : "₺";
-  const primaryFormat: KomutaKpiCard["format"] = isVolume ? "count" : "compact";
+  // md6: KPI şeridinin İLK kartı her zaman Hacim (70cl). İkinci kart TL modda
+  // Net Ciro, 9LE modda toplam fatura. Birim etiketi tenant'tan (wietnauer "70cl").
+  const volShort = getTenantConfig().volume.short;
 
   return [
     {
-      id: "ciro",
-      label: primaryLabel,
-      value: primaryValue,
-      format: primaryFormat,
-      unit: primaryUnit,
+      id: "hacim",
+      label: `Toplam Hacim (${volShort}) · 30 gün`,
+      value: sonAdet,
+      format: "count",
+      unit: volShort,
       delta:
-        primaryPrev > 0
-          ? ((primaryValue - primaryPrev) / primaryPrev) * 100
+        oncekiAdet > 0
+          ? ((sonAdet - oncekiAdet) / oncekiAdet) * 100
           : (null as never),
       deltaSub:
-        primaryPrev > 0
-          ? `vs önceki 30g (${formatCompact(primaryPrev)} ${primaryUnit})`
+        oncekiAdet > 0
+          ? `vs önceki 30g (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShort})`
           : "geçmiş veri yok",
     },
-    // İkinci KPI — primary TL ise Hacim'i, primary 9LE ise toplam fatura
-    // sayısını göster (volume modunda Hacim duplicate olur, anlamsız).
+    // İkinci KPI — TL modda Net Ciro, 9LE modda toplam fatura (hacim yukarıda).
     isVolume
       ? {
           id: "fatura",
@@ -446,18 +441,18 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
           deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura`,
         }
       : {
-          id: "hacim",
-          label: "Hacim (9L) · 30 gün",
-          value: sonAdet,
-          format: "count" as const,
-          unit: "9L",
+          id: "ciro",
+          label: "Toplam Net Ciro · 30 gün",
+          value: sonCiro,
+          format: "compact" as const,
+          unit: "₺",
           delta:
-            oncekiAdet > 0
-              ? ((sonAdet - oncekiAdet) / oncekiAdet) * 100
+            oncekiCiro > 0
+              ? ((sonCiro - oncekiCiro) / oncekiCiro) * 100
               : (null as never),
           deltaSub:
-            oncekiAdet > 0
-              ? `vs önceki 30g (${Math.round(oncekiAdet).toLocaleString("tr-TR")} 9L)`
+            oncekiCiro > 0
+              ? `vs önceki 30g (${formatCompact(oncekiCiro)} ₺)`
               : "geçmiş veri yok",
         },
     {
@@ -1257,7 +1252,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       ORDER BY ciro DESC
     ),
     top_grup AS (
-      SELECT TOP 6
+      SELECT TOP 8
         COALESCE(g.TXTAD, u.TXTAD) AS grup,
         ${valExpr} AS ciro
       FROM dbo.TBLMSDFATURA f
@@ -1277,6 +1272,12 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
     ),
+    -- md17: sütunlar = Top8 grup + "Diğer" (top-dışı gruplar tek sütunda).
+    grup_cols AS (
+      SELECT grup, ciro FROM top_grup
+      UNION ALL
+      SELECT N'Diğer' AS grup, CAST(-1 AS decimal(18,8)) AS ciro
+    ),
     -- VYK-02: iki correlated subquery (her biri TBLMSDFATURA+3 JOIN tekrar
     -- tarayan) yerine, dist_grup x FATURA x URUN tek kez taranip hem
     -- son 30 gun hem gecen yil ayni 30 gun pencerelerini CASE-WHEN ile
@@ -1285,7 +1286,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
     agg AS (
       SELECT
         dg2.bolgeKod,
-        COALESCE(g.TXTAD, u.TXTAD) AS grup,
+        ISNULL(tgk.grup, N'Diğer') AS grup,
         SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
                   AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
                  THEN ${unit === "9le" ? `dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})` : "dd.DBLNETFIYAT"}
@@ -1302,6 +1303,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       ${eksahaJoin}
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
+      LEFT JOIN top_grup tgk ON tgk.grup = COALESCE(g.TXTAD, u.TXTAD)
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND (
           (f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})  AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()}))
@@ -1309,9 +1311,8 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
           (f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()}))
         )
         AND dg2.bolgeKod IN (SELECT bolgeKod FROM top_bolge)
-        AND COALESCE(g.TXTAD, u.TXTAD) IN (SELECT grup FROM top_grup)
         ${distClause}
-      GROUP BY dg2.bolgeKod, COALESCE(g.TXTAD, u.TXTAD)
+      GROUP BY dg2.bolgeKod, ISNULL(tgk.grup, N'Diğer')
     )
     SELECT
       tb.bolge,
@@ -1320,7 +1321,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       ISNULL(a.son, 0) AS son,
       ISNULL(a.onceki, 0) AS onceki
     FROM top_bolge tb
-    CROSS JOIN top_grup tg
+    CROSS JOIN grup_cols tg
     LEFT JOIN agg a ON a.bolgeKod = tb.bolgeKod AND a.grup = tg.grup
     ORDER BY tb.ciro DESC, tg.ciro DESC
   `;
@@ -1476,8 +1477,8 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
     ? "LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26"
     : "";
   const sql = `
-    WITH top10 AS (
-      SELECT TOP 10
+    WITH top8 AS (
+      SELECT TOP 8
         COALESCE(g.TXTAD, u.TXTAD) AS grup,
         ${top10Sum} AS ciro
       FROM dbo.TBLMSDFATURA f
@@ -1516,15 +1517,28 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         ${distClause}
     )
-    SELECT
-      t.grup,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()})  AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()})  AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y
-    FROM top10 t
-    LEFT JOIN raw ON raw.grup = t.grup
-    GROUP BY t.grup, t.ciro
-    ORDER BY t.ciro DESC
+    SELECT grup, bu, one_y, two_y FROM (
+      SELECT
+        t.grup AS grup,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()})  AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()})  AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
+        t.ciro AS sort_ciro, 0 AS is_other
+      FROM top8 t
+      LEFT JOIN raw ON raw.grup = t.grup
+      GROUP BY t.grup, t.ciro
+      UNION ALL
+      -- md18: Top8 dışı tüm gruplar tek "Diğer" satırında.
+      SELECT
+        N'Diğer' AS grup,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()})  AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()})  AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
+        -1 AS sort_ciro, 1 AS is_other
+      FROM raw
+      WHERE raw.grup IS NOT NULL AND raw.grup NOT IN (SELECT grup FROM top8)
+    ) x
+    ORDER BY is_other, sort_ciro DESC
   `;
   const out = await runReadOnly(sql, { limit: 15, timeoutMs: 90_000 });
   const tierMaster = await loadTierMaster();

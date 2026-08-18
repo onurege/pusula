@@ -22,6 +22,7 @@ import { withCache } from "./cache.js";
 import { sqlNow } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { foldOther, sumBy } from "./fold-other.js";
 
 const CACHE_DOMAIN = "wietnauer-marka";
 // v3: cache-key scope fragmentation düzeltmesi (VYK-01) — dist filtresi
@@ -43,6 +44,10 @@ export type MarkaPortfolioRow = {
   payPct: number;
   rank: number;
   isStratejik: boolean;
+  /** "Diğer" katlanmış satır (Top-N dışı kalanların toplamı). */
+  isOther?: boolean;
+  /** Dip toplam satırı. */
+  isTotal?: boolean;
 };
 
 export type TopSkuRow = {
@@ -58,6 +63,10 @@ export type TopSkuRow = {
   payPct: number;
   rank: number;
   isStratejik: boolean;
+  /** "Diğer" katlanmış satır (Top-N dışı kalanların toplamı). */
+  isOther?: boolean;
+  /** Dip toplam satırı. */
+  isTotal?: boolean;
 };
 
 export type BrandPenetrationRow = {
@@ -71,6 +80,10 @@ export type BrandPenetrationRow = {
   penetrasyonPct: number;
   rank: number;
   isStratejik: boolean;
+  /** "Diğer" katlanmış satır (Top-N dışı kalanların toplamı). */
+  isOther?: boolean;
+  /** Dip toplam / referans satırı (penetrasyon toplanamaz → aktif müşteri referansı). */
+  isTotal?: boolean;
 };
 
 export type StratBrandTopSku = {
@@ -216,18 +229,58 @@ function aggregateBrandPortfolio(
       });
     }
   }
-  const toplamCiro = [...byMarka.values()].reduce((a, b) => a + b.ciro, 0);
-  const sorted = [...byMarka.values()].sort((a, b) => b.ciro - a.ciro).slice(0, 20);
-  const out = sorted.map((m, i) => ({
-    marka: m.marka,
-    markaKod: m.markaKod,
-    ciro: m.ciro,
-    musteriSayi: m.musteriSayi,
-    faturaSayisi: m.faturaSayisi,
-    payPct: toplamCiro > 0 ? Number(((m.ciro / toplamCiro) * 100).toFixed(2)) : 0,
-    rank: i + 1,
-    isStratejik: stratSet.has(m.marka.toLocaleLowerCase("tr")),
-  }));
+  type MarkaAgg = {
+    marka: string;
+    markaKod: string;
+    ciro: number;
+    musteriSayi: number;
+    faturaSayisi: number;
+  };
+  const all = [...byMarka.values()];
+  const toplamCiro = all.reduce((a, b) => a + b.ciro, 0);
+  const sorted = all.sort((a, b) => b.ciro - a.ciro);
+
+  // Top 15 marka + "Diğer" (kalanların toplamı). Dip toplam ayrıca eklenir.
+  const { rows: folded } = foldOther<MarkaAgg>(sorted, {
+    keep: 15,
+    other: (rest) => ({
+      marka: "Diğer",
+      markaKod: "__other__",
+      ciro: sumBy(rest, (r) => r.ciro),
+      musteriSayi: sumBy(rest, (r) => r.musteriSayi),
+      faturaSayisi: sumBy(rest, (r) => r.faturaSayisi),
+    }),
+  });
+
+  const out: MarkaPortfolioRow[] = folded.map((m, i) => {
+    const isOther = m.markaKod === "__other__";
+    const row: MarkaPortfolioRow = {
+      marka: m.marka,
+      markaKod: m.markaKod,
+      ciro: m.ciro,
+      musteriSayi: m.musteriSayi,
+      faturaSayisi: m.faturaSayisi,
+      payPct: toplamCiro > 0 ? Number(((m.ciro / toplamCiro) * 100).toFixed(2)) : 0,
+      rank: isOther ? 0 : i + 1,
+      isStratejik: isOther ? false : stratSet.has(m.marka.toLocaleLowerCase("tr")),
+    };
+    if (isOther) row.isOther = true;
+    return row;
+  });
+
+  // Dip toplam satırı
+  out.push({
+    marka: "Toplam",
+    markaKod: "__total__",
+    ciro: toplamCiro,
+    musteriSayi: sumBy(all, (r) => r.musteriSayi),
+    faturaSayisi: sumBy(all, (r) => r.faturaSayisi),
+    payPct: 100,
+    rank: 0,
+    isStratejik: false,
+    isTotal: true,
+  });
+
   return { rows: out, toplamCiro };
 }
 
@@ -314,10 +367,33 @@ function aggregateTopSkus(
       });
     }
   }
-  return [...byUrun.values()]
-    .sort((a, b) => b.ciro - a.ciro)
-    .slice(0, limit)
-    .map((r, i) => ({
+  type SkuAgg = {
+    urunKod: number;
+    ad: string;
+    marka: string;
+    ciro: number;
+    miktar: number;
+    musteriSayi: number;
+  };
+  const all = [...byUrun.values()];
+  const sorted = all.sort((a, b) => b.ciro - a.ciro);
+
+  // Top-N SKU + "Diğer" (kalanların toplamı). Dip toplam ayrıca eklenir.
+  const { rows: folded } = foldOther<SkuAgg>(sorted, {
+    keep: limit,
+    other: (rest) => ({
+      urunKod: 0,
+      ad: "Diğer",
+      marka: "",
+      ciro: sumBy(rest, (r) => r.ciro),
+      miktar: sumBy(rest, (r) => r.miktar),
+      musteriSayi: sumBy(rest, (r) => r.musteriSayi),
+    }),
+  });
+
+  const out: TopSkuRow[] = folded.map((r, i) => {
+    const isOther = r.urunKod === 0 && r.ad === "Diğer";
+    const row: TopSkuRow = {
       urunKod: r.urunKod,
       ad: r.ad,
       marka: r.marka,
@@ -325,9 +401,29 @@ function aggregateTopSkus(
       miktar: r.miktar,
       musteriSayi: r.musteriSayi,
       payPct: toplamCiro30 > 0 ? (r.ciro / toplamCiro30) * 100 : 0,
-      rank: i + 1,
-      isStratejik: stratSet.has(r.marka.toLocaleLowerCase("tr")),
-    }));
+      rank: isOther ? 0 : i + 1,
+      isStratejik: isOther ? false : stratSet.has(r.marka.toLocaleLowerCase("tr")),
+    };
+    if (isOther) row.isOther = true;
+    return row;
+  });
+
+  // Dip toplam satırı — tüm SKU'ların toplamı
+  const toplamCiro = sumBy(all, (r) => r.ciro);
+  out.push({
+    urunKod: -1,
+    ad: "Toplam",
+    marka: "",
+    ciro: toplamCiro,
+    miktar: sumBy(all, (r) => r.miktar),
+    musteriSayi: sumBy(all, (r) => r.musteriSayi),
+    payPct: toplamCiro30 > 0 ? (toplamCiro / toplamCiro30) * 100 : 0,
+    rank: 0,
+    isStratejik: false,
+    isTotal: true,
+  });
+
+  return out;
 }
 
 /**
@@ -417,10 +513,22 @@ function aggregateBrandPenetration(
       byMarka.set(row.markaKod, { marka: row.marka, markaKod: row.markaKod, musteriSayi: row.musteriSayi });
     }
   }
-  const out = [...byMarka.values()]
-    .sort((a, b) => b.musteriSayi - a.musteriSayi)
-    .slice(0, 20)
-    .map((m, i) => ({
+  type PenAgg = { marka: string; markaKod: string; musteriSayi: number };
+  const sorted = [...byMarka.values()].sort((a, b) => b.musteriSayi - a.musteriSayi);
+
+  // Top 15 marka + "Diğer" (kalanların distinct müşteri toplamı).
+  const { rows: folded } = foldOther<PenAgg>(sorted, {
+    keep: 15,
+    other: (rest) => ({
+      marka: "Diğer",
+      markaKod: "__other__",
+      musteriSayi: sumBy(rest, (r) => r.musteriSayi),
+    }),
+  });
+
+  const out: BrandPenetrationRow[] = folded.map((m, i) => {
+    const isOther = m.markaKod === "__other__";
+    const row: BrandPenetrationRow = {
       marka: m.marka,
       markaKod: m.markaKod,
       musteriSayi: m.musteriSayi,
@@ -429,9 +537,25 @@ function aggregateBrandPenetration(
         aktifMusteriToplam > 0
           ? Number(((m.musteriSayi * 100) / aktifMusteriToplam).toFixed(2))
           : 0,
-      rank: i + 1,
-      isStratejik: stratSet.has(m.marka.toLocaleLowerCase("tr")),
-    }));
+      rank: isOther ? 0 : i + 1,
+      isStratejik: isOther ? false : stratSet.has(m.marka.toLocaleLowerCase("tr")),
+    };
+    if (isOther) row.isOther = true;
+    return row;
+  });
+
+  // Penetrasyon toplanabilir DEĞİL → dip toplam yerine referans "toplam aktif müşteri".
+  out.push({
+    marka: "Toplam",
+    markaKod: "__total__",
+    musteriSayi: aktifMusteriToplam,
+    aktifMusteriToplam,
+    penetrasyonPct: 100,
+    rank: 0,
+    isStratejik: false,
+    isTotal: true,
+  });
+
   return { rows: out, aktifMusteriToplam };
 }
 

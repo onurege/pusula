@@ -26,7 +26,7 @@ import { UnitToggle } from "@/components/komuta/UnitToggle";
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
 // böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
 export const metadata = {
-  title: "Komuta · Enroute Pusula",
+  title: "Komuta · NORA 4Sight",
 };
 
 type Props = {
@@ -1183,7 +1183,7 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
             window="Son 30g vs -395..-365g (geçen yıl aynı pencere)"
             base="SUM(DBLNETFIYAT × DBLMIKTAR) her bölge × her grup hücresi"
             notes={[
-              "Top 8 bölge × Top 6 ürün grubu (detay ciro toplamına göre)",
+              "Top 8 bölge × Top 8 grup + Diğer (detay ciro toplamına göre)",
               "yoyPct = (son − önceki)/önceki × 100; bucket sınıfı (fire/hot/warm/flat/cool/cold) Komuta CSS palette'i",
               "Sadece kırmızı (cool/cold) hücreler tıklanabilir → Finans Agentı modal",
             ]}
@@ -1387,7 +1387,7 @@ function PortfolioPanel({
             ]}
           />
         </div>
-        <div className="panel-meta">Top 10 grup</div>
+        <div className="panel-meta">Top 8 grup + Diğer</div>
       </div>
       {portfolio.length === 0 ? (
         <div className="empty-note">Portföy verisi yok.</div>

@@ -8,7 +8,9 @@ import type { TopSkuRow } from "./types";
  * gösterilir; stratejik marka SKU'ları accent vurgusu alır.
  */
 export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
-  const top10Pay = rows.reduce((a, r) => a + r.payPct, 0);
+  // "Diğer" ve dip toplam satırları pay yüzdesi toplamına dahil edilmez.
+  const skuRows = rows.filter((r) => !r.isOther && !r.isTotal);
+  const top10Pay = skuRows.reduce((a, r) => a + r.payPct, 0);
 
   return (
     <div className="v3-panel">
@@ -36,46 +38,54 @@ export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {skuRows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="empty">
                   Son 30 günde SKU verisi yok.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.urunKod}>
-                  <td className="rank">{r.rank}</td>
-                  <td className="ad" title={r.ad}>
-                    {r.ad.length > 60 ? r.ad.slice(0, 57) + "…" : r.ad}
-                  </td>
-                  <td>
-                    <span
-                      className={`brand-chip ${r.isStratejik ? "strat" : ""}`}
-                      title={r.isStratejik ? "Stratejik marka" : undefined}
-                    >
-                      {r.isStratejik && <span className="strat-dot" />}
-                      {r.marka || "—"}
-                    </span>
-                  </td>
-                  <td className="num">₺{formatCompact(r.ciro)}</td>
-                  <td className="num">
-                    {r.miktar.toLocaleString("tr-TR", {
-                      maximumFractionDigits: 0,
-                    })}
-                  </td>
-                  <td className="num">
-                    {r.musteriSayi.toLocaleString("tr-TR")}
-                  </td>
-                  <td className="num pay">
-                    <span
-                      className="pay-bar"
-                      style={{ width: `${Math.min(r.payPct * 12, 100)}%` }}
-                    />
-                    <span className="pay-val">%{r.payPct.toFixed(2)}</span>
-                  </td>
-                </tr>
-              ))
+              rows.map((r) => {
+                const special = r.isOther || r.isTotal;
+                const rowClass = r.isTotal ? "total-row" : r.isOther ? "other-row" : "";
+                return (
+                  <tr key={r.urunKod} className={rowClass}>
+                    <td className="rank">{special ? "" : r.rank}</td>
+                    <td className="ad" title={r.ad}>
+                      {r.ad.length > 60 ? r.ad.slice(0, 57) + "…" : r.ad}
+                    </td>
+                    <td>
+                      {special ? null : (
+                        <span
+                          className={`brand-chip ${r.isStratejik ? "strat" : ""}`}
+                          title={r.isStratejik ? "Stratejik marka" : undefined}
+                        >
+                          {r.isStratejik && <span className="strat-dot" />}
+                          {r.marka || "—"}
+                        </span>
+                      )}
+                    </td>
+                    <td className="num">₺{formatCompact(r.ciro)}</td>
+                    <td className="num">
+                      {r.miktar.toLocaleString("tr-TR", {
+                        maximumFractionDigits: 0,
+                      })}
+                    </td>
+                    <td className="num">
+                      {r.musteriSayi.toLocaleString("tr-TR")}
+                    </td>
+                    <td className="num pay">
+                      {!r.isTotal && (
+                        <span
+                          className="pay-bar"
+                          style={{ width: `${Math.min(r.payPct * 12, 100)}%` }}
+                        />
+                      )}
+                      <span className="pay-val">%{r.payPct.toFixed(2)}</span>
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>
@@ -99,6 +109,10 @@ export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
         .v3-table td.ad { font-weight: 500; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .v3-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
         .v3-table td.empty { text-align: center; color: var(--color-muted); padding: 24px; }
+        .v3-table tbody tr.other-row td { font-style: italic; color: var(--color-muted); border-top: 1px solid var(--color-border); }
+        .v3-table tbody tr.other-row:hover { background: transparent; }
+        .v3-table tbody tr.total-row td { font-weight: 700; color: var(--color-fg); border-top: 2px solid var(--color-fg); }
+        .v3-table tbody tr.total-row:hover { background: transparent; }
         .v3-table td.pay { position: relative; min-width: 90px; }
         .pay-bar { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); height: 4px; background: var(--color-accent-soft); border-radius: 2px; z-index: 0; opacity: 0.7; }
         .pay-val { position: relative; z-index: 1; color: var(--color-fg-2); font-weight: 500; }

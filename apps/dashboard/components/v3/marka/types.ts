@@ -14,6 +14,8 @@ export type MarkaPortfolioRow = {
   payPct: number;
   rank: number;
   isStratejik: boolean;
+  isOther?: boolean;
+  isTotal?: boolean;
 };
 
 export type TopSkuRow = {
@@ -26,6 +28,8 @@ export type TopSkuRow = {
   payPct: number;
   rank: number;
   isStratejik: boolean;
+  isOther?: boolean;
+  isTotal?: boolean;
 };
 
 export type BrandPenetrationRow = {
@@ -36,6 +40,8 @@ export type BrandPenetrationRow = {
   penetrasyonPct: number;
   rank: number;
   isStratejik: boolean;
+  isOther?: boolean;
+  isTotal?: boolean;
 };
 
 export type StratBrandTopSku = {
