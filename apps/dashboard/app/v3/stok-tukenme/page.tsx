@@ -10,7 +10,7 @@ import { getTenantConfig } from "@/lib/tenant";
 import { formatCompact } from "@/components/komuta/format";
 import { StokDistSelect } from "@/components/v3/stok/StokDistSelect";
 
-export const metadata = { title: "Stok Tükenme · V3 · Enroute Pusula" };
+export const metadata = { title: "Stok Tükenme · V3 · NORA 4Sight" };
 
 type Props = {
   searchParams: Promise<{ distId?: string }>;

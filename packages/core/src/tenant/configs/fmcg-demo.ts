@@ -22,10 +22,10 @@ import type { TenantConfig } from "../types";
  */
 export const FMCG_DEMO_CONFIG: TenantConfig = {
   id: "fmcg-demo",
-  displayName: "FMCG Demo · Pusula",
+  displayName: "FMCG Demo · NORA 4Sight",
   industry: "fmcg",
   logoMark: "FM",
-  productName: "Enroute Pusula",
+  productName: "NORA 4Sight",
 
   // Sentetik demo (MSSQL yok) — statik demo login + refresh kapalı.
   demoData: true,

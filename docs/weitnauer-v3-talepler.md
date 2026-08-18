@@ -1,4 +1,4 @@
-# Weitnauer Pusula v3 — Gelen Talepler & Düzeltmeler (sunum sonrası)
+# Weitnauer NORA 4Sight v3 — Gelen Talepler & Düzeltmeler (sunum sonrası)
 
 Sunum sonrası gelen 44 talebin temize çekilmiş, gruplanmış ve netleştirilmiş hali.
 Her madde no'su parantezde `(mdN)` — orijinal listeyle izlenebilirlik için.

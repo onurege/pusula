@@ -1,5 +1,5 @@
 /**
- * Tenant configuration — Pusula codebase'i hangi müşteriye/sektöre özelleştir.
+ * Tenant configuration — NORA 4Sight codebase'i hangi müşteriye/sektöre özelleştir.
  *
  * Tek tipi N müşteriye satabilmek için ürün-özel string'ler, birimler ve
  * UI label'ları bu config'e konsolide edilir. Pernod default; FMCG demo
@@ -80,7 +80,7 @@ export type TenantConfig = {
   industry: Industry;
   /** Navbar köşesindeki 2-karakter logo — "EP" / "FM" / vb. */
   logoMark: string;
-  /** Ürün adı — her zaman "Enroute Pusula" ama tenant özelleştirmesi mümkün. */
+  /** Ürün adı — her zaman "NORA 4Sight" ama tenant özelleştirmesi mümkün. */
   productName: string;
 
   // -- Veri kaynağı -----------------------------------------------------------

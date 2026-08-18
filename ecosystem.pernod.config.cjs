@@ -1,4 +1,4 @@
-// PM2 process yöneticisi — Enroute Pusula PERNOD (OFFLINE snapshot).
+// PM2 process yöneticisi — NORA 4Sight PERNOD (OFFLINE snapshot).
 // Kullanım:  pm2 start ecosystem.pernod.config.cjs  →  pm2 save
 //
 // Bu sunucunun Pernod MSSQL'ine (bulutistan) ağ erişimi YOK. Bu yüzden

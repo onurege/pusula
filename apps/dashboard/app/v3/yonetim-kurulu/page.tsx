@@ -20,7 +20,7 @@ type IskontoSegmentsSlice = {
   }>;
 };
 
-export const metadata = { title: "Yönetim Kurulu · V3 · Enroute Pusula" };
+export const metadata = { title: "Yönetim Kurulu · V3 · NORA 4Sight" };
 
 /**
  * V3 Dashboard #1 — Yönetim Kurulu.

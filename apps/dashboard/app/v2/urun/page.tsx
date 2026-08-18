@@ -10,7 +10,7 @@ import { ExecutionGapScatter } from "@/components/komuta/panels/ExecutionGapScat
 import { UnitToggle } from "@/components/komuta/UnitToggle";
 
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
-export const metadata = { title: "Ürün · V2 · Enroute Pusula" };
+export const metadata = { title: "Ürün · V2 · NORA 4Sight" };
 
 const tabs: SubTab[] = [
   { id: "treemap", label: "Treemap", icon: <Boxes size={12} /> },

@@ -1,6 +1,6 @@
 import { MapPageBody } from "@/components/map-page-body";
 
-export const metadata = { title: "Harita · V3 · Enroute Pusula" };
+export const metadata = { title: "Harita · V3 · NORA 4Sight" };
 
 /**
  * V3 Satış Haritası — V1 /map ve V2 /v2/harita ile aynı içerik, sadece

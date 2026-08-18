@@ -8,7 +8,7 @@ import { NewCustomersPanel } from "@/components/v3/satis/NewCustomersPanel";
 import { AvgOrderTrendPanel } from "@/components/v3/satis/AvgOrderTrendPanel";
 import { formatCompact } from "@/components/komuta/format";
 
-export const metadata = { title: "Satış Performansı · V3 · Enroute Pusula" };
+export const metadata = { title: "Satış Performansı · V3 · NORA 4Sight" };
 
 /**
  * V3 Dashboard #2 — Satış Performansı.

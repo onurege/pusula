@@ -9,7 +9,7 @@ import { VisitConversionPanel } from "@/components/v3/saha/VisitConversionPanel"
 import { DistributorComparisonPanel } from "@/components/v3/saha/DistributorComparisonPanel";
 import { formatCompact } from "@/components/komuta/format";
 
-export const metadata = { title: "Saha Operasyon · V3 · Enroute Pusula" };
+export const metadata = { title: "Saha Operasyon · V3 · NORA 4Sight" };
 
 /**
  * V3 Dashboard #5 — Distribütör & Saha Operasyon.

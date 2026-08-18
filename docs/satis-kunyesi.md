@@ -1,6 +1,6 @@
-# Enroute Pusula — Satış Künyesi & Sözleşme Eki
+# NORA 4Sight — Satış Künyesi & Sözleşme Eki
 
-> **Amaç.** Bu döküman, Enroute Pusula ürünü için satış sözleşmesi
+> **Amaç.** Bu döküman, NORA 4Sight ürünü için satış sözleşmesi
 > hazırlayacak kişiye teknik ve ticari kapsamı tek bakışta verir.
 > Müşteri-bağımsız yazılmıştır; her prospect için 16. bölümdeki
 > **Müzakere Değişkenleri** yaprağı doldurulur.
@@ -9,7 +9,7 @@
 
 ## 1. Yönetici Özeti
 
-**Enroute Pusula**, Univera ERP üstünde çalışan, satış yönetimi ve saha
+**NORA 4Sight**, Univera ERP üstünde çalışan, satış yönetimi ve saha
 operasyonları için **10 ekranlı analitik dashboard + yapay zekâ destekli
 karar asistanı**dır. Dağıtıcı şirketler (FMCG/alkollü içecek/gıda) için
 canlı satış verisini Türkiye'nin 81 ili ve 5 ana bölgesi üzerinden

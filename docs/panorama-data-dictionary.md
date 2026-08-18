@@ -1,6 +1,6 @@
-# Panorama (Pusula) — Data Dictionary
+# Panorama (NORA 4Sight) — Data Dictionary
 
-Univera ERP (`WEITNAUER-DB`) üzerindeki, Panorama/Pusula dashboard'unun kullandığı tablo ve kolonların referansı.
+Univera ERP (`WEITNAUER-DB`) üzerindeki, Panorama/NORA 4Sight dashboard'unun kullandığı tablo ve kolonların referansı.
 Şema + tipler **canlı DB'den (INFORMATION_SCHEMA)** doğrulandı; iş anlamı koddaki sorgulardan çıkarıldı.
 Satır sayıları Weitnauer prod anlıktır (2026-08-04). Tenant: `wietnauer`.
 

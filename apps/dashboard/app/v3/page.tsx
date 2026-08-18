@@ -11,7 +11,7 @@ import {
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { getTenantConfig } from "@/lib/tenant";
 
-export const metadata = { title: "V3 Özet · Enroute Pusula" };
+export const metadata = { title: "V3 Özet · NORA 4Sight" };
 
 /**
  * V3 landing — dashboard'lara tek tık erişim. Her kart:

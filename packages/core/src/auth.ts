@@ -1,7 +1,7 @@
 /**
  * Kullanıcı girişi + dist-bazlı yetkilendirme.
  *
- * text-to-sql uygulamasındaki `lib/auth.ts` desenini Pusula'nın iki-servisli
+ * text-to-sql uygulamasındaki `lib/auth.ts` desenini NORA 4Sight'ın iki-servisli
  * mimarisine (ayrı Hono API + Next dashboard) uyarlar:
  *
  *   - Kimlik doğrulama Univera'nın `TBLKULLANICI` tablosundan

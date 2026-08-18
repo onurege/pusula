@@ -8,7 +8,7 @@ import { CalendarChart } from "@/components/komuta/CalendarChart";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
 
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
-export const metadata = { title: "Komuta · V2 · Enroute Pusula" };
+export const metadata = { title: "Komuta · V2 · NORA 4Sight" };
 
 type Props = {
   searchParams: Promise<{

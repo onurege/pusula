@@ -9,7 +9,7 @@ import { RecoveryPanel } from "@/components/v3/aktivasyon/RecoveryPanel";
 import type { AktivasyonSnapshot } from "@/components/v3/aktivasyon/types";
 
 export const metadata = {
-  title: "Müşteri Aktivasyon & Risk · V3 · Enroute Pusula",
+  title: "Müşteri Aktivasyon & Risk · V3 · NORA 4Sight",
 };
 
 /**

@@ -9,7 +9,7 @@ import {
 import { listReports, type ReportSummary } from "@/lib/api";
 
 // `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
-export const metadata = { title: "Raporlar · V2 · Enroute Pusula" };
+export const metadata = { title: "Raporlar · V2 · NORA 4Sight" };
 
 /**
  * V2 Raporlar — Raporlar + Yeni Rapor + Şema buraya konsolide.
