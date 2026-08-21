@@ -1,6 +1,6 @@
-# NORA 4Sight FMCG Demo
+# Insider FMCG Demo
 
-Bu repo, **NORA 4Sight**'nın FMCG sektörü prospect sunumları için demo
+Bu repo, **Insider**'nın FMCG sektörü prospect sunumları için demo
 varyantıdır. Karma FMCG verisi (çikolata, bisküvi, kahve, temizlik, atıştırmalık
 karışık) ile çalışır. Pernod'un canlı sahasına bağlı **değildir** — tamamen
 sentetik veri üzerinden çalışır.
@@ -25,7 +25,7 @@ npm run dashboard:dev:fmcg
 Tarayıcı: <http://localhost:3000>
 
 Beklenen görüntü:
-- Navbar'da `FM` logosu + "NORA 4Sight" başlığı
+- Navbar'da `FM` logosu + "Insider" başlığı
 - `/v2` ana sayfasında "Bu Sabah Sahada Ne Oluyor"
 - 2.000 fake müşteri, 30 distribütör, 81 il
 - Risk dağılımı: ~%56 healthy / %26 watch / %7 risk / %11 critical

@@ -26,7 +26,7 @@ import { UnitToggle } from "@/components/komuta/UnitToggle";
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
 // böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
 export const metadata = {
-  title: "Komuta · NORA 4Sight",
+  title: "Komuta · Insider",
 };
 
 type Props = {

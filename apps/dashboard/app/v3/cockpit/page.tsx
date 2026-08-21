@@ -5,6 +5,6 @@
 // burada da otomatik yansır.
 import KomutaPage from "@/app/komuta/page";
 
-export const metadata = { title: "Cockpit · V3 · NORA 4Sight" };
+export const metadata = { title: "Cockpit · V3 · Insider" };
 
 export default KomutaPage;

@@ -1,5 +1,5 @@
 /**
- * Tenant configuration — NORA 4Sight codebase'i hangi müşteriye/sektöre özelleştir.
+ * Tenant configuration — Insider codebase'i hangi müşteriye/sektöre özelleştir.
  *
  * Tek tipi N müşteriye satabilmek için ürün-özel string'ler, birimler ve
  * UI label'ları bu config'e konsolide edilir. Pernod default; FMCG demo
@@ -80,7 +80,7 @@ export type TenantConfig = {
   industry: Industry;
   /** Navbar köşesindeki 2-karakter logo — "EP" / "FM" / vb. */
   logoMark: string;
-  /** Ürün adı — her zaman "NORA 4Sight" ama tenant özelleştirmesi mümkün. */
+  /** Ürün adı — her zaman "Insider" ama tenant özelleştirmesi mümkün. */
   productName: string;
 
   // -- Veri kaynağı -----------------------------------------------------------
@@ -169,6 +169,12 @@ export type TenantConfig = {
     forceLightTheme?: boolean;
     /** Navbar'dan gizlenecek nav href'leri (ör. demo'da /reports, /schema). */
     hiddenNavHrefs?: string[];
+    /**
+     * Navbar logo rozeti için görsel yolu (public/ altında, ör.
+     * "/brand/univera-symbol-white.svg"). Tanımlıysa `logoMark` metni yerine
+     * bu görsel gösterilir. Tanımsızsa `logoMark` harfleri gösterilir.
+     */
+    logoSrc?: string;
   };
 
   /**

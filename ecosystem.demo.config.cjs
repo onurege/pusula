@@ -1,4 +1,4 @@
-// PM2 process yöneticisi — NORA 4Sight DEMO (fmcg-demo tenant).
+// PM2 process yöneticisi — Insider DEMO (fmcg-demo tenant).
 // Kullanım:  pm2 start ecosystem.demo.config.cjs  →  pm2 save
 //
 // Bu config AYRI bir demo sunucusu içindir:

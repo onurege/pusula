@@ -8,7 +8,7 @@ import { BrandPenetrationPanel } from "@/components/v3/marka/BrandPenetrationPan
 import { StrategicBrandZoom } from "@/components/v3/marka/StrategicBrandZoom";
 import type { WietnauerMarkaSnapshot } from "@/components/v3/marka/types";
 
-export const metadata = { title: "Marka & SKU · V3 · NORA 4Sight" };
+export const metadata = { title: "Marka & SKU · V3 · Insider" };
 
 /**
  * V3 Dashboard #4 — Marka & SKU Performansı.

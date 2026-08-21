@@ -11,7 +11,7 @@ import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
 import { getTenantConfig } from "@/lib/tenant";
 
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
-export const metadata = { title: "Müşteri · V2 · NORA 4Sight" };
+export const metadata = { title: "Müşteri · V2 · Insider" };
 
 const tabs: SubTab[] = [
   { id: "genel", label: "Genel", icon: <Compass size={12} /> },

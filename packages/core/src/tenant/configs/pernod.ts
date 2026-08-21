@@ -1,7 +1,7 @@
 import type { TenantConfig } from "../types";
 
 /**
- * Pernod Ricard Türkiye — NORA 4Sight'ın orijinal müşterisi.
+ * Pernod Ricard Türkiye — Insider'ın orijinal müşterisi.
  *
  * `process.env.TENANT` boşsa bu config default olarak kullanılır → mevcut
  * üretim davranışı tam aynı kalır. Yeni tenant'lar eklendikçe burası
@@ -18,7 +18,7 @@ export const PERNOD_CONFIG: TenantConfig = {
   displayName: "Pernod Ricard Türkiye",
   industry: "alcohol",
   logoMark: "EP",
-  productName: "NORA 4Sight",
+  productName: "Insider",
 
   // Mevcut DB dosyası — değişmez. Yeni tenant'lar ayrı dosyaya yazar.
   sqliteFileName: "local.sqlite",

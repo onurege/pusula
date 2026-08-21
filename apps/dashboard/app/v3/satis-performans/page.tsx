@@ -8,7 +8,7 @@ import { NewCustomersPanel } from "@/components/v3/satis/NewCustomersPanel";
 import { AvgOrderTrendPanel } from "@/components/v3/satis/AvgOrderTrendPanel";
 import { formatCompact } from "@/components/komuta/format";
 
-export const metadata = { title: "Satış Performansı · V3 · NORA 4Sight" };
+export const metadata = { title: "Satış Performansı · V3 · Insider" };
 
 /**
  * V3 Dashboard #2 — Satış Performansı.
@@ -37,6 +37,10 @@ export default async function V3SatisPerformansPage() {
   // Üst şerit KPI türevleri — leaderboard'tan kestirme toplamlar.
   const topDistCiro =
     snap?.distLeaderboard.reduce((a, d) => a + d.ciro, 0) ?? 0;
+  // md26: birim = hacim (wietnauer birincil birimi 70cl; toggle Faz 2).
+  const topDistHacim =
+    snap?.distLeaderboard.reduce((a, d) => a + d.hacim, 0) ?? 0;
+  const volShort = tenant.volume?.short ?? "";
   const topDistCount = snap?.distLeaderboard.length ?? 0;
   const topRepCount = snap?.repLeaderboard.length ?? 0;
   const avgOrderLatest =
@@ -68,9 +72,9 @@ export default async function V3SatisPerformansPage() {
           {/* Üst şerit: 4 KPI özet kartı */}
           <div className="v3-kpi-grid">
             <KpiTile
-              label="Top Distribütör Cirosu"
-              value={`₺${formatCompact(topDistCiro)}`}
-              sub={`son 30g · ilk ${topDistCount} distribütör`}
+              label={`Top Distribütör Hacmi${volShort ? ` (${volShort})` : ""}`}
+              value={formatCompact(topDistHacim)}
+              sub={`son 30g · ₺${formatCompact(topDistCiro)} ciro · ${topDistCount} dist`}
             />
             <KpiTile
               label="Top Temsilci Sayısı"

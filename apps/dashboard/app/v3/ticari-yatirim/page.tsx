@@ -7,7 +7,7 @@ import { IskontoBrandPanel } from "@/components/v3/iskonto/IskontoBrandPanel";
 import { IskontoCustomerPanel } from "@/components/v3/iskonto/IskontoCustomerPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
 
-export const metadata = { title: "Ticari Yatırım & İskonto · V3 · NORA 4Sight" };
+export const metadata = { title: "Ticari Yatırım & İskonto · V3 · Insider" };
 
 /**
  * V3 Dashboard #7 — Ticari Yatırım & İskonto.

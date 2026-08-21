@@ -1,4 +1,4 @@
-# NORA 4Sight — Metrik ve Hesaplama Yöntemleri
+# Insider — Metrik ve Hesaplama Yöntemleri
 
 Bu doküman ürünün gösterdiği her sayının nereden geldiğini ve nasıl
 hesaplandığını madde madde açıklar. Yöneticiye sunmak için.

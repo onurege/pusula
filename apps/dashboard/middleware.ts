@@ -16,6 +16,8 @@ export function middleware(req: NextRequest) {
     pathname === "/login" ||
     pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/_next/") ||
+    pathname.startsWith("/fonts/") ||
+    pathname.startsWith("/brand/") ||
     pathname.startsWith("/favicon") ||
     pathname === "/robots.txt";
 

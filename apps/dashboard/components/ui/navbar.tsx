@@ -115,8 +115,17 @@ export function Navbar() {
     <header className="border-b border-border bg-surface/80 backdrop-blur-md sticky top-0 z-40">
       <div className="mx-auto max-w-[1600px] px-5 h-14 flex items-center justify-between">
         <Link href={tenant.ui?.defaultLanding ?? "/"} className="flex items-center gap-2.5 group">
-          <div className="size-7 rounded-lg bg-accent text-accent-fg font-bold flex items-center justify-center text-sm shadow-sm group-hover:shadow-md transition-shadow">
-            {tenant.logoMark}
+          <div className="size-7 rounded-lg bg-accent text-accent-fg font-bold flex items-center justify-center text-sm shadow-sm group-hover:shadow-md transition-shadow overflow-hidden">
+            {tenant.ui?.logoSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={tenant.ui.logoSrc}
+                alt={tenant.productName}
+                className="size-[18px]"
+              />
+            ) : (
+              tenant.logoMark
+            )}
           </div>
           <div className="flex flex-col leading-none">
             <span className="font-semibold tracking-tight text-[15px]">{tenant.productName}</span>

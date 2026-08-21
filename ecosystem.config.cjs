@@ -1,4 +1,4 @@
-// PM2 process yöneticisi — NORA 4Sight (API + Dashboard).
+// PM2 process yöneticisi — Insider (API + Dashboard).
 // Kullanım:  pm2 start ecosystem.config.cjs  →  pm2 save
 //
 // NOT (Windows): PM2'ye "npm" verilmez — Windows'ta npm.cmd'yi node'a JS

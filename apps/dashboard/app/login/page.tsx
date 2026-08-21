@@ -40,7 +40,7 @@ function LoginForm() {
     }
   }
 
-  const brand = tenant?.displayName ?? "NORA 4Sight";
+  const brand = tenant?.displayName ?? "Insider";
 
   return (
     <div className="login-wrap">

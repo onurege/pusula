@@ -25,21 +25,30 @@ const CACHE_DOMAIN = "wietnauer";
 // fetchDiscountKpi (tek satır aggregate) SCOPE'LU KALDI — bu ikisi hâlâ
 // `distClause` ile MSSQL'e sorgu gönderiyor; nightRefresh yalnız merkez'i
 // ısıttığı için bu iki fetcher'ın soğuk-cache maliyeti hâlâ mevcut (bkz. not).
-const CACHE_VERSION = "v6";
+// v7: md22/md23 — fetchTopCustomers → fetchTopDistributors (bundle shape
+// değişti: topCustomers → topDistributors). Eski v6 cache'i geçersiz.
+const CACHE_VERSION = "v7";
 
 // ---------- Tipler ----------------------------------------------------------
 
-export type TopCustomer = {
-  /** TBLMUSTERI.LNGKOD */
+export type TopDistributor = {
+  /** TBLDIST.LNGKOD */
   id: number;
-  unvan: string;
-  sehir: string | null;
+  /** TBLDIST.TXTAD — distribütör adı */
+  ad: string;
+  /** TBLDISTEKGRUP.TXTAD — bölge */
   bolge: string | null;
   /** Son 30g net ciro */
   ciro: number;
   /** Son 30g fatura sayısı */
   faturaSayisi: number;
-  /** Toplam içindeki pay (%) — pasta dilimi için */
+  /** md23: dist'in portföyündeki aktif müşteri sayısı (TBLMUSTERI BYTDURUM=0) */
+  aktifMusteriSayi: number;
+  /** md23: FKMS — son 30g fatura kesilen distinct müşteri sayısı */
+  fkms: number;
+  /** md23: FKMS / aktif müşteri — 30g portföy kapsama oranı (%) */
+  kapsamPct: number;
+  /** Toplam ciro içindeki pay (%) */
   payPct: number;
   rank: number;
 };
@@ -75,56 +84,72 @@ export type DiscountKpi = {
 export type WietnauerYonetimSnapshot = {
   generatedAt: string;
   demoDate: string | null;
-  topCustomers: TopCustomer[]; // Tüm 50, UI'da 10/20/50 toggle ile slicing
+  topDistributors: TopDistributor[]; // md22: ~31 dist, ciro DESC
   brands: BrandContribution[];
   discount: DiscountKpi;
 };
 
 // ---------- Fetcher'lar -----------------------------------------------------
 
-type TopCustomerRawRow = Omit<TopCustomer, "rank" | "payPct"> & { distId: number | null };
+type TopDistributorRawRow = Omit<TopDistributor, "rank" | "payPct" | "kapsamPct">;
 
 /**
- * Son 30 günde fatura kesen TÜM müşteriler (satır seviyesi, ciro DESC).
- * UI tarafı Top 50'yi alıp 10/20/50 toggle ile slice eder.
+ * md22/md23 — Top Distribütör analizi (Top Müşteri analizinin yerini aldı).
  *
- * Scope-free: `TOP 50` kaldırıldı — dist scope uygulanmadan Top 50 kesilirse
- * küçük bir dist'in kendi top müşterileri listeden düşebilir (merkez'in
- * devasa müşterileri listeyi doldurur). ~8-9K aktif müşteri (30g) —
- * wietnauer-stok.ts'teki cardinality (~6K) ile aynı mertebede, JS-filtreye
- * çevirmek güvenli. payPct scope SONRASI (o kapsamın kendi toplamına göre)
- * hesaplanır — public API'de.
+ * İki sorgu paralel, JS'te birleştirilir:
+ *   1) Fatura agregasyonu (dist bazında son 30g ciro, fatura, FKMS)
+ *      — FKMS = COUNT(DISTINCT müşteri) fatura kesen (md23).
+ *   2) Portföy aktif müşteri sayısı (dist bazında, TBLMUSTERI BYTDURUM=0)
+ *      — kapsam paydası (md23); fatura tabanından bağımsız grain, ayrı sorgu.
+ *
+ * Scope-free: tüm dist'ler döner (~31 satır), dist scope + payPct runtime'da
+ * JS'te uygulanır (fetchTopCustomers deseniyle aynı). kapsamPct = FKMS/aktif.
  */
-async function fetchTopCustomers(): Promise<TopCustomerRawRow[]> {
-  const sql = `
+async function fetchTopDistributors(): Promise<TopDistributorRawRow[]> {
+  const salesSql = `
     SELECT
-      f.LNGMUSTERIKOD AS id,
-      f.LNGDISTKOD AS dist_id,
-      m.TXTUNVAN AS unvan,
-      m.TXTSEHIR AS sehir,
+      f.LNGDISTKOD AS id,
+      dst.TXTAD AS ad,
       dg.TXTAD AS bolge,
       SUM(f.DBLNETTUTAR) AS ciro,
-      COUNT(*) AS fatura
+      COUNT(*) AS fatura,
+      COUNT(DISTINCT f.LNGMUSTERIKOD) AS fkms
     FROM dbo.TBLMSDFATURA AS f
-    INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-    LEFT JOIN dbo.TBLDIST d ON d.LNGKOD = m.LNGDISTKOD
-    LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
+    LEFT JOIN dbo.TBLDIST dst ON dst.LNGKOD = f.LNGDISTKOD
+    LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = dst.TXTEKGRUP
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
       AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-    GROUP BY f.LNGMUSTERIKOD, f.LNGDISTKOD, m.TXTUNVAN, m.TXTSEHIR, dg.TXTAD
+    GROUP BY f.LNGDISTKOD, dst.TXTAD, dg.TXTAD
     ORDER BY SUM(f.DBLNETTUTAR) DESC
   `;
-  const result = await runReadOnly(sql, { limit: 20_000, timeoutMs: 60_000 });
-  return result.rows.map((r) => ({
-    id: Number(r.id),
-    distId: r.dist_id != null ? Number(r.dist_id) : null,
-    unvan: String(r.unvan ?? ""),
-    sehir: r.sehir ? String(r.sehir) : null,
-    bolge: r.bolge ? String(r.bolge) : null,
-    ciro: Number(r.ciro ?? 0),
-    faturaSayisi: Number(r.fatura ?? 0),
-  }));
+  // md23: portföy kapsamı — dist altındaki aktif (BYTDURUM=0) müşteri sayısı.
+  const custSql = `
+    SELECT LNGDISTKOD AS id, COUNT(*) AS aktif
+    FROM dbo.TBLMUSTERI
+    WHERE BYTDURUM = 0 AND LNGDISTKOD IS NOT NULL
+    GROUP BY LNGDISTKOD
+  `;
+  const [salesRes, custRes] = await Promise.all([
+    runReadOnly(salesSql, { limit: 5_000, timeoutMs: 60_000 }),
+    runReadOnly(custSql, { limit: 5_000, timeoutMs: 60_000 }),
+  ]);
+  const aktifByDist = new Map<number, number>();
+  for (const r of custRes.rows) {
+    if (r.id != null) aktifByDist.set(Number(r.id), Number(r.aktif ?? 0));
+  }
+  return salesRes.rows.map((r) => {
+    const id = Number(r.id);
+    return {
+      id,
+      ad: r.ad ? String(r.ad) : `Dist ${id}`,
+      bolge: r.bolge ? String(r.bolge) : null,
+      ciro: Number(r.ciro ?? 0),
+      faturaSayisi: Number(r.fatura ?? 0),
+      aktifMusteriSayi: aktifByDist.get(id) ?? 0,
+      fkms: Number(r.fkms ?? 0),
+    };
+  });
 }
 
 type BrandRawRow = {
@@ -286,7 +311,7 @@ function aggregateDiscountKpi(rows: DiscountKpiRawRow[]): DiscountKpi {
 // ---------- Public API ------------------------------------------------------
 
 type RawYonetimBundle = {
-  topCustomers: TopCustomerRawRow[];
+  topDistributors: TopDistributorRawRow[];
   brands: BrandRawRow[];
   discount: DiscountKpiRawRow[];
   generatedAt: string;
@@ -322,13 +347,13 @@ export async function getWietnauerYonetimSnapshot(
     cacheKey,
     async () => {
       // Üç sorgu paralel — toplam latency max(her sorgu).
-      const [topCustomers, brands, discount] = await Promise.all([
-        fetchTopCustomers(),
+      const [topDistributors, brands, discount] = await Promise.all([
+        fetchTopDistributors(),
         fetchBrands(),
         fetchDiscountKpi(),
       ]);
       return {
-        topCustomers,
+        topDistributors,
         brands,
         discount,
         generatedAt: new Date().toISOString(),
@@ -338,7 +363,7 @@ export async function getWietnauerYonetimSnapshot(
   );
 
   const {
-    topCustomers: rawTopCustomers,
+    topDistributors: rawTopDistributors,
     brands: rawBrands,
     discount: rawDiscount,
     generatedAt,
@@ -353,21 +378,25 @@ export async function getWietnauerYonetimSnapshot(
     return distId != null && effectiveDistKods.includes(distId);
   };
 
-  const scopedTopCustomers = rawTopCustomers.filter((r) => inScope(r.distId));
+  const scopedTopDistributors = rawTopDistributors.filter((r) => inScope(r.id));
   const scopedBrandsRaw = rawBrands.filter((r) => inScope(r.distId));
   const scopedDiscount = rawDiscount.filter((r) => inScope(r.distId));
 
-  const toplamCiro30 = scopedTopCustomers.reduce((a, r) => a + r.ciro, 0);
-  const topCustomers = scopedTopCustomers
+  const toplamCiro30 = scopedTopDistributors.reduce((a, r) => a + r.ciro, 0);
+  const topDistributors = scopedTopDistributors
     .sort((a, b) => b.ciro - a.ciro)
-    .slice(0, 50)
     .map((r, i) => ({
       id: r.id,
-      unvan: r.unvan,
-      sehir: r.sehir,
+      ad: r.ad,
       bolge: r.bolge,
       ciro: r.ciro,
       faturaSayisi: r.faturaSayisi,
+      aktifMusteriSayi: r.aktifMusteriSayi,
+      fkms: r.fkms,
+      kapsamPct:
+        r.aktifMusteriSayi > 0
+          ? Number(((r.fkms / r.aktifMusteriSayi) * 100).toFixed(1))
+          : 0,
       payPct: toplamCiro30 > 0 ? Number(((r.ciro / toplamCiro30) * 100).toFixed(2)) : 0,
       rank: i + 1,
     }));
@@ -378,7 +407,7 @@ export async function getWietnauerYonetimSnapshot(
   return {
     generatedAt,
     demoDate: process.env.DEMO_DATE?.trim() || null,
-    topCustomers,
+    topDistributors,
     brands,
     discount,
   };

@@ -1,7 +1,7 @@
 import { MapPageBody } from "@/components/map-page-body";
 
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor.
-export const metadata = { title: "Harita · V2 · NORA 4Sight" };
+export const metadata = { title: "Harita · V2 · Insider" };
 
 /**
  * V2 Satış Haritası — `/map` (V1) ile aynı içeriği gösterir; tek fark

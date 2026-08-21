@@ -14,7 +14,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "NORA 4Sight",
+  title: "Insider",
   description: "Saha satış için yön bulan AI asistanı — risk, fırsat ve aksiyon, tek yerde.",
 };
 

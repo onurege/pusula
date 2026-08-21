@@ -743,13 +743,18 @@ export async function runRadarApi(
 // karşılık gelen endpoint'ler. Tenant config'ten brandTable + strategicBrands
 // okur, tenant başına farklı SQL çalışır.
 
-export type WietnauerTopCustomer = {
+export type WietnauerTopDistributor = {
   id: number;
-  unvan: string;
-  sehir: string | null;
+  ad: string;
   bolge: string | null;
   ciro: number;
   faturaSayisi: number;
+  /** md23: portföydeki aktif müşteri sayısı (BYTDURUM=0) */
+  aktifMusteriSayi: number;
+  /** md23: FKMS — son 30g fatura kesilen distinct müşteri */
+  fkms: number;
+  /** md23: FKMS / aktif müşteri (%) — 30g portföy kapsaması */
+  kapsamPct: number;
   payPct: number;
   rank: number;
 };
@@ -776,7 +781,7 @@ export type WietnauerDiscountKpi = {
 export type WietnauerYonetimSnapshot = {
   generatedAt: string;
   demoDate: string | null;
-  topCustomers: WietnauerTopCustomer[];
+  topDistributors: WietnauerTopDistributor[];
   brands: WietnauerBrandContribution[];
   discount: WietnauerDiscountKpi;
 };
@@ -828,6 +833,8 @@ export type SatisDistRow = {
   ad: string;
   region: string | null;
   ciro: number;
+  /** md26: son 30g hacim (70cl eşdeğer) */
+  hacim: number;
   musteriSayi: number;
   faturaSayi: number;
   ortSepet: number;
@@ -1046,6 +1053,8 @@ export type SahaRepRow = {
   distributor: string | null;
   ziyaret: number;
   uniqueMusteri: number;
+  /** md41: son 30g fatura kesilen distinct müşteri (aktif müşteri) */
+  aktifMusteri: number;
   siparisliZiyaret: number;
   donusumPct: number;
   rutDisiPct: number;

@@ -6,6 +6,8 @@ export type RepRow = {
   distributor: string | null;
   ziyaret: number;
   uniqueMusteri: number;
+  /** md41: son 30g fatura kesilen distinct müşteri */
+  aktifMusteri: number;
   siparisliZiyaret: number;
   donusumPct: number;
   rutDisiPct: number;
@@ -40,7 +42,7 @@ export function RepPerformancePanel({ rows }: { rows: RepRow[] }) {
                 <th>Temsilci</th>
                 <th>Distribütör</th>
                 <th className="num">Ziyaret</th>
-                <th className="num">Müşteri</th>
+                <th className="num">Aktif Müşteri</th>
                 <th className="num">Sipariş</th>
                 <th className="num">Dönüşüm</th>
                 <th className="num">Rut Dışı</th>
@@ -55,7 +57,9 @@ export function RepPerformancePanel({ rows }: { rows: RepRow[] }) {
                   </td>
                   <td>{r.distributor || "—"}</td>
                   <td className="num">{formatCompact(r.ziyaret)}</td>
-                  <td className="num">{r.uniqueMusteri.toLocaleString("tr-TR")}</td>
+                  <td className="num" title="Son 30g fatura kesilen distinct müşteri">
+                    {r.aktifMusteri.toLocaleString("tr-TR")}
+                  </td>
                   <td className="num">{r.siparisliZiyaret.toLocaleString("tr-TR")}</td>
                   <td className="num" style={{ color: r.donusumPct >= 70 ? "var(--color-good, #16a34a)" : r.donusumPct >= 40 ? "var(--color-fg)" : "var(--color-bad, #dc2626)" }}>
                     %{r.donusumPct.toFixed(0)}

@@ -1,40 +1,41 @@
 "use client";
 
 import { useState } from "react";
-import type { WietnauerTopCustomer } from "@/lib/api";
+import type { WietnauerTopDistributor } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
 
-type Limit = 10 | 20 | 50;
+type Limit = 10 | 20 | 0; // 0 = Tümü
 
 /**
- * Top müşteri analizi paneli — Wietnauer'ın Yönetim Kurulu dashboard'unda
- * istenen "Top 10, Top 20, Top 50 müşteri" görünümü.
+ * md22/md23 — Top Distribütör analizi (eski Top Müşteri analizinin yerine).
  *
- * Backend her zaman 50 satır döner; toggle ile UI'da slice'lanır. Sıralama
- * son 30g net ciro DESC. Pay% toplama bağlı yüzde — sahip olunan tüm
- * portföye göre konsantrasyon ölçüsü.
+ * Distribütör bazında son 30g net ciro DESC. Ek olarak (md23):
+ *   - Aktif Müşteri: dist portföyündeki BYTDURUM=0 müşteri (kapsam paydası)
+ *   - FKMS: son 30g fatura kesilen distinct müşteri
+ *   - Kapsam%: FKMS / Aktif Müşteri — portföyün ne kadarına 30g'de satış yapıldı
+ * Pay% = kapsamın toplam cirosuna göre konsantrasyon.
  */
-export function TopCustomersPanel({
-  customers,
+export function TopDistributorsPanel({
+  distributors,
 }: {
-  customers: WietnauerTopCustomer[];
+  distributors: WietnauerTopDistributor[];
 }) {
   const [limit, setLimit] = useState<Limit>(10);
-  const visible = customers.slice(0, limit);
-  const cumulative = visible.reduce((a, c) => a + c.payPct, 0);
+  const visible = limit === 0 ? distributors : distributors.slice(0, limit);
+  const cumulative = visible.reduce((a, d) => a + d.payPct, 0);
 
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Top Müşteri Analizi</div>
+          <div className="v3-panel-title">Top Distribütör Analizi</div>
           <div className="v3-panel-sub">
-            Son 30 gün net ciro · İlk {limit} müşteri portföyün
+            Son 30 gün net ciro · İlk {visible.length} distribütör toplam cironun
             <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor
           </div>
         </div>
         <div className="v3-toggle">
-          {([10, 20, 50] as Limit[]).map((n) => (
+          {([10, 20, 0] as Limit[]).map((n) => (
             <button
               key={n}
               type="button"
@@ -42,7 +43,7 @@ export function TopCustomersPanel({
               className={limit === n ? "active" : ""}
               aria-pressed={limit === n}
             >
-              Top {n}
+              {n === 0 ? "Tümü" : `Top ${n}`}
             </button>
           ))}
         </div>
@@ -53,28 +54,30 @@ export function TopCustomersPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Müşteri</th>
-              <th>Şehir</th>
+              <th>Distribütör</th>
               <th>Bölge</th>
               <th className="num">Ciro (30g)</th>
-              <th className="num">Fatura</th>
+              <th className="num">Aktif Müşteri</th>
+              <th className="num">FKMS</th>
+              <th className="num">Kapsam</th>
               <th className="num">Pay</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((c) => (
-              <tr key={c.id}>
-                <td className="rank">{c.rank}</td>
-                <td className="unvan" title={c.unvan}>
-                  {c.unvan.length > 50 ? c.unvan.slice(0, 47) + "…" : c.unvan}
+            {visible.map((d) => (
+              <tr key={d.id}>
+                <td className="rank">{d.rank}</td>
+                <td className="unvan" title={d.ad}>
+                  {d.ad.length > 50 ? d.ad.slice(0, 47) + "…" : d.ad}
                 </td>
-                <td>{c.sehir || "—"}</td>
-                <td>{c.bolge || "—"}</td>
-                <td className="num">₺{formatCompact(c.ciro)}</td>
-                <td className="num">{c.faturaSayisi.toLocaleString("tr-TR")}</td>
+                <td>{d.bolge || "—"}</td>
+                <td className="num">₺{formatCompact(d.ciro)}</td>
+                <td className="num">{d.aktifMusteriSayi.toLocaleString("tr-TR")}</td>
+                <td className="num">{d.fkms.toLocaleString("tr-TR")}</td>
+                <td className="num kapsam">%{d.kapsamPct.toFixed(1)}</td>
                 <td className="num pay">
-                  <span className="pay-bar" style={{ width: `${Math.min(c.payPct * 8, 100)}%` }} />
-                  <span className="pay-val">%{c.payPct.toFixed(1)}</span>
+                  <span className="pay-bar" style={{ width: `${Math.min(d.payPct * 4, 100)}%` }} />
+                  <span className="pay-val">%{d.payPct.toFixed(1)}</span>
                 </td>
               </tr>
             ))}
@@ -185,6 +188,10 @@ export function TopCustomersPanel({
         .v3-table td.num {
           text-align: right;
           font-variant-numeric: tabular-nums;
+        }
+        .v3-table td.kapsam {
+          color: var(--color-fg-2);
+          font-weight: 500;
         }
         .v3-table td.pay {
           position: relative;

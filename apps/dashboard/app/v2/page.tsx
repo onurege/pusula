@@ -14,7 +14,7 @@ import { CalendarBanner } from "@/components/komuta/panels/CalendarBanner";
 import { getTenantConfig } from "@/lib/tenant";
 
 // `force-dynamic` kaldırıldı — Data Cache 5 dk RAM'de tutsun diye.
-export const metadata = { title: "Radar · V2 · NORA 4Sight" };
+export const metadata = { title: "Radar · V2 · Insider" };
 
 /**
  * V2 Radar (landing) — yöneticinin ilk açtığı sayfa.

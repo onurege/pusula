@@ -21,6 +21,7 @@ import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/ap
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
+import { InfoHint } from "@/components/komuta/InfoHint";
 import { addAction as addWeeklyAction } from "@/components/weekly-actions/store";
 
 type SalesState =
@@ -706,8 +707,22 @@ function RiskScoreCard({
     >
       <div className="flex items-baseline justify-between gap-3">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold flex items-center">
             Risk Skoru
+            <InfoHint
+              title="Risk skoru nasıl hesaplanıyor?"
+              source="Bileşik risk skoru — sync anında hesaplanır (0–100, yüksek = yüksek risk)"
+              window="Son 30 / 90 gün + geçen yıl aynı 30 gün (YoY)"
+              base="4 bileşenin ağırlıklı toplamı"
+              notes={[
+                "Satış Momentumu %40 — ciro ivmesi: son 30g vs önceki 30g, 90g baseline ve geçen yıl aynı dönem.",
+                "Davranışsal %30 — sipariş sıklığı + sepet çeşitliliği sapması (fatura sayısı + distinct ürün grubu).",
+                "Ödeme %20 — ödeme/tahsilat düzeni sinyali.",
+                "Etkileşim %10 — ziyaret cadence'i (son 90g ziyaret sıklığına göre beklenen temas).",
+                "Tier eşikleri: 0–29 sağlıklı · 30–54 izlemede · 55–74 riskli · 75+ kritik.",
+                "Baz ciro < 1.000 TL ise sinyal 'yok' sayılır — yeni/dormant müşteri skoru bozmaz.",
+              ]}
+            />
           </div>
           <div className="mt-1 flex items-baseline gap-2">
             <span

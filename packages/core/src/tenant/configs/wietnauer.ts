@@ -5,7 +5,7 @@ import type { TenantConfig } from "../types.js";
  * dağıtıcısı. Pernod'dan ayrı bir DB (`WEITNAUER_TEST`) üzerinde çalışır;
  * şema aynı Univera ama veri tamamen farklı.
  *
- * Stratejik markaları (Jagermeister, Edrington, Beluga vb.) NORA 4Sight'a
+ * Stratejik markaları (Jagermeister, Edrington, Beluga vb.) Insider'a
  * iletti — bunlar Wietnauer DB'sinde `TBLURUNEKGRUP.TXTAD` ile birebir
  * eşleşmeli. probe-wietnauer.ts ile teyit edilir.
  *
@@ -20,7 +20,7 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   displayName: "Wietnauer Türkiye",
   industry: "alcohol",
   logoMark: "WT",
-  productName: "NORA 4Sight",
+  productName: "Insider",
 
   // Wietnauer sadece V3 dashboard yapısını kullanır: login/kök V3'e iner,
   // V1/V2 sürüm geçişi gizli, arayüz light-only.

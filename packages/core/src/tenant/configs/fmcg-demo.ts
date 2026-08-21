@@ -22,19 +22,24 @@ import type { TenantConfig } from "../types";
  */
 export const FMCG_DEMO_CONFIG: TenantConfig = {
   id: "fmcg-demo",
-  displayName: "FMCG Demo · NORA 4Sight",
+  displayName: "FMCG Demo · Insider",
   industry: "fmcg",
   logoMark: "FM",
-  productName: "NORA 4Sight",
+  productName: "Insider",
 
   // Sentetik demo (MSSQL yok) — statik demo login + refresh kapalı.
   demoData: true,
 
   // Demo arayüz kısıtları: light-only, sürüm geçişi gizli, rapor/şema nav gizli.
+  // Ekran doğrudan V3 ile açılır (root `/` → /v3); V1/V2'ye gerek yok
+  // (VersionToggle zaten gizli, kullanıcı V1/V2'ye ulaşamaz).
   ui: {
     forceLightTheme: true,
     hideVersionToggle: true,
+    defaultLanding: "/v3",
     hiddenNavHrefs: ["/reports", "/reports/new", "/schema"],
+    logoSrc: "/brand/univera-symbol-white.svg", // "FM" yerine Univera sembolü
+
   },
 
   // Demo data ayrı dosyaya yazılır — Pernod canlı verisi etkilenmez.

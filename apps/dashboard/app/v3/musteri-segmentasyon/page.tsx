@@ -13,7 +13,7 @@ import {
   type SegmentBrandCell,
 } from "@/components/v3/segment/SegmentBrandCrossPanel";
 
-export const metadata = { title: "Müşteri Segmentasyon · V3 · NORA 4Sight" };
+export const metadata = { title: "Müşteri Segmentasyon · V3 · Insider" };
 
 type SegmentSnapshot = {
   generatedAt: string;

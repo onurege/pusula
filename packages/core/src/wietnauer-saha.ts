@@ -59,7 +59,8 @@ const CACHE_DOMAIN = "wietnauer-saha";
 // re-aggregate yapabilsin (wietnauer-stok.ts `scopedRows` deseni). Ziyaret
 // header'ında (TBLPMPZIYARETBASLIK) LNGDISTKOD yok — dist bilgisi
 // TBLPMPZIYARETOZET (o) üzerinden gelir.
-const CACHE_VERSION = "v5";
+// v6: md41 — RepPerformanceRow'a aktifMusteri (fatura kesen distinct) eklendi.
+const CACHE_VERSION = "v6";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -94,8 +95,11 @@ export type RepPerformanceRow = {
   distributor: string | null;
   /** Son 30g ziyaret adedi */
   ziyaret: number;
-  /** Son 30g unique müşteri ziyareti */
+  /** Son 30g unique müşteri ziyareti (ziyaret edilen) */
   uniqueMusteri: number;
+  /** md41: Son 30g fatura kesilen distinct müşteri (aktif müşteri) —
+   *  TBLMSDFATURA.LNGSTKOD üzerinden, ziyaret değil satış tabanlı. */
+  aktifMusteri: number;
   /** Son 30g sipariş alınan distinct ziyaret sayısı */
   siparisliZiyaret: number;
   /** siparisliZiyaret / ziyaret * 100 */
@@ -425,6 +429,17 @@ async function fetchRepPerformance(): Promise<RepPerformanceRawRow[]> {
       WHERE z.TRHGIRIS IS NOT NULL
         AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
         AND z.TRHGIRIS <= ${sqlNow()}
+    ),
+    -- md41: temsilci (LNGSTKOD) × dist bazında son 30g fatura kesilen distinct
+    -- müşteri = "aktif müşteri". Ziyaret tablosundan bağımsız, satış tabanlı.
+    fat AS (
+      SELECT f.LNGSTKOD, f.LNGDISTKOD,
+             COUNT(DISTINCT f.LNGMUSTERIKOD) AS aktif
+      FROM dbo.TBLMSDFATURA f
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      GROUP BY f.LNGSTKOD, f.LNGDISTKOD
     )
     SELECT
       b.LNGSTKOD                                                   AS rep_id,
@@ -438,12 +453,14 @@ async function fetchRepPerformance(): Promise<RepPerformanceRawRow[]> {
       d.TXTAD                                                      AS distributor,
       COUNT(*)                                                     AS ziyaret,
       COUNT(DISTINCT b.LNGMUSTERIKOD)                              AS unique_musteri,
+      ISNULL(MAX(fat.aktif), 0)                                    AS aktif_musteri,
       SUM(b.siparis_var)                                           AS siparisli,
       SUM(CASE WHEN b.BYTRUTKODU = 1 THEN 1 ELSE 0 END)            AS rut_disi
     FROM baz b
     LEFT JOIN dbo.TBLPERSONEL p ON p.LNGPERSONELKOD = b.LNGSTKOD
     LEFT JOIN dbo.TBLKULLANICI k ON k.LNGKOD = b.LNGSTKOD
     LEFT JOIN dbo.TBLDIST d ON d.LNGKOD = b.LNGDISTKOD
+    LEFT JOIN fat ON fat.LNGSTKOD = b.LNGSTKOD AND fat.LNGDISTKOD = b.LNGDISTKOD
     GROUP BY b.LNGSTKOD, b.LNGDISTKOD, p.TXTAD, k.TXTADSOYAD, d.TXTAD
     ORDER BY COUNT(*) DESC
   `;
@@ -462,6 +479,7 @@ async function fetchRepPerformance(): Promise<RepPerformanceRawRow[]> {
       distributor: r.distributor ? String(r.distributor) : null,
       ziyaret,
       uniqueMusteri: Number(r.unique_musteri ?? 0),
+      aktifMusteri: Number(r.aktif_musteri ?? 0),
       siparisliZiyaret: siparisli,
       donusumPct: ziyaret > 0 ? Number(((siparisli / ziyaret) * 100).toFixed(2)) : 0,
       rutDisiPct: ziyaret > 0 ? Number(((rutDisi / ziyaret) * 100).toFixed(2)) : 0,

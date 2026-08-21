@@ -11,7 +11,7 @@ import {
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { getTenantConfig } from "@/lib/tenant";
 
-export const metadata = { title: "V3 Özet · NORA 4Sight" };
+export const metadata = { title: "V3 Özet · Insider" };
 
 /**
  * V3 landing — dashboard'lara tek tık erişim. Her kart:
@@ -160,7 +160,7 @@ const NAV_CARDS = [
     desc: "Distribütör/ekip/temsilci, drop size, aktif + yeni müşteri kazanımı.",
     icon: TrendingUp,
     accent: "#16a34a",
-    ready: false,
+    ready: true,
   },
   {
     no: "03",
@@ -169,7 +169,7 @@ const NAV_CARDS = [
     desc: "3 ayrı segment boyutu yan yana — kanal × ciro × iskonto cross.",
     icon: Users,
     accent: "#0891b2",
-    ready: false,
+    ready: true,
   },
   {
     no: "04",
@@ -178,7 +178,7 @@ const NAV_CARDS = [
     desc: "Marka penetrasyonu, Top 5 SKU, stratejik marka özel zoom panelleri.",
     icon: Package,
     accent: "#9333ea",
-    ready: false,
+    ready: true,
   },
   {
     no: "05",
@@ -196,7 +196,7 @@ const NAV_CARDS = [
     desc: "Günlük/haftalık ziyaret trendleri, kapsama, sipariş dönüşümü.",
     icon: Truck,
     accent: "#d97706",
-    ready: false,
+    ready: true,
   },
   {
     no: "07",
@@ -205,7 +205,7 @@ const NAV_CARDS = [
     desc: "Pasifleşen müşteri, stratejik marka sessizliği, yeniden kazanım.",
     icon: Target,
     accent: "#dc2626",
-    ready: false,
+    ready: true,
   },
   {
     no: "08",
@@ -214,6 +214,6 @@ const NAV_CARDS = [
     desc: "İskonto harcaması, marka × etkinlik, müşteri/segment ROI.",
     icon: Wallet,
     accent: "#b45309",
-    ready: false,
+    ready: true,
   },
 ];

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { KOMUTA_CSS } from "@/components/komuta/komuta-css";
 
 export const metadata: Metadata = {
-  title: "NORA 4Sight · V2 Beta",
+  title: "Insider · V2 Beta",
 };
 
 /**

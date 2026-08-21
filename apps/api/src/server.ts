@@ -30,6 +30,7 @@ import {
   getWietnauerSatisSnapshot,
   getWietnauerStokSnapshot,
   getTenantConfig,
+  maskDemoSnapshot,
   getRadarDefinition,
   getReport,
   getSyncStatus,
@@ -851,7 +852,7 @@ app.get("/api/komuta", async (c) => {
       allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
       distId: scopeSingleDistId(scope),
     });
-    return c.json(snap);
+    return c.json(maskDemoSnapshot(snap));
   } catch (err) {
     console.error("[/api/komuta] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
@@ -881,7 +882,7 @@ app.get("/api/wietnauer/yonetim", async (c) => {
       allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
       distId: scopeSingleDistId(scope),
     });
-    return c.json(snap);
+    return c.json(maskDemoSnapshot(snap));
   } catch (err) {
     console.error("[/api/wietnauer/yonetim] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
@@ -929,7 +930,7 @@ function makeV3Handler(
         allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
         distId: scopeSingleDistId(scope),
       });
-      return c.json(snap);
+      return c.json(maskDemoSnapshot(snap));
     } catch (err) {
       console.error(`[/api/wietnauer/${name}] failed:`, err);
       return c.json({ error: (err as Error).message }, 500);
@@ -973,7 +974,7 @@ app.get("/api/wietnauer/stok", async (c) => {
       // merkez drill-down / dist tek-dist seçimi → scope'tan tek dist.
       distId: scopeSingleDistId(scope),
     });
-    return c.json(snap);
+    return c.json(maskDemoSnapshot(snap));
   } catch (err) {
     console.error("[/api/wietnauer/stok] failed:", err);
     return c.json({ error: (err as Error).message }, 500);

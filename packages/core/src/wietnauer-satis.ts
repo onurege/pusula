@@ -32,13 +32,15 @@ import { withCache } from "./cache.js";
 import { sqlNow } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { volumeUnitExpr } from "./volume.js";
 
 const CACHE_DOMAIN = "wietnauer-satis";
 // v5: cache-key scope fragmentation düzeltmesi (VYK-01) — dist filtresi
 // SQL'den çıkarıldı, tüm fetcher'lar scope'suz (tüm dist) tek cache anahtarı
 // altında çekilir; dist scope runtime'da JS'te satır bazlı filtrelenir. Eski
 // `v4-*-d<n>` scope'lu cache satırları bu versiyon artışıyla geçersiz olur.
-const CACHE_VERSION = "v5";
+// v6: md26 — distLeaderboard'a hacim (70cl eşdeğer) eklendi; row shape değişti.
+const CACHE_VERSION = "v6";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -49,6 +51,8 @@ export type SatisDistRow = {
   region: string | null;
   /** Son 30g net ciro */
   ciro: number;
+  /** md26: Son 30g hacim (70cl eşdeğer) — Σ(DBLMIKTAR×litre-eşdeğer) */
+  hacim: number;
   /** Son 30g distinct müşteri sayısı */
   musteriSayi: number;
   faturaSayi: number;
@@ -157,6 +161,23 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
       GROUP BY f.LNGDISTKOD
+    ),
+    -- md26: dist bazında son 30g hacim (70cl eşdeğer) — fatura DETAY seviyesi.
+    hacimq AS (
+      SELECT f.LNGDISTKOD AS dist_id,
+             ISNULL(SUM(${volumeUnitExpr("d2", "u", "ue")}), 0) AS hacim
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMSDBELGEDETAY d2
+        ON d2.LNGYIL = f.LNGYIL
+       AND d2.LNGFATURAKOD = f.LNGBELGEKOD
+       AND d2.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d2.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNEKSAHA ue
+        ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      GROUP BY f.LNGDISTKOD
     )
     SELECT
       c.dist_id,
@@ -165,11 +186,13 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
       c.ciro,
       c.fatura,
       c.musteri,
+      ISNULL(h.hacim, 0) AS hacim,
       ISNULL(p.ciro, 0) AS prev_ciro
     FROM cur c
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = c.dist_id
     LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
     LEFT JOIN prev p ON p.dist_id = c.dist_id
+    LEFT JOIN hacimq h ON h.dist_id = c.dist_id
     ORDER BY c.ciro DESC
   `;
   const result = await runReadOnly(sql, { limit: 1000 });
@@ -183,6 +206,7 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
       ad: String(r.ad ?? ""),
       region: r.region ? String(r.region) : null,
       ciro,
+      hacim: Number(r.hacim ?? 0),
       faturaSayi: fatura,
       musteriSayi: Number(r.musteri ?? 0),
       ortSepet: fatura > 0 ? ciro / fatura : 0,

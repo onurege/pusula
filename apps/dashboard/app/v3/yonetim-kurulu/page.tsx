@@ -1,7 +1,7 @@
 import { getWietnauerYonetim, getWietnauerIskonto } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
-import { TopCustomersPanel } from "@/components/v3/TopCustomersPanel";
+import { TopDistributorsPanel } from "@/components/v3/TopDistributorsPanel";
 import { BrandContributionPanel } from "@/components/v3/BrandContributionPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
 import { formatCompact } from "@/components/komuta/format";
@@ -20,7 +20,7 @@ type IskontoSegmentsSlice = {
   }>;
 };
 
-export const metadata = { title: "Yönetim Kurulu · V3 · NORA 4Sight" };
+export const metadata = { title: "Yönetim Kurulu · V3 · Insider" };
 
 /**
  * V3 Dashboard #1 — Yönetim Kurulu.
@@ -56,9 +56,9 @@ export default async function V3YonetimKuruluPage() {
   const toplamCiro = snap?.discount.net ?? 0;
   const toplamFatura = snap?.discount.faturaCount ?? 0;
   const aktifMusteri = snap?.discount.aktifMusteriCount ?? 0;
-  // top10Pay zaten backend'te gerçek total'a karşı hesaplanıyor (toplam CTE'si)
+  // md22: Top 10 distribütör konsantrasyonu (payPct kapsam toplamına göre)
   const top10Pay = snap
-    ? snap.topCustomers.slice(0, 10).reduce((a, c) => a + c.payPct, 0)
+    ? snap.topDistributors.slice(0, 10).reduce((a, d) => a + d.payPct, 0)
     : 0;
   const stratPay = snap
     ? snap.brands.filter((b) => b.isStratejik).reduce((a, b) => a + b.payPct, 0)
@@ -112,10 +112,10 @@ export default async function V3YonetimKuruluPage() {
             />
           </div>
 
-          {/* Üst içerik: 2 sütun (Marka katkıları + Top Müşteri) */}
+          {/* Üst içerik: 2 sütun (Marka katkıları + Top Distribütör) */}
           <div className="v3-content-grid">
             <BrandContributionPanel brands={snap.brands} />
-            <TopCustomersPanel customers={snap.topCustomers} />
+            <TopDistributorsPanel distributors={snap.topDistributors} />
           </div>
 
           {/* Alt içerik: full-width Segment Kırılımı — eski "iskonto yatırımı"
