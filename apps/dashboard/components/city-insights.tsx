@@ -76,7 +76,7 @@ export function CityInsights({ cities, region }: Props) {
       )
       .sort((a, b) => (b.deltaPct ?? 0) - (a.deltaPct ?? 0))[0];
 
-    return { growers, decliners, urgent, smallBaseGrower };
+    return { growers, decliners, urgent, smallBaseGrower, comparedCount: cleaned.length };
   }, [cities]);
 
   // Hiç veri yoksa render etme
@@ -91,8 +91,8 @@ export function CityInsights({ cities, region }: Props) {
           🔎 <strong>{region}</strong> şehir içgörüleri
         </div>
         <div className="ci-sub">
-          son 30g vs geçen yıl aynı 30g · küçük baz etkisini görmek için mutlak
-          Δ TL sıralı
+          {insights.comparedCount} şehir · son 30g vs geçen yıl aynı 30g ·
+          küçük baz etkisini görmek için mutlak Δ TL sıralı
         </div>
       </div>
 

@@ -5,8 +5,9 @@ import type { ActiveCustomers90d } from "./types";
  * Panel A — 90g Aktif Müşteri sayısı + segment kırılımı.
  *
  * KPI hero (toplam aktif + önceki döneme göre değişim) + altta segment
- * dağılımı yatay bar. Segment etiketleri TBLEKSAHASECENEK üzerinden
- * (Perakende / On Trade / Otel / Tali Bayi / Tanımsız) gelir.
+ * dağılımı yatay bar. Segment etiketleri müşteri grup kırılımı üzerinden
+ * (TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM.TXTAD — Prestige /
+ * Premium / Premium Plus / Standart / Standart Plus / Tanımsız vb.) gelir.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 
@@ -52,9 +53,9 @@ export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
       </div>
 
       <div className="seg-list">
-        <div className="seg-title">Segment Kırılımı</div>
+        <div className="seg-title">Müşteri Grup Kırılımı</div>
         {segments.length === 0 && (
-          <div className="seg-empty">Segment verisi bulunamadı.</div>
+          <div className="seg-empty">Grup kırılımı verisi bulunamadı.</div>
         )}
         {segments.map((s) => (
           <div key={s.segment} className="seg-row">

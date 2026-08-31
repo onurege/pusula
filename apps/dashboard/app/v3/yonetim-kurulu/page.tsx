@@ -2,6 +2,8 @@ import { getWietnauerYonetim, getWietnauerIskonto } from "@/lib/api";
 import { cs, panelHidden } from "@/lib/content";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
+import { donemLabel } from "@/lib/donem";
 import { TopDistributorsPanel } from "@/components/v3/TopDistributorsPanel";
 import { BrandContributionPanel } from "@/components/v3/BrandContributionPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
@@ -9,16 +11,20 @@ import { formatCompact } from "@/components/komuta/format";
 
 // Sadece segment dilimine ihtiyacımız var — ticari-yatirim sayfasındaki tam
 // IskontoSnapshot tipinin alt kümesi. Endpoint aynı, ödediğin bedel cache hit.
+type IskontoSegmentRowSlice = {
+  segment: string;
+  brut: number;
+  iskonto: number;
+  net: number;
+  iskontoOraniPct: number;
+  musteriSayi: number;
+  faturaSayisi: number;
+};
 type IskontoSegmentsSlice = {
-  segments: Array<{
-    segment: string;
-    brut: number;
-    iskonto: number;
-    net: number;
-    iskontoOraniPct: number;
-    musteriSayi: number;
-    faturaSayisi: number;
-  }>;
+  /** Müşteri Grup Kırılımı (Prestige/Premium/Standart…) */
+  segments: IskontoSegmentRowSlice[];
+  /** Müşteri Ek Grup (TEKEL/BÜFE/MARKET/BAR…) — ilk 5 + Diğer */
+  ekGrupSegments: IskontoSegmentRowSlice[];
 };
 
 export const metadata = { title: "Yönetim Kurulu · V3 · Insider" };
@@ -38,16 +44,26 @@ export const metadata = { title: "Yönetim Kurulu · V3 · Insider" };
  * Faz A kapsamı (bu sayfa): Top müşteri + Marka katkı + İskonto KPI.
  * Toplam ciro KPI hero + 3 panel single-page yönetici görünümü.
  */
-export default async function V3YonetimKuruluPage() {
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
+type Props = {
+  searchParams: Promise<{ donem?: string; from?: string; to?: string }>;
+};
+
+export default async function V3YonetimKuruluPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const sp = await searchParams;
+  const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
+  const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
+  const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
   let snap: Awaited<ReturnType<typeof getWietnauerYonetim>> | null = null;
   let iskonto: IskontoSegmentsSlice | null = null;
   let err: string | null = null;
   try {
     // İki endpoint paralel — toplam latency = en yavaş tek snapshot.
     [snap, iskonto] = await Promise.all([
-      getWietnauerYonetim(),
-      getWietnauerIskonto<IskontoSegmentsSlice>(),
+      getWietnauerYonetim({ dateFrom, dateTo, donem }),
+      getWietnauerIskonto<IskontoSegmentsSlice>({ dateFrom, dateTo, donem }),
     ]);
   } catch (e) {
     err = (e as Error).message;
@@ -65,6 +81,15 @@ export default async function V3YonetimKuruluPage() {
     ? snap.brands.filter((b) => b.isStratejik).reduce((a, b) => a + b.payPct, 0)
     : 0;
   const stratCount = snap?.brands.filter((b) => b.isStratejik).length ?? 0;
+  const top10Count = snap ? Math.min(10, snap.topDistributors.length) : 0;
+
+  // Seçili dönemin insan-okur etiketi — panel alt-başlıklarına da geçiriyoruz
+  // (bkz. TopDistributorsPanel/BrandContributionPanel "Son 30 gün" yerine).
+  const periodLabel = donemLabel(donem, dateFrom, dateTo);
+  // Sayfa açıklaması: snapshot varsa gerçek toplamlarla, yoksa generic fallback.
+  const pageDescription = snap
+    ? `${tenant.displayName} portföy sağlığı ${periodLabel} verisiyle: ₺${formatCompact(toplamCiro)} net ciro, ${aktifMusteri.toLocaleString("tr-TR")} aktif müşteri; top ${top10Count} distribütör toplam cironun %${top10Pay.toFixed(1)}'ini, ${stratCount} stratejik marka ise %${stratPay.toFixed(1)}'ini taşıyor.`
+    : `${tenant.displayName} portföy sağlığı tek ekranda — Top müşteri konsantrasyonu, marka katkıları ve iskonto yatırım oranı ${periodLabel} net ciro üzerinden.`;
 
   return (
     <div className="v3-page">
@@ -73,10 +98,12 @@ export default async function V3YonetimKuruluPage() {
         title="Yönetim Kurulu"
         contentKey="page.yonetim.title"
         descKey="page.yonetim.desc"
-        description={`${tenant.displayName} portföy sağlığı tek ekranda — Top müşteri konsantrasyonu, marka katkıları ve iskonto yatırım oranı son 30 günlük net ciro üzerinden.`}
+        description={pageDescription}
         dataNote="TBLMSDFATURA + TBLMSDBELGEDETAY · DBLNETTUTAR/DBLNETFIYAT · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
       />
+
+      <GlobalDonemFilter />
 
       {err && (
         <div className="v3-error">
@@ -95,7 +122,7 @@ export default async function V3YonetimKuruluPage() {
             <KpiTile
               label={cs("kpi.yonetim.ciro", "Toplam Net Ciro")}
               value={`₺${formatCompact(toplamCiro)}`}
-              sub="son 30 gün"
+              sub={donemLabel(donem, dateFrom, dateTo)}
             />
           )}
             {!panelHidden("kpi.yonetim.aktif") && (
@@ -109,7 +136,7 @@ export default async function V3YonetimKuruluPage() {
             <KpiTile
               label={cs("kpi.yonetim.konsantrasyon", "Top 10 Konsantrasyon")}
               value={`%${top10Pay.toFixed(1)}`}
-              sub="portföyün payı"
+              sub={`ilk ${top10Count} distribütörün payı`}
               tone={top10Pay > 50 ? "warn" : "neutral"}
             />
           )}
@@ -125,17 +152,32 @@ export default async function V3YonetimKuruluPage() {
 
           {/* Üst içerik: 2 sütun (Marka katkıları + Top Distribütör) */}
           <div className="v3-content-grid">
-            <BrandContributionPanel brands={snap.brands} />
-            <TopDistributorsPanel distributors={snap.topDistributors} />
+            <BrandContributionPanel brands={snap.brands} periodLabel={periodLabel} />
+            <TopDistributorsPanel distributors={snap.topDistributors} periodLabel={periodLabel} />
           </div>
 
-          {/* Alt içerik: full-width Segment Kırılımı — eski "iskonto yatırımı"
-              kartının yerine ticari-yatirim sayfasındaki panelin aynısı. */}
-          {iskonto && iskonto.segments.length > 0 && (
-            <div className="v3-segment-wrap">
-              <IskontoSegmentPanel segments={iskonto.segments} />
-            </div>
-          )}
+          {/* Alt içerik: Segment Kırılımı — İKİ boyut ayrı ayrı:
+              (1) Müşteri Grup Kırılımı (Prestige/Premium/Standart…),
+              (2) Müşteri Ek Grup (TEKEL/BÜFE/MARKET/BAR… ilk 5 + Diğer). */}
+          {iskonto &&
+            (iskonto.segments.length > 0 || iskonto.ekGrupSegments.length > 0) && (
+              <div className="v3-segment-grid">
+                {iskonto.segments.length > 0 && (
+                  <IskontoSegmentPanel
+                    segments={iskonto.segments}
+                    title="Müşteri Grup Kırılımı"
+                    dimensionLabel="Müşteri grup kırılımı"
+                  />
+                )}
+                {iskonto.ekGrupSegments.length > 0 && (
+                  <IskontoSegmentPanel
+                    segments={iskonto.ekGrupSegments}
+                    title="Müşteri Ek Grup"
+                    dimensionLabel="Müşteri ek grup (ilk 5 + Diğer)"
+                  />
+                )}
+              </div>
+            )}
         </>
       )}
 
@@ -163,6 +205,17 @@ export default async function V3YonetimKuruluPage() {
         }
         .v3-segment-wrap {
           display: block;
+        }
+        .v3-segment-grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 16px;
+        }
+        @media (min-width: 1080px) {
+          .v3-segment-grid {
+            grid-template-columns: 1fr 1fr;
+            align-items: start;
+          }
         }
         .v3-error {
           background: var(--color-bad-bg, rgba(220, 38, 38, 0.05));

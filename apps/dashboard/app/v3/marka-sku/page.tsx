@@ -2,6 +2,8 @@ import { getWietnauerMarka } from "@/lib/api";
 import { cs, panelHidden } from "@/lib/content";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
+import { donemLabel } from "@/lib/donem";
 import { formatCompact } from "@/components/komuta/format";
 import { BrandPortfolioPanel } from "@/components/v3/marka/BrandPortfolioPanel";
 import { TopSkusPanel } from "@/components/v3/marka/TopSkusPanel";
@@ -26,12 +28,22 @@ export const metadata = { title: "Marka & SKU · V3 · Insider" };
  * Tenant config soyutlaması: Pernod'da `brandTable` TERS atanır → aynı sayfa
  * Pernod'da da çalışır.
  */
-export default async function V3MarkaSkuPage() {
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
+type Props = {
+  searchParams: Promise<{ donem?: string; from?: string; to?: string }>;
+};
+
+export default async function V3MarkaSkuPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const sp = await searchParams;
+  const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
+  const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
+  const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
   let snap: WietnauerMarkaSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerMarka<WietnauerMarkaSnapshot>();
+    snap = await getWietnauerMarka<WietnauerMarkaSnapshot>({ dateFrom, dateTo, donem });
   } catch (e) {
     err = (e as Error).message;
   }
@@ -50,6 +62,22 @@ export default async function V3MarkaSkuPage() {
     ? snap.strategic.reduce((a, s) => a + s.ciro, 0)
     : 0;
   const stratSharePct = toplamCiro > 0 ? (stratCiro / toplamCiro) * 100 : 0;
+  // md-task7: KPI alt-metinlerini snapshot'tan türetilen gerçek değerlerle
+  // dinamikleştir (uydurma yok — snap null ise generic fallback'e düşer).
+  const markaSayisi = snap
+    ? snap.portfolio.filter((b) => !b.isOther && !b.isTotal).length
+    : 0;
+  const skuSayisi = snap
+    ? snap.topSkus.filter((s) => !s.isOther && !s.isTotal).length
+    : 0;
+  const topBrand = snap
+    ? (snap.portfolio.find((b) => !b.isOther && !b.isTotal) ?? null)
+    : null;
+
+  // md-task7: statik "son 30 gün" metinleri yerine gerçek seçili dönem etiketi.
+  const periodLabel = donemLabel(donem, dateFrom, dateTo);
+  const periodLabelCap =
+    periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1);
 
   return (
     <div className="v3-page">
@@ -58,10 +86,12 @@ export default async function V3MarkaSkuPage() {
         title="Marka & SKU Performansı"
         contentKey="page.marka.title"
         descKey="page.marka.desc"
-        description={`${tenant.displayName} marka portföyü, SKU şampiyonları, penetrasyon ve stratejik marka zoom — son 30 gün net ciro odağında, YTD ivme metrikleriyle.`}
+        description={`${tenant.displayName} marka portföyü, SKU şampiyonları, penetrasyon ve stratejik marka zoom — ${periodLabel} net ciro odağında, YTD ivme metrikleriyle.`}
         dataNote="TBLURUNGRUP / TBLURUNEKGRUP · TBLURUN · TBLMSDBELGEDETAY · DBLNETFIYAT · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
       />
+
+      <GlobalDonemFilter />
 
       {err && (
         <div className="v3-error">
@@ -88,21 +118,25 @@ export default async function V3MarkaSkuPage() {
             <KpiTile
               label={cs("kpi.marka.ciro", "Toplam Net Ciro")}
               value={`₺${formatCompact(toplamCiro)}`}
-              sub="son 30 gün · marka × SKU bazlı"
+              sub={`${periodLabel} · ${markaSayisi} marka × ${skuSayisi} SKU bazlı`}
             />
           )}
             {!panelHidden("kpi.marka.aktif") && (
             <KpiTile
               label={cs("kpi.marka.aktif", "Aktif Müşteri")}
               value={aktifMusteri.toLocaleString("tr-TR")}
-              sub="son 30g fatura kesilen distinct"
+              sub={`${periodLabel} fatura kesilen distinct`}
             />
           )}
             {!panelHidden("kpi.marka.top5") && (
             <KpiTile
               label={cs("kpi.marka.top5", "Top 5 Marka Payı")}
               value={`%${top5Pay.toFixed(1)}`}
-              sub="portföyün konsantrasyonu"
+              sub={
+                topBrand
+                  ? `lider: ${topBrand.marka} · %${topBrand.payPct.toFixed(1)}`
+                  : "portföyün konsantrasyonu"
+              }
               tone={top5Pay > 70 ? "warn" : "neutral"}
             />
           )}
@@ -118,17 +152,18 @@ export default async function V3MarkaSkuPage() {
 
           {/* İçerik: full-width A, sonra 2 sütun B+C, full-width D, full-width E */}
           <div className="v3-content">
-            <BrandPortfolioPanel rows={snap.portfolio} />
+            <BrandPortfolioPanel rows={snap.portfolio} periodLabel={periodLabelCap} />
 
             <div className="row-2col">
-              <TopSkusPanel rows={snap.topSkus} />
+              <TopSkusPanel rows={snap.topSkus} periodLabel={periodLabelCap} />
               <BrandPenetrationPanel
                 rows={snap.penetration}
                 aktifMusteriToplam={snap.aktifMusteriToplam}
+                periodLabel={periodLabelCap}
               />
             </div>
 
-            <StrategicBrandZoom brands={snap.strategic} />
+            <StrategicBrandZoom brands={snap.strategic} periodLabel={periodLabelCap} />
             {/* md31: 30g/90g/YTD karşılaştırma paneli kaldırıldı. */}
           </div>
         </>

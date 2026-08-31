@@ -17,7 +17,8 @@ import {
 import type { KomutaChannelMonthlyRow, ValueUnit } from "@/lib/api";
 
 type ViewMode = "bar" | "pie";
-type PeriodOption = 3 | 6 | 12;
+/** Global Periyot değeri: kaç ay trend gösterileceği, ya da "ytd" (bu yıl). */
+type PeriodMonths = 3 | 6 | 12 | "ytd";
 
 type Props = {
   rows: KomutaChannelMonthlyRow[];
@@ -31,8 +32,10 @@ type Props = {
   category?: string;
   /** Hint footer'da gösterilen kaynak açıklaması */
   sourceNote?: string;
-  /** md14: dönem filtresi (3/6/12 ay) segment kontrolü göster. Default: false. */
-  enablePeriodFilter?: boolean;
+  /** md2 (Birleşik): trend penceresi — global Periyot kontrolünden gelir
+   *  (Son 3/6/12 Ay · Bu Yıl). Undefined → tüm 12 ay. Yerel seçici KALDIRILDI;
+   *  bu değer sayfa üstündeki global Periyot dropdown'u tarafından sürülür. */
+  periodMonths?: PeriodMonths;
   /** md14: Bar ↔ Pasta görünüm toggle'ı göster. Default: false. */
   enablePieView?: boolean;
   /** md15: müşteri tipi (kanal) filtre dropdown'u göster — ek gruptan gelen
@@ -95,7 +98,7 @@ export function ChannelMixChart({
   icon = "📊",
   category = "kanal mix",
   sourceNote = "Müşteri grubu (TBLMUSTERIGRUP.TXTAD) × ay kırılımı, son 12 ay. Top 5 kanal görünür; geri kalan \"Diğer\" altında toplandı.",
-  enablePeriodFilter = false,
+  periodMonths,
   enablePieView = false,
   enableTypeFilter = false,
   typeFilterLabel = "Müşteri Tipi",
@@ -103,7 +106,6 @@ export function ChannelMixChart({
   const unitSuffix = unit === "9le" ? "9L" : "₺";
   const [colors, setColors] = useState(readChartColors);
   const [view, setView] = useState<ViewMode>("bar");
-  const [periodMonths, setPeriodMonths] = useState<PeriodOption>(12);
   const [selectedType, setSelectedType] = useState<string>("all");
   useEffect(() => {
     const onChange = () => setColors(readChartColors());
@@ -121,20 +123,27 @@ export function ChannelMixChart({
     return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([kanal]) => kanal);
   }, [safeRows]);
 
-  // md14/md15: dönem + tip filtresi — ikisi de zaten çekilmiş `rows` üzerinde,
-  // client-side. Yeni fetch/SQL yok.
+  // md2/md15: periyot (global) + tip filtresi — ikisi de zaten çekilmiş `rows`
+  // üzerinde, client-side. Yeni fetch/SQL yok. periodMonths global Periyot
+  // dropdown'undan gelir; undefined → tüm 12 ay.
   const filteredRows = useMemo(() => {
     let r = safeRows;
     if (enableTypeFilter && selectedType !== "all") {
       r = r.filter((row) => row.kanal === selectedType);
     }
-    if (enablePeriodFilter && periodMonths < 12) {
+    if (periodMonths != null) {
       const months = [...new Set(r.map((row) => row.yyyymm))].sort();
-      const lastN = new Set(months.slice(-periodMonths));
-      r = r.filter((row) => lastN.has(row.yyyymm));
+      if (periodMonths === "ytd") {
+        // Bu Yıl — en güncel ayın yılıyla eşleşen aylar (ör. 2026-*)
+        const year = months.length ? months[months.length - 1].slice(0, 4) : "";
+        if (year) r = r.filter((row) => row.yyyymm.startsWith(year));
+      } else if (periodMonths < 12) {
+        const lastN = new Set(months.slice(-periodMonths));
+        r = r.filter((row) => lastN.has(row.yyyymm));
+      }
     }
     return r;
-  }, [safeRows, enableTypeFilter, selectedType, enablePeriodFilter, periodMonths]);
+  }, [safeRows, enableTypeFilter, selectedType, periodMonths]);
 
   const { data, channels, totals, pieData } = useMemo(() => {
     // Ay sırasını koru — backend `ORDER BY yil, ay` yapar; biz set kullanarak
@@ -217,7 +226,7 @@ export function ChannelMixChart({
     );
   }
 
-  const showToolbar = enablePeriodFilter || enablePieView || enableTypeFilter;
+  const showToolbar = enablePieView || enableTypeFilter;
 
   return (
     <div className="panel">
@@ -244,22 +253,6 @@ export function ChannelMixChart({
                 ))}
               </select>
             </label>
-          )}
-          {enablePeriodFilter && (
-            <div className="cmc-seg" role="tablist" aria-label="Dönem">
-              {([3, 6, 12] as PeriodOption[]).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  role="tab"
-                  aria-selected={periodMonths === m}
-                  className={periodMonths === m ? "on" : ""}
-                  onClick={() => setPeriodMonths(m)}
-                >
-                  {m} Ay
-                </button>
-              ))}
-            </div>
           )}
           {enablePieView && (
             <div className="cmc-seg" role="tablist" aria-label="Görünüm">

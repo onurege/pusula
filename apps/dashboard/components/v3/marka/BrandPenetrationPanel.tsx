@@ -16,9 +16,11 @@ import { panelTitle, panelHidden } from "@/lib/content";
 export function BrandPenetrationPanel({
   rows,
   aktifMusteriToplam,
+  periodLabel = "Son 30g",
 }: {
   rows: BrandPenetrationRow[];
   aktifMusteriToplam: number;
+  periodLabel?: string;
 }) {
   if (panelHidden("panel.marka.penetration")) return null;
   // Core zaten Top 15 + "Diğer" + referans toplam döndürüyor — ekstra slice YOK.
@@ -32,7 +34,7 @@ export function BrandPenetrationPanel({
         <div>
           <div className="v3-panel-title">{panelTitle("panel.marka.penetration", "Marka Penetrasyonu")}</div>
           <div className="v3-panel-sub">
-            Son 30g aktif portföy:{" "}
+            {periodLabel} aktif portföy:{" "}
             <strong>{aktifMusteriToplam.toLocaleString("tr-TR")}</strong>{" "}
             müşteri · Markaların portföye yayılım oranı
           </div>

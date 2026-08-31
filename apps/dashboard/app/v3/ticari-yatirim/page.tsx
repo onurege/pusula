@@ -2,6 +2,7 @@ import { getWietnauerIskonto, getAllowedDistributors, type AllowedDistributor } 
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { IskontoFilterBar } from "@/components/v3/iskonto/IskontoFilterBar";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { IskontoHeroPanel } from "@/components/v3/iskonto/IskontoHeroPanel";
 import { IskontoMonthlyTrendPanel } from "@/components/v3/iskonto/IskontoMonthlyTrendPanel";
 import { IskontoBrandPanel } from "@/components/v3/iskonto/IskontoBrandPanel";
@@ -89,7 +90,7 @@ function parseDateParam(v: string | undefined): string | null {
 }
 
 type Props = {
-  searchParams: Promise<{ distId?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string }>;
 };
 
 export default async function V3TicariYatirimPage({ searchParams }: Props) {
@@ -104,11 +105,12 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
   // Kısmi aralık (yalnız biri) yok sayılır — ikisi de olmalı.
   const dateFrom = fromParsed && toParsed ? fromParsed : null;
   const dateTo = fromParsed && toParsed ? toParsed : null;
+  const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
 
   let snap: IskontoSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo });
+    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo, donem });
   } catch (e) {
     err = (e as Error).message;
   }
@@ -143,11 +145,15 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
         generatedAt={snap?.generatedAt}
       />
 
+      {/* md2: dönem ortak GlobalDonemFilter'da; IskontoFilterBar yalnız
+          distribütör seçici (tarih aralığı gizli). */}
+      <GlobalDonemFilter />
       <IskontoFilterBar
         distributors={distributors}
         selectedDistId={distId}
         dateFrom={dateFrom}
         dateTo={dateTo}
+        showDateRange={false}
       />
 
       {err && (

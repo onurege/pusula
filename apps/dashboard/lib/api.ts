@@ -628,8 +628,6 @@ export type ValueUnit = "tl" | "9le";
 export type KomutaSnapshot = {
   generatedAt: string;
   reelTL: boolean;
-  otvNet: boolean;
-  otvAvgRate: number | null;
   demoDate: string | null;
   /** Snapshot'taki tüm value'ların birimi — UI suffix'i bundan beslenir. */
   unit: ValueUnit;
@@ -655,17 +653,31 @@ export async function getKomutaSnapshot(
   options: {
     refresh?: boolean;
     reelTL?: boolean;
-    otvNet?: boolean;
     unit?: ValueUnit;
+    bolge?: string | null;
+    kanal?: string | null;
+    urunGrup?: string | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const qp = new URLSearchParams();
   if (options.refresh) qp.set("refresh", "1");
   if (options.reelTL) qp.set("reel", "1");
-  if (options.otvNet) qp.set("otv", "1");
   if (options.unit === "9le") qp.set("unit", "9le");
+  if (options.bolge) qp.set("bolge", options.bolge);
+  if (options.kanal) qp.set("kanal", options.kanal);
+  if (options.urunGrup) qp.set("urunGrup", options.urunGrup);
   const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
+}
+
+// md2 — Cockpit filtre dropdown seçenekleri (Bölge / Kanal / Ürün Grubu).
+export type KomutaFacets = {
+  bolgeler: { kod: string; ad: string }[];
+  kanallar: { kod: string; ad: string }[];
+  urunGruplari: { kod: string; ad: string }[];
+};
+export async function getKomutaFacets(): Promise<KomutaFacets> {
+  return request<KomutaFacets>("/api/komuta/facets");
 }
 
 // -- FINANS AGENTı ---------------------------------------------------------
@@ -838,22 +850,36 @@ export type WietnauerYonetimSnapshot = {
   discount: WietnauerDiscountKpi;
 };
 
+// md2 — ortak dönem query (refresh + serbest aralık VEYA preset). Serbest
+// aralık öncelikli; yoksa preset (donem) sunucuya iletilir (anchor'a göre çözer).
+type DonemOpts = { refresh?: boolean; donem?: string | null; dateFrom?: string | null; dateTo?: string | null };
+function donemQuery(o: DonemOpts): string {
+  const p = new URLSearchParams();
+  if (o.refresh) p.set("refresh", "1");
+  if (o.dateFrom && o.dateTo) {
+    p.set("from", o.dateFrom);
+    p.set("to", o.dateTo);
+  } else if (o.donem && o.donem !== "son30g") {
+    p.set("donem", o.donem);
+  }
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export async function getWietnauerYonetim(
-  options: { refresh?: boolean } = {},
+  options: DonemOpts = {},
 ): Promise<WietnauerYonetimSnapshot> {
-  const qs = options.refresh ? "?refresh=1" : "";
-  return request<WietnauerYonetimSnapshot>(`/api/wietnauer/yonetim${qs}`);
+  return request<WietnauerYonetimSnapshot>(`/api/wietnauer/yonetim${donemQuery(options)}`);
 }
 
 // V3 Dashboards — paralel agent'lar dolduruyor.
 // Tip her sayfa kendi türünü declare etsin diye `unknown` döner;
 // agent'lar page.tsx içinde kendi type guard'larını yazar.
-async function fetchV3<T = unknown>(name: string, refresh = false): Promise<T> {
-  const qs = refresh ? "?refresh=1" : "";
-  return request<T>(`/api/wietnauer/${name}${qs}`);
+async function fetchV3<T = unknown>(name: string, o: DonemOpts = {}): Promise<T> {
+  return request<T>(`/api/wietnauer/${name}${donemQuery(o)}`);
 }
-export const getWietnauerMarka = <T = unknown>(o: { refresh?: boolean } = {}) =>
-  fetchV3<T>("marka", o.refresh);
+export const getWietnauerMarka = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("marka", o);
 // md43: aktivasyon endpoint'i de stok gibi distId query param'ı destekler
 // (backend makeV3Handler zaten geneldi — foundation). Belirtilmezse portföy
 // toplamı, verilirse o distribütörün aktivasyon/risk kırılımı döner.
@@ -874,22 +900,24 @@ export const getWietnauerAktivasyon = <T = unknown>(
 // seçicisinden gelir. Hiçbiri verilmezse portföy toplamı + son 30g/son 12 ay
 // varsayılan pencereleri döner.
 export const getWietnauerIskonto = <T = unknown>(
-  o: { refresh?: boolean; distId?: number | null; dateFrom?: string | null; dateTo?: string | null } = {},
+  o: { refresh?: boolean; distId?: number | null; dateFrom?: string | null; dateTo?: string | null; donem?: string | null } = {},
 ) => {
   const params = new URLSearchParams();
   if (o.refresh) params.set("refresh", "1");
   if (o.distId != null) params.set("distId", String(o.distId));
   if (o.dateFrom) params.set("from", o.dateFrom);
   if (o.dateTo) params.set("to", o.dateTo);
+  // Serbest aralık yoksa preset'i ilet — sunucu anchor'a göre çözer.
+  else if (o.donem && o.donem !== "son30g") params.set("donem", o.donem);
   const qs = params.toString();
   return request<T>(`/api/wietnauer/iskonto${qs ? `?${qs}` : ""}`);
 };
-export const getWietnauerSegment = <T = unknown>(o: { refresh?: boolean } = {}) =>
-  fetchV3<T>("segment", o.refresh);
+export const getWietnauerSegment = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("segment", o);
 // `getWietnauerSaha` typed signature aşağıda; jenerik kalmasın diye burada
 // kaldırılmıştır.
-export const getWietnauerSatis = <T = unknown>(o: { refresh?: boolean } = {}) =>
-  fetchV3<T>("satis", o.refresh);
+export const getWietnauerSatis = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("satis", o);
 // Stok endpoint'i distId query param'ı destekler — UI dropdown'undan gelir.
 // distId verilmezse portföy toplamı, verilirse o distribütörün kırılımı döner.
 // md42: `dateFrom`/`dateTo` (?from&to) — talep/satış hızı penceresi; ikisi de
@@ -900,6 +928,7 @@ export const getWietnauerStok = <T = unknown>(
     distId?: number | null;
     dateFrom?: string | null;
     dateTo?: string | null;
+    donem?: string | null;
   } = {},
 ) => {
   const params = new URLSearchParams();
@@ -907,6 +936,8 @@ export const getWietnauerStok = <T = unknown>(
   if (o.distId != null) params.set("distId", String(o.distId));
   if (o.dateFrom) params.set("from", o.dateFrom);
   if (o.dateTo) params.set("to", o.dateTo);
+  // Serbest aralık yoksa preset'i ilet — sunucu anchor'a göre çözer.
+  else if (o.donem && o.donem !== "son30g") params.set("donem", o.donem);
   const qs = params.toString();
   return request<T>(`/api/wietnauer/stok${qs ? `?${qs}` : ""}`);
 };
@@ -1199,8 +1230,7 @@ export type WietnauerSahaSnapshot = {
 };
 
 export async function getWietnauerSaha(
-  options: { refresh?: boolean } = {},
+  options: DonemOpts = {},
 ): Promise<WietnauerSahaSnapshot> {
-  const qs = options.refresh ? "?refresh=1" : "";
-  return request<WietnauerSahaSnapshot>(`/api/wietnauer/saha${qs}`);
+  return request<WietnauerSahaSnapshot>(`/api/wietnauer/saha${donemQuery(options)}`);
 }

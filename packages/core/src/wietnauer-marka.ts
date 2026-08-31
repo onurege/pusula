@@ -19,7 +19,7 @@
  * KAPALI PENCERE pattern her sorguda zorunlu (DEMO_DATE ötesi sızıntıyı önler).
  */
 import { withCache } from "./cache.js";
-import { sqlNow } from "./now.js";
+import { sqlNow, resolveWindowBounds } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { foldOther, sumBy } from "./fold-other.js";
@@ -171,7 +171,7 @@ type MarkaPortfolioRawRow = {
  * (55 marka × 31 dist ≈ 1700 satır — ucuz). Top 20 + pay% scope SONRASI
  * public API'de hesaplanır.
  */
-async function fetchBrandPortfolioRaw(cities?: string[] | null): Promise<MarkaPortfolioRawRow[]> {
+async function fetchBrandPortfolioRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<MarkaPortfolioRawRow[]> {
   const { brandTable, joinCol } = getBrandTableMeta();
   const sql = `
     SELECT
@@ -189,8 +189,8 @@ async function fetchBrandPortfolioRaw(cities?: string[] | null): Promise<MarkaPo
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
     INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
+      AND f.TRHISLEMTARIHI >= ${win.lower}
+      AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
     GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
     ORDER BY SUM(d.DBLNETFIYAT) DESC
   `;
@@ -304,7 +304,7 @@ type TopSkuRawRow = {
  * GROUP BY'a eklendi (~202 SKU × 21 dist ≈ 2000 satır — ölçüldü, ucuz).
  * Top-N + pay% scope SONRASI public API'de hesaplanır.
  */
-async function fetchTopSkusRaw(cities?: string[] | null): Promise<TopSkuRawRow[]> {
+async function fetchTopSkusRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<TopSkuRawRow[]> {
   const { brandTable, joinCol } = getBrandTableMeta();
   const sql = `
     SELECT
@@ -323,8 +323,8 @@ async function fetchTopSkusRaw(cities?: string[] | null): Promise<TopSkuRawRow[]
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
     INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
+      AND f.TRHISLEMTARIHI >= ${win.lower}
+      AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
     GROUP BY u.LNGKOD, u.TXTAD, b.TXTAD, f.LNGDISTKOD
     ORDER BY SUM(d.DBLNETFIYAT) DESC
   `;
@@ -446,7 +446,7 @@ type AktifToplamRawRow = { distId: number | null; toplam: number };
  * `f.LNGDISTKOD` GROUP BY'a eklendi, ~1700 satır). `musteri_sayi` dist bazında
  * COUNT DISTINCT olduğundan scope sonrası SUM ile doğru toplanır.
  */
-async function fetchBrandPenetrationRaw(cities?: string[] | null): Promise<BrandPenetrationRawRow[]> {
+async function fetchBrandPenetrationRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<BrandPenetrationRawRow[]> {
   const { brandTable, joinCol } = getBrandTableMeta();
   const sql = `
     SELECT
@@ -462,8 +462,8 @@ async function fetchBrandPenetrationRaw(cities?: string[] | null): Promise<Brand
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
     INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
+      AND f.TRHISLEMTARIHI >= ${win.lower}
+      AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
     GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
     ORDER BY COUNT(DISTINCT f.LNGMUSTERIKOD) DESC
   `;
@@ -480,15 +480,15 @@ async function fetchBrandPenetrationRaw(cities?: string[] | null): Promise<Brand
  * Aktif müşteri toplamı (penetrasyon paydası) — dist bazında (~31 satır).
  * Scope sonrası SUM ile doğru toplanır.
  */
-async function fetchAktifMusteriToplamRaw(cities?: string[] | null): Promise<AktifToplamRawRow[]> {
+async function fetchAktifMusteriToplamRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<AktifToplamRawRow[]> {
   const sql = `
     SELECT
       LNGDISTKOD AS dist_id,
       COUNT(DISTINCT LNGMUSTERIKOD) AS toplam
     FROM dbo.TBLMSDFATURA
     WHERE BYTTUR = 0 AND BYTDURUM = 0
-      AND TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities, "LNGMUSTERIKOD")}
+      AND TRHISLEMTARIHI >= ${win.lower}
+      AND TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities, "LNGMUSTERIKOD")}
     GROUP BY LNGDISTKOD
   `;
   const result = await runReadOnly(sql, { limit: 200 });
@@ -593,6 +593,7 @@ type StrategicBrandDetailRawRow = {
  */
 async function fetchStrategicBrandsDetailRaw(
   strategicBrands: string[],
+  win: { lower: string; upper: string },
   cities?: string[] | null,
 ): Promise<StrategicBrandDetailRawRow[]> {
   if (strategicBrands.length === 0) return [];
@@ -621,8 +622,8 @@ async function fetchStrategicBrandsDetailRaw(
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
       INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}
         AND UPPER(b.TXTAD) IN (${inList})${cityFactClause(cities)}
       GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
     ),
@@ -641,8 +642,8 @@ async function fetchStrategicBrandsDetailRaw(
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND u.${joinCol} IN (SELECT DISTINCT marka_kod FROM marka_ozet)
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
       GROUP BY u.${joinCol}, f.LNGDISTKOD, u.LNGKOD, u.TXTAD
     )
     SELECT
@@ -901,6 +902,8 @@ export async function getWietnauerMarkaSnapshot(
     /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
      * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
     allowedCities?: string[] | null;
+    dateFrom?: string | null;
+    dateTo?: string | null;
   } = {},
 ): Promise<WietnauerMarkaSnapshot> {
   const strategicBrands = options.strategicBrands ?? [];
@@ -910,18 +913,20 @@ export async function getWietnauerMarkaSnapshot(
     .sort()
     .join("|");
 
-  const cacheKey = `${CACHE_VERSION}-${stratKey || "none"}-${cityCacheTag(cities)}`;
+  const win = resolveWindowBounds(options.dateFrom, options.dateTo);
+
+  const cacheKey = `${CACHE_VERSION}-${stratKey || "none"}-${cityCacheTag(cities)}-${win.key}`;
   const result = await withCache<RawMarkaBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       const [portfolio, topSkus, penetration, aktifToplam, strategic, windowComparison] =
         await Promise.all([
-          fetchBrandPortfolioRaw(cities),
-          fetchTopSkusRaw(cities),
-          fetchBrandPenetrationRaw(cities),
-          fetchAktifMusteriToplamRaw(cities),
-          fetchStrategicBrandsDetailRaw(strategicBrands, cities),
+          fetchBrandPortfolioRaw(win, cities),
+          fetchTopSkusRaw(win, cities),
+          fetchBrandPenetrationRaw(win, cities),
+          fetchAktifMusteriToplamRaw(win, cities),
+          fetchStrategicBrandsDetailRaw(strategicBrands, win, cities),
           fetchBrand3MonthYtdRaw(cities),
         ]);
       return {

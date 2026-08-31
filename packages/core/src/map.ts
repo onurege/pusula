@@ -1190,12 +1190,23 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_30 AS (
+      -- BUG FIX (harita "son 30g ciro" ~6x şişkin idi): üst sınır eksikti.
+      -- "GETDATE()" bu tenant'ta DEMO_DATE/NOW_MODE=max-invoice anchor'ına
+      -- patchleniyor (db.ts applyDemoDate) ve bu anchor gerçek en-son fatura
+      -- tarihinden GERİDE kalabiliyor (frozen-clock demo senaryosu) — anchor
+      -- sonrası faturalar hâlâ DB'de var. Üst sınır olmadan "son 30g" aslında
+      -- "anchor-30g'den bugüne (gerçek now) kadar her şey" oluyordu, yani
+      -- ~4.5 ay veri tek 30g etiketiyle gösteriliyordu. Diğer sabit pencereler
+      -- (ciro_prev_30, ciro_yoy_30d, urun_grup_prev_30) zaten üst sınırlıydı;
+      -- bu üç CTE (ciro_30, ciro_t90, urun_grup_30) ve ziyaret90 sayaç
+      -- eksikti — hepsi burada aynı desenle kapatıldı.
       SELECT f.LNGMUSTERIKOD,
              SUM(f.DBLNETTUTAR) AS ciro,
              COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_prev_30 AS (
@@ -1210,12 +1221,15 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
     ),
     -- Risk skoru momentum bileşeni için: 90 günlük baseline + YoY pencere
     ciro_t90 AS (
+      -- BUG FIX: aynı üst-sınır eksikliği (bkz. ciro_30 yorumu) — 90g
+      -- baseline de anchor sonrası tüm faturaları yutuyordu.
       SELECT f.LNGMUSTERIKOD,
              SUM(f.DBLNETTUTAR) AS ciro,
              COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_yoy_30d AS (
@@ -1241,6 +1255,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     urun_grup_prev_30 AS (
@@ -1260,9 +1275,14 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       GROUP BY f.LNGMUSTERIKOD
     ),
     son_ziyaret AS (
+      -- ziyaret90 sayacı da aynı üst-sınır eksikliğini taşıyordu (bkz.
+      -- ciro_30 yorumu) — anchor sonrası ziyaretler de 90g'e sızıyordu.
+      -- MAX(z.TRHGIRIS) kasıtlı olarak sınırsız kalır (tüm zamanların son
+      -- ziyareti — daysSinceLastVisit hesabı için gerekli).
       SELECT z.LNGMUSTERIKOD,
              MAX(z.TRHGIRIS) AS son,
              SUM(CASE WHEN z.TRHGIRIS >= DATEADD(day, -90, GETDATE())
+                       AND z.TRHGIRIS <  DATEADD(day, 1, GETDATE())
                       THEN 1 ELSE 0 END) AS ziyaret90
       FROM dbo.TBLPMPZIYARETBASLIK AS z
       WHERE z.TRHGIRIS IS NOT NULL

@@ -12,8 +12,10 @@ import { panelTitle, panelHidden } from "@/lib/content";
 
 export function BrandPortfolioPanel({
   rows,
+  periodLabel = "Son 30g",
 }: {
   rows: MarkaPortfolioRow[];
+  periodLabel?: string;
 }) {
   if (panelHidden("panel.marka.portfolio")) return null;
   // Core zaten Top 15 + "Diğer" + dip toplam döndürüyor — burada ekstra slice YOK.
@@ -28,7 +30,7 @@ export function BrandPortfolioPanel({
         <div>
           <div className="v3-panel-title">{panelTitle("panel.marka.portfolio", "Marka Portföyü")}</div>
           <div className="v3-panel-sub">
-            Son 30g · Top {dataRows.length} marka net ciroya göre ·{" "}
+            {periodLabel} · Top {dataRows.length} marka net ciroya göre ·{" "}
             {stratList.length > 0 ? (
               <>
                 <span className="strat-dot" /> {stratList.length} stratejik

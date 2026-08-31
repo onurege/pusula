@@ -20,6 +20,7 @@ import {
   customerInScope,
   getCustomerSales,
   getKomutaSnapshot,
+  getKomutaFacets,
   getMapFacets,
   getWietnauerYonetimSnapshot,
   getWietnauerMarkaSnapshot,
@@ -45,6 +46,7 @@ import {
   listRadarDefinitions,
   listReports,
   loadSnapshot,
+  nowAnchorDate,
   resolveNowAnchor,
   retrieve,
   runAgent,
@@ -877,22 +879,44 @@ app.get("/api/komuta", async (c) => {
     // Demo'da refresh yok sayılır → hep cache'ten servis edilir.
     const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const reelTL = c.req.query("reel") === "1";
-    const otvNet = c.req.query("otv") === "1";
     // unit=9le → tüm value alanları 9-Liter-Equivalent volume bazında döner;
     // boş veya başka değer → TL (default).
     const unit = c.req.query("unit") === "9le" ? "9le" as const : "tl" as const;
+    // md2 — Cockpit global filtre: Bölge (şehir-tabanlı) + Kanal (müşteri grup
+    // kırılımı) + Ürün Grubu (TBLURUNEKGRUP kategori kodu).
+    const bolge = c.req.query("bolge")?.trim() || null;
+    const kanal = c.req.query("kanal")?.trim() || null;
+    const urunGrup = c.req.query("urunGrup")?.trim() || null;
     const snap = await getKomutaSnapshot({
       forceRefresh,
       reelTL,
-      otvNet,
       unit,
       allowedDistKods: scope.distKods,
       distId: scopeSingleDistId(scope),
       allowedCities: scope.cities,
+      bolge,
+      kanal,
+      urunGrup,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
     console.error("[/api/komuta] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// md2 — Cockpit filtre dropdown seçenekleri (Bölge / Kanal). Auth gerekli.
+app.get("/api/komuta/facets", async (c) => {
+  try {
+    await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  try {
+    return c.json(await getKomutaFacets());
+  } catch (err) {
+    console.error("[/api/komuta/facets] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
   }
 });
@@ -1050,12 +1074,15 @@ app.get("/api/wietnauer/yonetim", async (c) => {
   try {
     const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const tenant = getTenantConfig();
+    const { dateFrom, dateTo } = parseDateRange(c);
     const snap = await getWietnauerYonetimSnapshot({
       forceRefresh,
       strategicBrands: tenant.strategicBrands ?? [],
       allowedDistKods: scope.distKods,
       distId: scopeSingleDistId(scope),
       allowedCities: scope.cities,
+      dateFrom,
+      dateTo,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
@@ -1084,7 +1111,43 @@ type V3SnapshotOpts = {
   dateTo?: string | null;
 };
 
-/** ?from=YYYY-MM-DD&to=YYYY-MM-DD parse — geçersizse null. Sadece tarih formatı. */
+/**
+ * md2 — Dönem preset'ini (`?donem=mtd|ytd|q1|q2|q3`) DONUK-SAAT anchor'ına
+ * (NOW_MODE=max-invoice) göre from/to'ya çevirir. Preset'ler client'ta değil
+ * BURADA çözülür — böylece "bugün" değil, verinin son gününe (anchor) göre
+ * hesaplanır ve tüm ekranlar tutarlı pencere görür. `son30g` / bilinmeyen →
+ * null (fetcher'ın varsayılan son-30g penceresi).
+ */
+function anchorToday(): string {
+  return (
+    nowAnchorDate() ??
+    process.env.DEMO_DATE?.trim() ??
+    new Date().toISOString().slice(0, 10)
+  );
+}
+function resolveDonem(donem: string): { from: string; to: string } | null {
+  const a = anchorToday(); // YYYY-MM-DD
+  const yr = a.slice(0, 4);
+  switch (donem) {
+    case "mtd":
+      return { from: `${a.slice(0, 7)}-01`, to: a };
+    case "ytd":
+      return { from: `${yr}-01-01`, to: a };
+    case "q1":
+      return { from: `${yr}-01-01`, to: `${yr}-03-31` };
+    case "q2":
+      return { from: `${yr}-04-01`, to: `${yr}-06-30` };
+    case "q3":
+      return { from: `${yr}-07-01`, to: `${yr}-09-30` };
+    default:
+      return null; // son30g / bilinmeyen → varsayılan pencere
+  }
+}
+
+/**
+ * ?from&to (serbest, öncelikli) VEYA ?donem preset'ini çözer. İkisi de yoksa
+ * null → fetcher varsayılan penceresi.
+ */
 function parseDateRange(c: { req: { query: (k: string) => string | undefined } }): {
   dateFrom: string | null;
   dateTo: string | null;
@@ -1093,7 +1156,15 @@ function parseDateRange(c: { req: { query: (k: string) => string | undefined } }
     const s = (v ?? "").trim();
     return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
   };
-  return { dateFrom: norm(c.req.query("from")), dateTo: norm(c.req.query("to")) };
+  const from = norm(c.req.query("from"));
+  const to = norm(c.req.query("to"));
+  if (from && to) return { dateFrom: from, dateTo: to }; // serbest aralık öncelikli
+  const donem = (c.req.query("donem") ?? "").trim().toLowerCase();
+  if (donem && donem !== "son30g") {
+    const r = resolveDonem(donem);
+    if (r) return { dateFrom: r.from, dateTo: r.to };
+  }
+  return { dateFrom: null, dateTo: null };
 }
 function makeV3Handler(
   name: string,

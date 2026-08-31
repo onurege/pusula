@@ -2,7 +2,8 @@
  * Wietnauer Dashboard #6 — Müşteri Aktivasyon & Risk
  *
  * Bu modül 5 panele veri besler:
- *   A) 90g Aktif Müşteri sayısı + segment kırılımı (TBLMUSTERIEKSAHA saha 8)
+ *   A) 90g Aktif Müşteri sayısı + segment kırılımı (TBLMUSTERIGRUPKIRILIM —
+ *      müşteri grup kırılımı: Prestige/Premium/Premium Plus/Standart/…)
  *   B) Sessizleşen Müşteri Listesi (önceki 90g'de var, son 90g'de yok)
  *   C) Stratejik Marka Sessizliği — her marka için son-90g-sessiz müşteri sayısı
  *   D) Risk Tier Dağılımı — SQLite map_customers.risk_tier_v2
@@ -34,7 +35,10 @@ const CACHE_DOMAIN = "wietnauer-aktivasyon";
 // SELECT/GROUP BY'a eklendi ki JS tarafı scope filtresi + re-aggregate
 // yapabilsin. D/E (SQLite) değişmedi — zaten allowedDistKods ile lokal
 // filtreleniyor.
-const CACHE_VERSION = "v4";
+// v5: Panel A (fetchActiveCustomers90dRaw) segment kaynağı TBLMUSTERIGRUP'tan
+// TBLMUSTERIGRUPKIRILIM'e (müşteri grup kırılımı: Prestige/Premium/…)
+// değiştirildi — eski segment değerleriyle cache çakışmasın diye bump.
+const CACHE_VERSION = "v5";
 
 // ES module __dirname eşdeğeri — Node 22+ ESM scope'ta __dirname tanımsız.
 const __filename = fileURLToPath(import.meta.url);
@@ -44,7 +48,9 @@ const DEFAULT_REPO_ROOT = path.resolve(__dirname, "../../..");
 // ---------- Tipler ----------------------------------------------------------
 
 export type ActiveCustomersSegment = {
-  /** TBLEKSAHASECENEK.TXTACIKLAMA — "Perakende" / "On Trade" / "(Tanımsız)" vb. */
+  /** TBLMUSTERIGRUPKIRILIM.TXTAD — müşteri grup kırılımı (Prestige/Premium/
+   *  Premium Plus/Standart/Standart Plus/Off Trade C&PS Tedarikçi vb.) veya
+   *  "(Tanımsız)" (TBLMUSTERI.TXTGRUPKIRILIMKOD boş/eşleşmiyorsa). */
   segment: string;
   musteriSayi: number;
   /** Toplam aktif müşteri içindeki pay (%) */
@@ -135,7 +141,9 @@ type ActiveCustomers90dRawRow = {
  * hesaplanabilsin diye. `f.LNGDISTKOD` her satırda mevcut.
  */
 async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<ActiveCustomers90dRawRow[]> {
-  // Müşteri tipi: TBLMUSTERIGRUP.TXTAD (TBLMUSTERI.TXTGRUPKOD üzerinden).
+  // Segment = müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD →
+  // TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Premium Plus/Standart/
+  // Standart Plus/Off Trade C&PS Tedarikçi vb.).
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD AS musteri_id, f.LNGDISTKOD AS dist_id
@@ -161,12 +169,12 @@ async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<Act
       c.dist_id,
       CASE WHEN a.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_aktif,
       CASE WHEN o.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_onceki,
-      ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS segment
+      ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
     FROM combos c
     LEFT JOIN aktif a ON a.musteri_id = c.musteri_id AND a.dist_id = c.dist_id
     LEFT JOIN onceki o ON o.musteri_id = c.musteri_id AND o.dist_id = c.dist_id
     LEFT JOIN dbo.TBLMUSTERI m ON m.LNGKOD = c.musteri_id
-    LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
+    LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
   `;
   // ~8-9K distinct müşteri (90g aktif) — wietnauer-stok.ts cardinality ile
   // aynı mertebede.

@@ -47,7 +47,7 @@
  * 18 Nis hiç dahil değil.
  */
 import { runReadOnly } from "./db.js";
-import { sqlNow } from "./now.js";
+import { sqlNow, resolveWindowBounds } from "./now.js";
 import { withCache } from "./cache.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { cityFactClause, cityCacheTag } from "./auth.js";
@@ -61,7 +61,10 @@ const CACHE_DOMAIN = "wietnauer-saha";
 // header'ında (TBLPMPZIYARETBASLIK) LNGDISTKOD yok — dist bilgisi
 // TBLPMPZIYARETOZET (o) üzerinden gelir.
 // v6: md41 — RepPerformanceRow'a aktifMusteri (fatura kesen distinct) eklendi.
-const CACHE_VERSION = "v6";
+// v7: Panel B (fetchCoverage) segment kaynağı TBLMUSTERIGRUP'tan
+// TBLMUSTERIGRUPKIRILIM'e (müşteri grup kırılımı: Prestige/Premium/…)
+// değiştirildi — eski segment değerleriyle cache çakışmasın diye bump.
+const CACHE_VERSION = "v7";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -77,7 +80,9 @@ export type VisitDailyRow = {
 };
 
 export type CoverageSegmentRow = {
-  /** TBLEKSAHASECENEK.TXTACIKLAMA (örn "OFF-TRADE WHITE OUTLET") veya "(Tanımsız)" */
+  /** TBLMUSTERIGRUPKIRILIM.TXTAD — müşteri grup kırılımı (Prestige/Premium/
+   *  Premium Plus/Standart/Standart Plus/Off Trade C&PS Tedarikçi vb.) veya
+   *  "(Tanımsız)" (TBLMUSTERI.TXTGRUPKIRILIMKOD boş/eşleşmiyorsa). */
   segment: string;
   /** Son 30g'de ziyaret edilen distinct müşteri sayısı (bu segmentte) */
   ziyaretEdilen: number;
@@ -185,7 +190,11 @@ export type WietnauerSahaSnapshot = {
 type VisitDailyRawRow = VisitDailyRow & { distId: number | null };
 
 /** Scope-free: dist_id GROUP BY'a eklendi (~31 dist × 30 gün ≈ 930 satır, ucuz). */
-async function fetchVisitDaily(cities?: string[] | null): Promise<VisitDailyRawRow[]> {
+async function fetchVisitDaily(
+  cities: string[] | null | undefined,
+  win: { lower: string; upper: string },
+  visitUpper: string,
+): Promise<VisitDailyRawRow[]> {
   const sql = `
     SELECT
       o.LNGDISTKOD                                                AS dist_id,
@@ -196,8 +205,8 @@ async function fetchVisitDaily(cities?: string[] | null): Promise<VisitDailyRawR
     FROM dbo.TBLPMPZIYARETBASLIK AS z
     INNER JOIN dbo.TBLPMPZIYARETOZET AS o ON o.LNGKOD = z.LNGOZETKOD
     WHERE z.TRHGIRIS IS NOT NULL
-      AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
-      AND z.TRHGIRIS <= ${sqlNow()}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
+      AND z.TRHGIRIS >= ${win.lower}
+      AND ${visitUpper}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
     GROUP BY o.LNGDISTKOD, CAST(z.TRHGIRIS AS DATE)
     ORDER BY gun
   `;
@@ -305,10 +314,16 @@ type CoverageRawRow = CoverageSegmentRow & { distId: number | null };
  * Aktif tanımı: son 90g'de en az 1 fatura kesilmiş müşteri.
  * Kapsanan tanımı: son 30g'de en az 1 ziyaret edilmiş müşteri (TRHGIRIS IS NOT NULL).
  *
- * Segment = TBLMUSTERIGRUP.TXTAD (TBLMUSTERI.TXTGRUPKOD ile JOIN).
- * Müşterinin grubu yoksa "(Tanımsız)" altında raporlanır.
+ * Segment = müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD →
+ * TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Premium Plus/Standart/
+ * Standart Plus/Off Trade C&PS Tedarikçi vb.). Müşterinin kırılım kodu
+ * yoksa/eşleşmiyorsa "(Tanımsız)" altında raporlanır.
  */
-async function fetchCoverage(cities?: string[] | null): Promise<CoverageRawRow[]> {
+async function fetchCoverage(
+  cities: string[] | null | undefined,
+  win: { lower: string; upper: string },
+  visitUpper: string,
+): Promise<CoverageRawRow[]> {
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD, f.LNGDISTKOD AS dist_id
@@ -322,15 +337,15 @@ async function fetchCoverage(cities?: string[] | null): Promise<CoverageRawRow[]
       FROM dbo.TBLPMPZIYARETBASLIK z
       INNER JOIN dbo.TBLPMPZIYARETOZET o ON o.LNGKOD = z.LNGOZETKOD
       WHERE z.TRHGIRIS IS NOT NULL
-        AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
-        AND z.TRHGIRIS <= ${sqlNow()}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
+        AND z.TRHGIRIS >= ${win.lower}
+        AND ${visitUpper}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
     ),
     musteri_seg AS (
       SELECT
         m.LNGKOD AS musteri_kod,
-        ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS segment
+        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
+      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
     ),
     dist_musteri AS (
       -- Her müşteri × dist kombinasyonu (aktif veya ziyaret kaynaklı).
@@ -410,7 +425,11 @@ type RepPerformanceRawRow = Omit<RepPerformanceRow, "rank"> & { distId: number |
  * Temsilci adı `TBLKULLANICI.TXTADSOYAD` üzerinden gelir (TBLDISTPERSONEL boş).
  * Adsız rep'ler "Temsilci #<id>" fallback ile gösterilir.
  */
-async function fetchRepPerformance(cities?: string[] | null): Promise<RepPerformanceRawRow[]> {
+async function fetchRepPerformance(
+  cities: string[] | null | undefined,
+  win: { lower: string; upper: string },
+  visitUpper: string,
+): Promise<RepPerformanceRawRow[]> {
   const sql = `
     WITH baz AS (
       SELECT
@@ -428,18 +447,18 @@ async function fetchRepPerformance(cities?: string[] | null): Promise<RepPerform
         WHERE BYTISLEMKODU = 60
       ) sip ON sip.LNGBASLIKKOD = z.LNGKOD
       WHERE z.TRHGIRIS IS NOT NULL
-        AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
-        AND z.TRHGIRIS <= ${sqlNow()}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
+        AND z.TRHGIRIS >= ${win.lower}
+        AND ${visitUpper}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
     ),
-    -- md41: temsilci (LNGSTKOD) × dist bazında son 30g fatura kesilen distinct
-    -- müşteri = "aktif müşteri". Ziyaret tablosundan bağımsız, satış tabanlı.
+    -- md41: temsilci (LNGSTKOD) × dist bazında seçili dönemde fatura kesilen
+    -- distinct müşteri = "aktif müşteri". Ziyaret tablosundan bağımsız, satış tabanlı.
     fat AS (
       SELECT f.LNGSTKOD, f.LNGDISTKOD,
              COUNT(DISTINCT f.LNGMUSTERIKOD) AS aktif
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
       GROUP BY f.LNGSTKOD, f.LNGDISTKOD
     )
     SELECT
@@ -500,7 +519,11 @@ type VisitConversionRawRow = Omit<VisitConversionRow, "donusumPct"> & {
  * Bir ziyarette aynı belge tipi birden fazla kez çıkabilir → DISTINCT
  * z.LNGKOD ile ziyaret-bazlı sayım yapılır.
  */
-async function fetchConversion(cities?: string[] | null): Promise<VisitConversionRawRow[]> {
+async function fetchConversion(
+  cities: string[] | null | undefined,
+  win: { lower: string; upper: string },
+  visitUpper: string,
+): Promise<VisitConversionRawRow[]> {
   const sql = `
     SELECT
       o.LNGDISTKOD                                                                    AS dist_id,
@@ -513,8 +536,8 @@ async function fetchConversion(cities?: string[] | null): Promise<VisitConversio
     INNER JOIN dbo.TBLPMPZIYARETOZET o ON o.LNGKOD = z.LNGOZETKOD
     LEFT JOIN dbo.TBLPMPZIYARETDETAY d ON d.LNGBASLIKKOD = z.LNGKOD
     WHERE z.TRHGIRIS IS NOT NULL
-      AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
-      AND z.TRHGIRIS <= ${sqlNow()}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
+      AND z.TRHGIRIS >= ${win.lower}
+      AND ${visitUpper}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
     GROUP BY o.LNGDISTKOD, z.BYTRUTKODU
     ORDER BY o.LNGDISTKOD, z.BYTRUTKODU
   `;
@@ -573,7 +596,9 @@ function aggregateConversion(rows: VisitConversionRawRow[]): VisitConversionRow[
  * API'de yapılır.
  */
 async function fetchDistributorComparison(
-  cities?: string[] | null,
+  cities: string[] | null | undefined,
+  win: { lower: string; upper: string },
+  visitUpper: string,
 ): Promise<Omit<DistributorComparisonRow, "rank">[]> {
   // Bölge kaynağı tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge,
   // Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge. (komuta fetchHeatmap ile aynı.)
@@ -596,8 +621,8 @@ async function fetchDistributorComparison(
         WHERE BYTISLEMKODU = 60
       ) sip ON sip.LNGBASLIKKOD = z.LNGKOD
       WHERE z.TRHGIRIS IS NOT NULL
-        AND z.TRHGIRIS >= DATEADD(day, -30, ${sqlNow()})
-        AND z.TRHGIRIS <= ${sqlNow()}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
+        AND z.TRHGIRIS >= ${win.lower}
+        AND ${visitUpper}${cityFactClause(cities, "z.LNGMUSTERIKOD")}
     )
     SELECT
       b.LNGDISTKOD                                                 AS dist_kod,
@@ -666,6 +691,11 @@ export async function getWietnauerSahaSnapshot(
     /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
      * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
     allowedCities?: string[] | null;
+    /** md2 — seçili saha penceresi alt sınırı (YYYY-MM-DD). null/geçersiz →
+     * anchor-bağıl son 30g. Ziyaret + fatura pencerelerinin ikisini de böler. */
+    dateFrom?: string | null;
+    /** md2 — seçili saha penceresi üst sınırı (YYYY-MM-DD, kapsayıcı). */
+    dateTo?: string | null;
   } = {},
 ): Promise<WietnauerSahaSnapshot> {
   // strategicBrands şu an saha modülünde kullanılmıyor.
@@ -673,18 +703,32 @@ export async function getWietnauerSahaSnapshot(
   void getTenantConfig;
 
   const cities = options.allowedCities ?? null;
-  const cacheKey = `${CACHE_VERSION}-30g-${cityCacheTag(cities)}`;
+  const win = resolveWindowBounds(options.dateFrom, options.dateTo);
+
+  // Ziyaret verisi Wietnauer test DB'sinde DEMO_DATE ötesine uzandığından
+  // (bkz. dosya başı KAPALI PENCERE notu), dönem SEÇİLİ DEĞİLKEN ziyaret üst
+  // sınırı sıkı `<= sqlNow()` kalmalı — win.upper'ın fallback hali
+  // `DATEADD(day, 1, sqlNow())` olduğu için `<` ile sızıntıyı geri açardı.
+  // Dönem seçildiğinde win.upper = `DATEADD(day, 1, CAST(dateTo AS DATE))`
+  // zaten DEMO_DATE'i aşmaz, `<` ile kapsayıcı [from, to] penceresini verir.
+  // (win.key seçili dönemde `from_to` biçiminde olur; fallback'te `30g`.)
+  const periodSelected = win.key.includes("_");
+  const visitUpper = periodSelected
+    ? `z.TRHGIRIS <  ${win.upper}`
+    : `z.TRHGIRIS <= ${sqlNow()}`;
+
+  const cacheKey = `${CACHE_VERSION}-${win.key}-${cityCacheTag(cities)}`;
   const result = await withCache<RawSahaBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       const [visitDaily, kpi, coverage, reps, conversion, distributors] = await Promise.all([
-        fetchVisitDaily(cities),
+        fetchVisitDaily(cities, win, visitUpper),
         fetchVisitKpi7g(cities),
-        fetchCoverage(cities),
-        fetchRepPerformance(cities),
-        fetchConversion(cities),
-        fetchDistributorComparison(cities),
+        fetchCoverage(cities, win, visitUpper),
+        fetchRepPerformance(cities, win, visitUpper),
+        fetchConversion(cities, win, visitUpper),
+        fetchDistributorComparison(cities, win, visitUpper),
       ]);
       return {
         visitDaily,

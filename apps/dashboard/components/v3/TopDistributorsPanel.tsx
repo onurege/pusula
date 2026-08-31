@@ -18,8 +18,11 @@ type Limit = 10 | 20 | 0; // 0 = Tümü
  */
 export function TopDistributorsPanel({
   distributors,
+  periodLabel = "son 30 gün",
 }: {
   distributors: WietnauerTopDistributor[];
+  /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
+  periodLabel?: string;
 }) {
   const { t, isHidden } = useContent();
   const [limit, setLimit] = useState<Limit>(10);
@@ -34,7 +37,7 @@ export function TopDistributorsPanel({
         <div>
           <div className="v3-panel-title">{t("panel.yonetim.topdist.title", "Top Distribütör Analizi")}</div>
           <div className="v3-panel-sub">
-            Son 30 gün net ciro · İlk {visible.length} distribütör toplam cironun
+            {periodLabel} net ciro · İlk {visible.length} distribütör toplam cironun
             <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor
           </div>
         </div>

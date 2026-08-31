@@ -9,8 +9,8 @@ import {
 } from "@/components/v3/satis/SalesVelocityPanel";
 import { DropSizePanel } from "@/components/v3/satis/DropSizePanel";
 import { NewCustomersPanel } from "@/components/v3/satis/NewCustomersPanel";
-import { AvgOrderTrendPanel } from "@/components/v3/satis/AvgOrderTrendPanel";
-import { SatisDateRangePicker } from "@/components/v3/satis/SatisDateRangePicker";
+import { AvgOrderTrendPanel, formatAyLabel } from "@/components/v3/satis/AvgOrderTrendPanel";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { SatisUnitToggle } from "@/components/v3/satis/SatisUnitToggle";
 import { formatCompact } from "@/components/komuta/format";
 
@@ -48,10 +48,13 @@ function formatDateTr(iso: string): string {
 async function fetchSatisSnapshot(params: {
   dateFrom: string | null;
   dateTo: string | null;
+  donem: string | null;
 }): Promise<WietnauerSatisSnapshot> {
   const qs = new URLSearchParams();
   if (params.dateFrom) qs.set("from", params.dateFrom);
   if (params.dateTo) qs.set("to", params.dateTo);
+  // Serbest aralık yoksa preset'i (donem) API'ye ilet — sunucu anchor'a göre çözer.
+  else if (params.donem && params.donem !== "son30g") qs.set("donem", params.donem);
   const query = qs.toString();
   const path = `/api/wietnauer/satis${query ? `?${query}` : ""}`;
 
@@ -86,7 +89,11 @@ async function fetchSatisSnapshot(params: {
 }
 
 type Props = {
-  searchParams: Promise<{ from?: string; to?: string; unit?: string }>;
+  searchParams: Promise<{ from?: string; to?: string; unit?: string; donem?: string }>;
+};
+
+const DONEM_LABEL: Record<string, string> = {
+  son30g: "Son 30g", mtd: "Bu Ay", ytd: "Bu Yıl", q1: "Ç1", q2: "Ç2", q3: "Ç3",
 };
 
 /**
@@ -113,11 +120,12 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
   const dateFrom = normDate(sp.from);
   const dateTo = normDate(sp.to);
   const hasCustomRange = Boolean(dateFrom && dateTo && dateFrom <= dateTo);
+  const donem = (sp.donem ?? "").toLowerCase();
   const volumeKey = tenant.volume.key;
   const unit = sp.unit === volumeKey ? volumeKey : "tl";
   const rangeLabel = hasCustomRange && dateFrom && dateTo
     ? `${formatDateTr(dateFrom)} – ${formatDateTr(dateTo)}`
-    : "Son 30g";
+    : DONEM_LABEL[donem] ?? "Son 30g";
 
   let snap: WietnauerSatisSnapshot | null = null;
   let err: string | null = null;
@@ -125,6 +133,7 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
     snap = await fetchSatisSnapshot({
       dateFrom: hasCustomRange ? dateFrom : null,
       dateTo: hasCustomRange ? dateTo : null,
+      donem: hasCustomRange ? null : donem || null,
     });
   } catch (e) {
     err = (e as Error).message;
@@ -141,10 +150,11 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
   const showVolumePrimary = unit === volumeKey && volShort;
   const topDistCount = snap?.distLeaderboard.length ?? 0;
   const topRepCount = snap?.repLeaderboard.length ?? 0;
-  const avgOrderLatest =
+  const avgOrderLatestPoint =
     snap && snap.avgOrderTrend.length > 0
-      ? snap.avgOrderTrend[snap.avgOrderTrend.length - 1]?.ortSepet ?? 0
-      : 0;
+      ? snap.avgOrderTrend[snap.avgOrderTrend.length - 1] ?? null
+      : null;
+  const avgOrderLatest = avgOrderLatestPoint?.ortSepet ?? 0;
 
   return (
     <div className="v3-page">
@@ -153,7 +163,11 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
         title="Satış Performansı"
         contentKey="page.satis.title"
         descKey="page.satis.desc"
-        description={`${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`}
+        description={
+          snap
+            ? `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — ${rangeLabel} içinde ${topDistCount} distribütör, ${topRepCount} temsilci; leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
+            : `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
+        }
         dataNote="TBLMSDFATURA + TBLDISTPERSONEL + TBLDIST + TBLDISTEKGRUP · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
       />
@@ -167,11 +181,11 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
         </div>
       )}
 
-      {/* md21: tarih aralığı seçici + TL↔Hacim görünüm anahtarı. Hata
-          durumunda da göster ki kullanıcı aralığı düzeltip tekrar
-          deneyebilsin (ör. geçersiz aralık sonrası boş cevap). */}
+      {/* md2: global dönem filtresi (preset + serbest) + TL↔Hacim görünüm
+          anahtarı. Hata durumunda da göster ki kullanıcı dönemi değiştirip
+          tekrar deneyebilsin. */}
+      <GlobalDonemFilter />
       <div className="v3-controls-row">
-        <SatisDateRangePicker dateFrom={dateFrom} dateTo={dateTo} />
         <SatisUnitToggle />
       </div>
 
@@ -211,7 +225,11 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
             <KpiTile
               label={cs("kpi.satis.sepet", "Güncel Ort. Sepet")}
               value={`₺${formatCompact(avgOrderLatest)}`}
-              sub="son ay · AVG net/fatura"
+              sub={
+                avgOrderLatestPoint
+                  ? `${formatAyLabel(avgOrderLatestPoint.ay)} · ${avgOrderLatestPoint.faturaSayi.toLocaleString("tr-TR")} fatura`
+                  : "son ay · AVG net/fatura"
+              }
             />
           )}
           </div>

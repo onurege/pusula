@@ -56,9 +56,9 @@ export const WIETNAUER_CONFIG: TenantConfig = {
 
   labels: {
     morningHeadline: "Bu Sabah Wietnauer'da Ne Oluyor",
-    channelTypeTitle: "Müşteri Tipi · Son 12 Ay",
+    channelTypeTitle: "Müşteri Grup Kırılımı · Son 12 Ay",
     channelTypeSource:
-      "Müşteri tipi segmentasyonu: TBLMUSTERIEKSAHA × TBLEKSAHASECENEK lookup. Perakende / On Trade / Otel / Tali Bayi dağılımı.",
+      "Müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM lookup. Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı.",
     mapEmptyDataSource:
       "Henüz hiç senkronizasyon yapılmamış. Sağ üstteki Verileri yenile butonuna tıklayarak WIETNAUER_TEST'ten müşteri listesini SQLite'a kopyalayın.",
     kpiSourceNote: "TBLMSDFATURA + TBLMSDBELGEDETAY",

@@ -3,6 +3,8 @@ import { cs, panelHidden } from "@/lib/content";
 import type { WietnauerSahaSnapshot } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
+import { donemLabel } from "@/lib/donem";
 import { VisitDailyTrendPanel } from "@/components/v3/saha/VisitDailyTrendPanel";
 import { CoveragePanel } from "@/components/v3/saha/CoveragePanel";
 import { RepPerformancePanel } from "@/components/v3/saha/RepPerformancePanel";
@@ -16,17 +18,27 @@ export const metadata = { title: "Saha Operasyon · V3 · Insider" };
  * V3 Dashboard #5 — Distribütör & Saha Operasyon.
  *
  *   A) Günlük ziyaret trendi (rut içi vs rut dışı, son 30g) + 7g KPI
- *   B) Aktif müşteri kapsama oranı + segment kırılımı
+ *   B) Aktif müşteri kapsama oranı + müşteri grup kırılımı (TBLMUSTERIGRUPKIRILIM)
  *   C) Temsilci performansı (Top 20)
  *   D) Rut içi/dışı ziyaret → sipariş dönüşümü
  *   E) Distribütör karşılaştırma (Top 10)
  */
-export default async function V3SahaOperasyonPage() {
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
+type Props = {
+  searchParams: Promise<{ donem?: string; from?: string; to?: string }>;
+};
+
+export default async function V3SahaOperasyonPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const sp = await searchParams;
+  const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
+  const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
+  const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
   let snap: WietnauerSahaSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerSaha();
+    snap = await getWietnauerSaha({ dateFrom, dateTo, donem });
   } catch (e) {
     err = (e as Error).message;
   }
@@ -39,9 +51,11 @@ export default async function V3SahaOperasyonPage() {
         contentKey="page.saha.title"
         descKey="page.saha.desc"
         description={`${tenant.displayName} sahasının günlük ziyaret temposu, müşteri kapsama oranı, temsilci performansı ve sipariş dönüşüm verimliliği — operasyonel ekiplerin tek görünümü.`}
-        dataNote="TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · 30g pencere"
+        dataNote={`TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · TBLMUSTERIGRUPKIRILIM müşteri grup kırılımı · ${donemLabel(donem, dateFrom, dateTo)}`}
         generatedAt={snap?.generatedAt}
       />
+
+      <GlobalDonemFilter />
 
       {err && (
         <div className="v3-error">

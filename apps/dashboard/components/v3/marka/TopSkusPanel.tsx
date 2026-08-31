@@ -9,7 +9,13 @@ import type { TopSkuRow } from "./types";
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 
-export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
+export function TopSkusPanel({
+  rows,
+  periodLabel = "Son 30g",
+}: {
+  rows: TopSkuRow[];
+  periodLabel?: string;
+}) {
   if (panelHidden("panel.marka.topsku")) return null;
   // "Diğer" ve dip toplam satırları pay yüzdesi toplamına dahil edilmez.
   const skuRows = rows.filter((r) => !r.isOther && !r.isTotal);
@@ -21,7 +27,7 @@ export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
         <div>
           <div className="v3-panel-title">{panelTitle("panel.marka.topsku", "Top 10 SKU")}</div>
           <div className="v3-panel-sub">
-            Son 30g net ciro · İlk 10 ürün portföyün
+            {periodLabel} net ciro · İlk 10 ürün portföyün
             <strong> %{top10Pay.toFixed(1)}</strong>'ini taşıyor
           </div>
         </div>

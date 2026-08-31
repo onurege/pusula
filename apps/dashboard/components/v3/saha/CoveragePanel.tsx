@@ -6,10 +6,10 @@ import type { WietnauerSahaSnapshot } from "@/lib/api";
  * Aktif = son 90g'de fatura kesilmiş müşteri.
  * Kapsanan = son 30g'de ziyaret edilmiş müşteri.
  *
- * SVG donut + segment listesi. Wietnauer'da segment kaynağı
- * TBLMUSTERIEKSAHA(LNGEKSAHAKODU=8) — şu an iki seçenek tanımlı
- * (OFF-TRADE WHITE OUTLET, OFF-TRADE YATIRIMLI), kalan müşteriler
- * "(Tanımsız)" altında.
+ * SVG donut + segment listesi. Segment kaynağı müşteri grup kırılımı
+ * (TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM.TXTAD — Prestige/
+ * Premium/Premium Plus/Standart/Standart Plus/Off Trade C&PS Tedarikçi vb.),
+ * kırılımı olmayan müşteriler "(Tanımsız)" altında.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 
@@ -40,7 +40,10 @@ export function CoveragePanel({
           <div className="v3-panel-title">{panelTitle("panel.saha.coverage", "Aktif Müşteri Kapsama")}</div>
           <div className="v3-panel-sub">
             Son 30g'de ziyaret edilen / son 90g'de aktif (fatura kesilmiş)
-            müşteri.
+            müşteri · müşteri grup kırılımına göre{" "}
+            {coverage.segments.length > 0
+              ? `(${coverage.segments.length} kırılım)`
+              : ""}
           </div>
         </div>
       </div>
@@ -105,7 +108,7 @@ export function CoveragePanel({
 
         <div className="cov-segments">
           <div className="cov-seg-head">
-            <span>Segment</span>
+            <span>Müşteri Grup Kırılımı</span>
             <span className="num">Aktif</span>
             <span className="num">Ziyaret</span>
             <span className="num">Kapsama</span>
@@ -143,7 +146,7 @@ export function CoveragePanel({
             </div>
           ))}
           {coverage.segments.length === 0 && (
-            <div className="cov-empty">Segment verisi yok.</div>
+            <div className="cov-empty">Grup kırılımı verisi yok.</div>
           )}
         </div>
       </div>

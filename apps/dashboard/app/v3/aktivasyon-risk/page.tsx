@@ -21,7 +21,7 @@ type Props = {
  * V3 Dashboard #6 — Müşteri Aktivasyon & Risk.
  *
  * Wietnauer talebi:
- *   - Son 3 ayda aktif müşteri sayısı (segment kırılımı)
+ *   - Son 3 ayda aktif müşteri sayısı (müşteri grup kırılımı — TBLMUSTERIGRUPKIRILIM)
  *   - 3 ay sessizleşen müşteriler (kayıp listesi)
  *   - Stratejik markada sessizleşen müşteriler
  *   - Risk tier dağılımı
@@ -69,7 +69,7 @@ export default async function V3AktivasyonRiskPage({ searchParams }: Props) {
             ? `${selectedDist.ad} — son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Saha ekibi için aksiyon listesi.`
             : `${tenant.displayName} tüm portföyde son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`
         }
-        dataNote="TBLMSDFATURA · 90/180g pencere · TBLMUSTERIEKSAHA × TBLEKSAHASECENEK segment · map_customers risk_tier_v2"
+        dataNote="TBLMSDFATURA · 90/180g pencere · TBLMUSTERIGRUPKIRILIM müşteri grup kırılımı · map_customers risk_tier_v2"
         generatedAt={snap?.generatedAt}
       />
 

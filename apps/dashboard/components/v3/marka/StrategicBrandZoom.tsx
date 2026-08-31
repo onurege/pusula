@@ -14,8 +14,10 @@ import type { StrategicBrandDetail } from "./types";
  */
 export function StrategicBrandZoom({
   brands,
+  periodLabel = "Son 30g",
 }: {
   brands: StrategicBrandDetail[];
+  periodLabel?: string;
 }) {
   if (brands.length === 0) {
     return (
@@ -47,7 +49,7 @@ export function StrategicBrandZoom({
         <div>
           <div className="v3-panel-title">Stratejik Marka Zoom</div>
           <div className="v3-panel-sub">
-            Son 30g · {aktif.length}/{brands.length} marka aktif · Toplam
+            {periodLabel} · {aktif.length}/{brands.length} marka aktif · Toplam
             stratejik ciro <strong>₺{formatCompact(totalCiro)}</strong>
           </div>
         </div>

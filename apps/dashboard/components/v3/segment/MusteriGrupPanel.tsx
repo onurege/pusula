@@ -1,12 +1,13 @@
 import { formatCompact } from "@/components/komuta/format";
 
 /**
- * Müşteri Grubu segment paneli (TBLMUSTERIGRUP × TBLMUSTERI.TXTGRUPKOD).
+ * Müşteri Grubu segment paneli — Müşteri Grup Kırılımı
+ * (TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM).
  *
- * md24: 3 kırılım yan yana'nın ilk boyutu — Müşteri Grubu + Ek Grubu +
- * Ek Saha (Müşteri Tipi). Bu panel önceden (yanlışlıkla) "Müşteri Tipi /
- * Ek Saha 8" olarak gösteriliyordu; gerçek Ek Saha 8 verisi artık
- * `EkSahaPanel`'de, bu panel kendi doğru kaynağını (TBLMUSTERIGRUP) taşıyor.
+ * 3 kırılım yan yana'nın ilk boyutu — Müşteri Grubu + Ek Grubu + Müşteri
+ * Tipi. Bu panel Prestige / Premium / Premium Plus / Standart / Standart
+ * Plus gibi müşteri grup kırılımı etiketlerini gösterir — `EkSahaPanel`
+ * ("Müşteri Tipi") ile AYNI kaynağı kullanır.
  *
  * Sol: yatay bar — ciro payı yüzdesi (her bar normalize).
  * Sağ: müşteri sayısı, ciro, ortalama iskonto oranı sayısal kolonları.
@@ -32,7 +33,7 @@ export function MusteriGrupPanel({ rows }: { rows: MusteriGrupSegmentRow[] }) {
       <div className="seg-head">
         <div className="seg-title">{panelTitle("panel.segment.musterigrubu", "Müşteri Grubu")}</div>
         <div className="seg-sub">
-          TBLMUSTERIGRUP · {rows.length} grup · {toplamMusteri.toLocaleString("tr-TR")} müşteri
+          Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM) · {rows.length} kırılım · {toplamMusteri.toLocaleString("tr-TR")} müşteri
         </div>
       </div>
 

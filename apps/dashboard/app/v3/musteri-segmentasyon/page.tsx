@@ -1,5 +1,7 @@
 import { getWietnauerSegment } from "@/lib/api";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
+import { donemLabel } from "@/lib/donem";
 import {
   MusteriGrupPanel,
   type MusteriGrupSegmentRow,
@@ -42,12 +44,12 @@ type SegmentSnapshot = {
 /**
  * V3 Dashboard #3 — Müşteri Segmentasyon.
  *
- * md24: üç bağımsız segment boyutu yan yana + altta cross-segment heatmap
+ * Üç bağımsız segment boyutu yan yana + altta cross-segment heatmap
  * + iskonto kırılımı (md35).
  *
- *   A) Müşteri Grubu (TBLMUSTERIGRUP)
+ *   A) Müşteri Grubu — Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM)
  *   B) Müşteri Ek Grubu (bayilik formatı)
- *   C) Müşteri Tipi (Ek Saha 8)
+ *   C) Müşteri Tipi — A) ile AYNI kaynak (Müşteri Grup Kırılımı)
  *   D) Cross: Müşteri Tipi × Marka heatmap
  *   E) İskonto Kırılımı: Ek Grup / nokta (müşteri) bazında (md35)
  *
@@ -57,14 +59,36 @@ type SegmentSnapshot = {
  * Layout: lg breakpoint'te 3 sütun, sm'de tek sütun. Cross panel ve iskonto
  * kırılım paneli her zaman tam genişlikte altta.
  */
-export default async function V3MusteriSegmentasyonPage() {
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
+
+type Props = {
+  searchParams: Promise<{ donem?: string; from?: string; to?: string }>;
+};
+
+export default async function V3MusteriSegmentasyonPage({ searchParams }: Props) {
+  const sp = await searchParams;
+  const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
+  const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
+  const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
   let snap: SegmentSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerSegment<SegmentSnapshot>();
+    snap = await getWietnauerSegment<SegmentSnapshot>({ dateFrom, dateTo, donem });
   } catch (e) {
     err = (e as Error).message;
   }
+
+  // madde 7: statik açıklama yerine snapshot'tan gelen gerçek sayılar
+  // (kırılım sayısı, toplam müşteri, ek grup sayısı) — uydurma değer yok.
+  const donemTxt = donemLabel(donem, dateFrom, dateTo);
+  const kirilimSayisi = snap?.musteriGrubu.length ?? 0;
+  const ekGrupSayisi = snap?.ekGrup.length ?? 0;
+  const toplamMusteriSayisi = snap
+    ? snap.musteriGrubu.reduce((acc, r) => acc + r.musteriSayi, 0)
+    : 0;
+  const description = snap
+    ? `Müşteri Grubu ve Müşteri Tipi, Müşteri Grup Kırılımı kaynağından (${kirilimSayisi} kırılım, ${toplamMusteriSayisi.toLocaleString("tr-TR")} müşteri); Ek Grubu (bayilik formatı, ${ekGrupSayisi} grup) ayrı boyut — ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`
+    : `Müşteri Grubu, Ek Grubu (bayilik formatı) ve Müşteri Tipi — üç bağımsız boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`;
 
   return (
     <div className="v3-page">
@@ -73,10 +97,12 @@ export default async function V3MusteriSegmentasyonPage() {
         title="Müşteri Segmentasyon"
         contentKey="page.segment.title"
         descKey="page.segment.desc"
-        description="Müşteri Grubu, Ek Grubu (bayilik formatı) ve Müşteri Tipi (Ek Saha 8) — üç bağımsız boyut son 30 günlük ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı."
-        dataNote="TBLMUSTERIGRUP · TBLMUSTERIEKGRUP · TBLMUSTERIEKSAHA · TBLEKSAHASECENEK · TBLURUNGRUP · TBLMSDFATURA.DBLISKONTOTUTARI"
+        description={description}
+        dataNote="TBLMUSTERIGRUPKIRILIM · TBLMUSTERIEKGRUP · TBLMUSTERIGRUP (Tip×Marka) · TBLURUNGRUP · TBLMSDFATURA.DBLISKONTOTUTARI"
         generatedAt={snap?.generatedAt}
       />
+
+      <GlobalDonemFilter />
 
       {err && (
         <div className="v3-error">

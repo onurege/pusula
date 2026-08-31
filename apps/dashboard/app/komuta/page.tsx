@@ -15,7 +15,9 @@ import type {
   ProductTier,
   ValueUnit,
 } from "@/lib/api";
-import { getKomutaSnapshot } from "@/lib/api";
+import { getKomutaSnapshot, getKomutaFacets, type KomutaFacets } from "@/lib/api";
+import { KomutaFilterDropdowns } from "@/components/komuta/KomutaFilterDropdowns";
+import { KomutaPeriyotDropdown } from "@/components/komuta/KomutaPeriyotDropdown";
 import { getContentMap, t, panelTitle, panelHidden } from "@/lib/content";
 import { FinanceAgentLauncher } from "@/components/komuta/FinanceAgentLauncher";
 import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
@@ -35,24 +37,46 @@ type Props = {
   searchParams: Promise<{
     refresh?: string;
     reel?: string;
-    otv?: string;
     unit?: string;
+    bolge?: string;
+    kanal?: string;
+    urunGrup?: string;
+    periyot?: string;
   }>;
 };
+
+/** Global Periyot (?periyot) → Kanal Mix trend penceresi. p12 = varsayılan. */
+type PeriodMonths = 3 | 6 | 12 | "ytd";
+function periyotToMonths(p: string | null): PeriodMonths {
+  return p === "p3" ? 3 : p === "p6" ? 6 : p === "ytd" ? "ytd" : 12;
+}
 
 export default async function KomutaPage({ searchParams }: Props) {
   const sp = await searchParams;
   const forceRefresh = sp.refresh === "1";
   const reelTL = sp.reel === "1";
-  const otvNet = sp.otv === "1";
   const unit: ValueUnit = sp.unit === "9le" ? "9le" : "tl";
+  const bolge = sp.bolge?.trim() || null;
+  const kanal = sp.kanal?.trim() || null;
+  const urunGrup = sp.urunGrup?.trim() || null;
+  const periyot = sp.periyot?.trim() || "p12";
+  const periodMonths = periyotToMonths(periyot);
+  // md2 — filtre dropdown seçenekleri (hataya toleranslı; alınamazsa boş bar).
+  let facets: KomutaFacets = { bolgeler: [], kanallar: [], urunGruplari: [] };
+  try {
+    facets = await getKomutaFacets();
+  } catch {
+    facets = { bolgeler: [], kanallar: [], urunGruplari: [] };
+  }
   let snap: KomutaSnapshot;
   try {
     snap = await getKomutaSnapshot({
       refresh: forceRefresh,
       reelTL,
-      otvNet,
       unit,
+      bolge,
+      kanal,
+      urunGrup,
     });
   } catch (e) {
     // Oturum düşmüşse API 401/403 döner → 404 değil, login'e yönlendir.
@@ -61,16 +85,28 @@ export default async function KomutaPage({ searchParams }: Props) {
     notFound();
   }
 
+  // Header açıklaması — aktif filtreleri (KPI'ları GERÇEKTEN daraltan bölge /
+  // grup kırılımı / ürün grubu) gerçek facet etiketleriyle yansıtır. Hiç filtre
+  // yoksa "Tüm Distribütörler". Periyot yalnız Kanal Mix trendini sürdüğü için
+  // 30g KPI başlığına katılmaz (yanıltmasın).
+  const kanalAd = kanal ? (facets.kanallar.find((k) => k.kod === kanal)?.ad ?? kanal) : null;
+  const urunAd = urunGrup ? (facets.urunGruplari.find((u) => u.kod === urunGrup)?.ad ?? urunGrup) : null;
+  const activeFilters = [
+    bolge ? `Bölge: ${bolge}` : null,
+    kanalAd ? `Grup: ${kanalAd}` : null,
+    urunAd ? `Ürün: ${urunAd}` : null,
+  ].filter(Boolean) as string[];
+  const scopeLabel = activeFilters.length > 0 ? activeFilters.join(" · ") : "Tüm Distribütörler";
+
   return (
     <>
       {/* Komuta Köprüsü kendi koyu temalı stilini taşır — global navbar bu
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} otvNet={snap.otvNet} demo={!!snap.demoDate} />
-        <FilterBar reelTL={snap.reelTL} otvNet={snap.otvNet} />
+        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} demo={!!snap.demoDate} scopeLabel={scopeLabel} />
+        <FilterBar reelTL={snap.reelTL} facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} periyot={periyot} />
         {snap.reelTL && <ReelTlBanner />}
-        {snap.otvNet && <OtvNetBanner avgRate={snap.otvAvgRate} reelActive={snap.reelTL} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
             şeridi öncesi konumlandırılır ki sayfaya giren göz hemen
             "bu sabahın hikâyesi" cümlesini yakalasın. Brief üretilemezse
@@ -105,7 +141,7 @@ export default async function KomutaPage({ searchParams }: Props) {
               rows={snap.channelMonthly}
               unit={snap.unit}
               title={panelTitle("panel.cockpit.channelmonthly", "Kanal Mix")}
-              enablePeriodFilter
+              periodMonths={periodMonths}
               enablePieView
             />
           )}
@@ -125,12 +161,12 @@ export default async function KomutaPage({ searchParams }: Props) {
             <ChannelMixChart
               rows={snap.channelByType}
               unit={snap.unit}
-              title={panelTitle("panel.cockpit.channeltype", "Müşteri Tipi · Son 12 Ay")}
+              title={panelTitle("panel.cockpit.channeltype", "Müşteri Grup Kırılımı · Son 12 Ay")}
               icon="🛒"
-              category="müşteri tipi"
-              sourceNote="Müşteri tipi segmentasyonu: Perakende / On Trade / Otel / Tali Bayi / OPA dağılımı, son 12 ay."
+              category="grup kırılımı"
+              sourceNote="Müşteri grup kırılımı: Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı (TXTGRUPKIRILIMKOD), son 12 ay."
               enableTypeFilter
-              typeFilterLabel="Müşteri Tipi"
+              typeFilterLabel="Grup Kırılımı"
             />
           )}
           <MatrixPanel matrix={snap.matrix} unit={snap.unit} />
@@ -138,12 +174,12 @@ export default async function KomutaPage({ searchParams }: Props) {
 
         <HeatmapPanel heatmap={snap.heatmap} />
 
-        {/* md34 — Müşteri Tipi × Marka: channeltype panelinin dayandığı aynı
-            ek-saha kaynağı (saha 8) × tenant.brandTable kırılımı. */}
+        {/* md34 — Müşteri Grup Kırılımı × Marka: channeltype paneliyle aynı
+            kaynak (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM) × tenant.brandTable. */}
         {!panelHidden("panel.cockpit.customertypebrand") && (
           <CustomerTypeBrandPanel
             data={snap.customerTypeBrand}
-            title={panelTitle("panel.cockpit.customertypebrand", "Müşteri Tipi × Marka")}
+            title={panelTitle("panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka")}
           />
         )}
 
@@ -167,23 +203,19 @@ export default async function KomutaPage({ searchParams }: Props) {
 function Header({
   generatedAt,
   reelTL,
-  otvNet,
   demo,
+  scopeLabel,
 }: {
   generatedAt: string;
   reelTL: boolean;
-  otvNet: boolean;
   demo?: boolean;
+  scopeLabel: string;
 }) {
   const rel = formatRelative(generatedAt);
-  const modeLabel = [
-    reelTL ? "Reel TL" : null,
-    otvNet ? "ÖTV-net" : null,
-  ].filter(Boolean).join(" + ") || "Nominal TL · Brüt";
+  const modeLabel = reelTL ? "Reel TL" : "Nominal TL";
   const refreshHref = "/komuta?" + new URLSearchParams({
     refresh: "1",
     ...(reelTL ? { reel: "1" } : {}),
-    ...(otvNet ? { otv: "1" } : {}),
   }).toString();
   return (
     <header className="komuta-page-header">
@@ -195,7 +227,7 @@ function Header({
         <h1 className="komuta-page-title">{t(getContentMap(), "page.cockpit.title", "Operasyon Genel Görünümü")}</h1>
         <p className="komuta-page-desc">
           Univera Distribütör Operasyonu · CEO / Satış Direktörü görünümü ·{" "}
-          <strong>Tüm Distribütörler</strong> · Son 30 Gün ·{" "}
+          <strong>{scopeLabel}</strong> · Son 30 Gün ·{" "}
           <span style={{ color: "#6366f1" }}>{modeLabel}</span>
         </p>
       </div>
@@ -213,48 +245,37 @@ function Header({
   );
 }
 
-function FilterBar({ reelTL, otvNet }: { reelTL: boolean; otvNet: boolean }) {
-  // Toggle'lar birbirine kombine olabilir — URL'i mevcut state üstüne ekle/çıkar
-  const reelHref = "/komuta?" + new URLSearchParams({
-    ...(reelTL ? {} : { reel: "1" }), // kapalıysa aç
-    ...(otvNet ? { otv: "1" } : {}),
-  }).toString().replace(/^$/, "");
-  const otvHref = "/komuta?" + new URLSearchParams({
-    ...(reelTL ? { reel: "1" } : {}),
-    ...(otvNet ? {} : { otv: "1" }), // kapalıysa aç
-  }).toString().replace(/^$/, "");
+function FilterBar({
+  reelTL,
+  facets,
+  bolge,
+  kanal,
+  urunGrup,
+  periyot,
+}: {
+  reelTL: boolean;
+  facets: KomutaFacets;
+  bolge: string | null;
+  kanal: string | null;
+  urunGrup: string | null;
+  periyot: string;
+}) {
+  const reelHref = reelTL ? "/komuta" : "/komuta?reel=1";
 
   return (
     <div className="filter-bar">
-      <span className="filter-chip active">Bölge: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Kanal: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Ürün Grubu: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Periyot: Son 30 gün <span className="caret">▼</span></span>
-      <span className="filter-chip">Karşılaştır: Geçen Yıl Aynı Dönem <span className="caret">▼</span></span>
+      <KomutaFilterDropdowns facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} />
+      <KomutaPeriyotDropdown periyot={periyot} />
       <span className="filter-spacer" />
       <div className="toggle-group">
         <Link
-          href={reelHref === "/komuta?" ? "/komuta" : reelHref}
+          href={reelHref}
           className={`toggle toggle-link${reelTL ? " on" : ""}`}
           title="Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir"
           prefetch={false}
         >
           <span className="switch" /> Reel TL (TÜFE)
         </Link>
-        <Link
-          href={otvHref === "/komuta?" ? "/komuta" : otvHref}
-          className={`toggle toggle-link${otvNet ? " on" : ""}`}
-          title="Tüm ciro değerlerinden ÖTV (Özel Tüketim Vergisi) düşülmüş net görünüm"
-          prefetch={false}
-        >
-          <span className="switch" /> ÖTV-net görünüm
-        </Link>
-        <span
-          className="toggle on"
-          title="Takvim hizalı kıyas — calendar/tr-2026.json üzerinden"
-        >
-          <span className="switch" /> Takvim hizalı
-        </span>
         <UnitToggle />
       </div>
     </div>
@@ -370,36 +391,6 @@ function ReelTlBanner() {
       </div>
       <Link href="/komuta" className="reel-banner-cta" prefetch={false}>
         Nominal TL'ye dön →
-      </Link>
-    </div>
-  );
-}
-
-function OtvNetBanner({
-  avgRate,
-  reelActive,
-}: {
-  avgRate: number | null;
-  reelActive: boolean;
-}) {
-  const ratePct = avgRate != null ? (avgRate * 100).toFixed(0) : "?";
-  return (
-    <div className="otv-banner">
-      <div className="otv-banner-icon">🧾</div>
-      <div className="otv-banner-text">
-        <strong>ÖTV-net görünümü aktif</strong> · Tüm ciro değerlerinden ÖTV
-        (Özel Tüketim Vergisi) düşüldü.{" "}
-        <span style={{ color: "#78716c" }}>
-          Ürün grubu bazında oran uygulandı; KPI ve özet metrikler için ağırlıklı
-          ortalama <strong style={{ color: "#16a34a" }}>%{ratePct}</strong>.
-        </span>
-      </div>
-      <Link
-        href={reelActive ? "/komuta?reel=1" : "/komuta"}
-        className="otv-banner-cta"
-        prefetch={false}
-      >
-        Brüt görünüme dön →
       </Link>
     </div>
   );
@@ -1424,7 +1415,7 @@ function PortfolioPanel({
               "Tier sınıflandırma (luxury/premium/core/value) ürün grubu adına göre keyword eşleşmesi",
               "yoyPct = (bu − geçenYıl)/geçenYıl × 100",
               "twoYrPct = (bu − ikiYılÖnce)/ikiYılÖnce × 100",
-              "Reel TL/ÖTV modunda baz değerler multiplier ile bugünün TL'sine çevrilir",
+              "Reel TL modunda baz değerler TÜFE multiplier ile bugünün TL'sine çevrilir",
             ]}
           />
         </div>
@@ -1758,27 +1749,6 @@ const KOMUTA_CSS = `
   text-decoration: none;
 }
 .komuta-root .reel-banner-cta:hover { background: rgba(147, 51, 234, 0.28); }
-
-/* ÖTV-net banner (toggle aktif olduğunda) */
-.komuta-root .otv-banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px; margin-bottom: 14px;
-  background: linear-gradient(90deg, rgba(22, 163, 74, 0.12) 0%, rgba(22, 163, 74, 0.04) 100%);
-  border: 1px solid rgba(22, 163, 74, 0.3);
-  border-left: 3px solid #16a34a;
-  border-radius: 6px;
-  font-size: 12px;
-}
-.komuta-root .otv-banner-icon { font-size: 16px; flex-shrink: 0; }
-.komuta-root .otv-banner-text { flex: 1; color: #44403c; line-height: 1.5; }
-.komuta-root .otv-banner-text strong { color: #1c1917; font-weight: 600; }
-.komuta-root .otv-banner-cta {
-  flex-shrink: 0; padding: 5px 12px;
-  background: rgba(22, 163, 74, 0.18); border: 1px solid rgba(22, 163, 74, 0.4);
-  border-radius: 5px; font-size: 11px; color: #16a34a; font-weight: 500;
-  text-decoration: none;
-}
-.komuta-root .otv-banner-cta:hover { background: rgba(22, 163, 74, 0.28); }
 
 /* KPI STRIP */
 .komuta-root .kpi-strip-wrap { margin-bottom: 14px; }
@@ -2217,8 +2187,7 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-v2,
 :root[data-theme="dark"] .komuta-root .filter-bar,
 :root[data-theme="dark"] .komuta-root .demo-banner,
-:root[data-theme="dark"] .komuta-root .reel-banner,
-:root[data-theme="dark"] .komuta-root .otv-banner {
+:root[data-theme="dark"] .komuta-root .reel-banner {
   background: var(--color-surface) !important;
   border-color: var(--color-border) !important;
   color: var(--color-fg) !important;
@@ -2324,7 +2293,6 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-banner-text strong,
 :root[data-theme="dark"] .komuta-root .demo-banner-text strong,
 :root[data-theme="dark"] .komuta-root .reel-banner-text strong,
-:root[data-theme="dark"] .komuta-root .otv-banner-text strong,
 :root[data-theme="dark"] .komuta-root .kpi-value,
 :root[data-theme="dark"] .komuta-root .panel-title,
 :root[data-theme="dark"] .komuta-root .upcoming-title,
@@ -2340,7 +2308,6 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-banner-text,
 :root[data-theme="dark"] .komuta-root .demo-banner-text,
 :root[data-theme="dark"] .komuta-root .reel-banner-text,
-:root[data-theme="dark"] .komuta-root .otv-banner-text,
 :root[data-theme="dark"] .komuta-root .map-panel .legend-item,
 :root[data-theme="dark"] .komuta-root .matrix-table td,
 :root[data-theme="dark"] .komuta-root .upcoming-action-row,

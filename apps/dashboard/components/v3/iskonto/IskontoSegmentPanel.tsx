@@ -11,29 +11,63 @@ type SegmentRow = {
 };
 
 /**
- * Panel E — Segment Kırılımı (Müşteri Tipi × İskonto Oranı).
+ * Panel E — Segment Kırılımı (Müşteri Grup Kırılımı × İskonto Oranı).
  *
- * TBLMUSTERIEKSAHA LNGEKSAHAKODU=8 lookup ile müşteri tipleri (Perakende,
- * On Trade, Otel, Tali Bayi, OPA...). Her segment için: brüt, iskonto, net,
- * ortalama oran, müşteri/fatura sayısı.
+ * TBLMUSTERIGRUPKIRILIM lookup ile müşteri grup kırılımı (Prestige, Premium,
+ * Premium Plus, Standart, Standart Plus, Off Trade C&PS Tedarikçi vb.). Her
+ * kırılım için: brüt, iskonto, net, ortalama oran, müşteri/fatura sayısı.
  *
  * Yatay bar — bar uzunluğu iskonto oranı %, renk tier.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 
-export function IskontoSegmentPanel({ segments }: { segments: SegmentRow[] }) {
+export function IskontoSegmentPanel({
+  segments,
+  title,
+  dimensionLabel = "Müşteri grup kırılımı",
+}: {
+  segments: SegmentRow[];
+  /** Panel başlığı — verilmezse content-map/"Segment Kırılımı". */
+  title?: string;
+  /** Alt-metindeki boyut adı (ör. "Müşteri ek grup"). */
+  dimensionLabel?: string;
+}) {
   if (panelHidden("panel.iskonto.segment")) return null;
   // Bar referansı: maksimum oran (en az 25%) — görsel kıyas için
   const maxOran = Math.max(25, ...segments.map((s) => s.iskontoOraniPct));
+
+  // Dinamik alt-metin — snapshot verisinden: toplam müşteri sayısı + en
+  // yüksek iskonto oranlı kırılım (uydurma metin yok, gerçek veriden türetilir).
+  const toplamMusteri = segments.reduce((a, s) => a + s.musteriSayi, 0);
+  const enYuksekOranSeg =
+    segments.length > 0
+      ? segments.reduce((max, s) => (s.iskontoOraniPct > max.iskontoOraniPct ? s : max), segments[0])
+      : null;
+  const enYuksekOranColor =
+    enYuksekOranSeg == null
+      ? undefined
+      : enYuksekOranSeg.iskontoOraniPct < 15
+      ? "#16a34a"
+      : enYuksekOranSeg.iskontoOraniPct < 25
+      ? "#d97706"
+      : "#dc2626";
 
   return (
     <div className="seg-panel">
       <div className="seg-head">
         <div>
-          <div className="seg-title">{panelTitle("panel.iskonto.segment", "Segment Kırılımı")}</div>
+          <div className="seg-title">{title ?? panelTitle("panel.iskonto.segment", "Segment Kırılımı")}</div>
           <div className="seg-sub">
-            Son 30g · Müşteri tipi × ortalama iskonto oranı (TBLMUSTERIEKSAHA
-            saha 8)
+            Son 30g · {dimensionLabel} × ortalama iskonto oranı
+            {toplamMusteri > 0 && <> · {toplamMusteri.toLocaleString("tr-TR")} müşteri</>}
+            {enYuksekOranSeg && (
+              <>
+                {" · en yüksek oran: "}
+                <span style={{ color: enYuksekOranColor, fontWeight: 600 }}>
+                  {enYuksekOranSeg.segment} (%{enYuksekOranSeg.iskontoOraniPct.toFixed(1)})
+                </span>
+              </>
+            )}
           </div>
         </div>
       </div>

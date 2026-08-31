@@ -15,8 +15,11 @@ import { panelTitle, panelHidden } from "@/lib/content";
 
 export function BrandContributionPanel({
   brands,
+  periodLabel = "son 30 gün",
 }: {
   brands: WietnauerBrandContribution[];
+  /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
+  periodLabel?: string;
 }) {
   if (panelHidden("panel.yonetim.brands")) return null;
   const visible = brands.slice(0, 15);
@@ -32,7 +35,7 @@ export function BrandContributionPanel({
         <div>
           <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", "Marka Katkıları")}</div>
           <div className="v3-panel-sub">
-            Son 30g · Net ciro sıralaması ·{" "}
+            {periodLabel} · Net ciro sıralaması ·{" "}
             {stratList.length > 0 ? (
               <>
                 <span className="strat-dot" /> {stratList.length} stratejik

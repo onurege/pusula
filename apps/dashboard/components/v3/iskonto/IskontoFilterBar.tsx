@@ -9,6 +9,9 @@ type Props = {
   selectedDistId: number | null;
   dateFrom: string | null;
   dateTo: string | null;
+  /** Tarih aralığı alanını göster. Dönem seçimi artık ortak GlobalDonemFilter'a
+   *  devredildiğinde `false` verilir; yalnız distribütör seçici kalır. */
+  showDateRange?: boolean;
 };
 
 /**
@@ -23,7 +26,7 @@ type Props = {
  * doluysa aralık uygulanır; biri eksikse görmezden gelinir (backend'in
  * `normalizeDateRange` davranışıyla tutarlı).
  */
-export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateTo }: Props) {
+export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateTo, showDateRange = true }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -97,6 +100,7 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
         </select>
       </div>
 
+      {showDateRange && (
       <form className="iskonto-filter-field iskonto-date-field" onSubmit={onApplyRange}>
         <label htmlFor="iskonto-from" className="lbl">
           Tarih Aralığı
@@ -131,6 +135,7 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
           )}
         </div>
       </form>
+      )}
 
       {isPending && <span className="loading">yükleniyor…</span>}
 

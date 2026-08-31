@@ -5,13 +5,13 @@ import {
   currentYyyymm,
   getMultiplier,
   loadInflation,
+  reelReferenceMonth,
   yyyymmDaysAgo,
   yyyymmYearsAgo,
   type InflationData,
 } from "./inflation.js";
-import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
-import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { canonicalProvince, loadRegionMaster, normalizeProvince, regionForCitySync } from "./tr-regions.js";
 import { distFilterClause, cityFactClause, cityCacheTag, type TenantScope } from "./auth.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { foldOther, sumBy } from "./fold-other.js";
@@ -267,10 +267,6 @@ export type KomutaSnapshot = {
   generatedAt: string;
   /** True ise geçmiş değerler bugünün parasına (TÜFE arındırılmış) çevrilmiş. */
   reelTL: boolean;
-  /** True ise tüm ciro değerlerinden ÖTV (özel tüketim vergisi) düşülmüş. */
-  otvNet: boolean;
-  /** ÖTV-net modunda uygulanan ağırlıklı ortalama oran (görsel banner için). */
-  otvAvgRate: number | null;
   /** Demo modda KOMUTA_DEMO_DATE değeri (YYYY-MM-DD); canlıda null. */
   demoDate: string | null;
   /** Snapshot'taki tüm value'ların birimi — UI suffix'i bundan beslenir. */
@@ -298,31 +294,59 @@ export type KomutaSnapshot = {
 // KPI Strip — 5 kart
 // ---------------------------------------------------------------------------
 
-async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpiCard[]> {
+async function fetchKpis(
+  unit: ValueUnit,
+  distClause: string,
+  grupCat: string | null = null,
+): Promise<KomutaKpiCard[]> {
   // Son 30 gün vs önceki 30 gün karşılaştırma için tek seferde 4 metriği döner.
   // SQL unit'ten bağımsız — hem ciro (TL) hem miktar (9LE) her zaman hesaplanır.
   // Birim swap'i sadece UI çıktısında yapılır (primary KPI'nın value/label/unit'i).
+  //
+  // md2 Ürün Grubu (line-level): grupCat verilirse Net Ciro fatura başlığından
+  // (f.DBLNETTUTAR) DEĞİL, seçili kategorinin DETAY satırlarından (dk.DBLNETFIYAT)
+  // KESİN hesaplanır — 'Viski cirosu gerçekten Viski'. Fatura sayısı DISTINCT
+  // fatura, müşteri DISTINCT müşteri (detay join çoğullamasını düzeltir). Hacim
+  // ve top-marka/detay-total CTE'leri de kategoriye (u.TXTURUNEKGRUPKOD) daralır.
+  // grupCat null iken davranış birebir eskisi (fatura-tabanı). distClause burada
+  // BASE (grup EXISTS'siz) — kategori filtresi join ile uygulanır, çift filtre yok.
+  const gJoin = grupCat
+    ? `INNER JOIN dbo.TBLMSDBELGEDETAY dk ON dk.LNGYIL = f.LNGYIL AND dk.LNGFATURAKOD = f.LNGBELGEKOD AND dk.LNGDISTKOD = f.LNGDISTKOD
+       INNER JOIN dbo.TBLURUN uk ON uk.LNGKOD = dk.LNGURUNKOD`
+    : "";
+  const gWhere = grupCat ? ` AND LTRIM(RTRIM(uk.TXTURUNEKGRUPKOD)) = N'${grupCat}'` : "";
+  // miktar/top_grup/detay_total CTE'leri urun'u `u` alias'ıyla join'liyor.
+  const gWhereU = grupCat ? ` AND LTRIM(RTRIM(u.TXTURUNEKGRUPKOD)) = N'${grupCat}'` : "";
+  // detay_total urun'u join'lemiyor — kategori aktifken join ekle ki payda da
+  // (top-marka payı için) o kategoriye daralsın.
+  const gDetayJoin = grupCat ? "INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD" : "";
+  const ciroExpr = grupCat ? "SUM(dk.DBLNETFIYAT)" : "SUM(f.DBLNETTUTAR)";
+  const faturaExpr = grupCat
+    ? "COUNT(DISTINCT CONCAT(f.LNGYIL, '_', f.LNGBELGEKOD, '_', f.LNGDISTKOD))"
+    : "COUNT(*)";
   const sql = `
     WITH son AS (
       SELECT
-        ISNULL(SUM(f.DBLNETTUTAR), 0)             AS ciro,
-        COUNT(*)                                  AS fatura,
+        ISNULL(${ciroExpr}, 0)                    AS ciro,
+        ${faturaExpr}                             AS fatura,
         COUNT(DISTINCT f.LNGMUSTERIKOD)           AS musteri
       FROM dbo.TBLMSDFATURA f
+      ${gJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhere}
     ),
     onceki AS (
       SELECT
-        ISNULL(SUM(f.DBLNETTUTAR), 0)             AS ciro,
+        ISNULL(${ciroExpr}, 0)                    AS ciro,
         COUNT(DISTINCT f.LNGMUSTERIKOD)           AS musteri
       FROM dbo.TBLMSDFATURA f
+      ${gJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhere}
     ),
     -- 9LE (9-Litre-Equivalent) — Pernod kendi resmi katsayısını TBLURUNEKSAHA
     -- saha 26 "9 LT Değer" alanında tutuyor. Her ürünün 1 adetinin kaç 9LE'ye
@@ -350,7 +374,7 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhereU}
     ),
     miktar_onceki AS (
       SELECT ISNULL(SUM(
@@ -370,7 +394,7 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhereU}
     ),
     top_grup AS (
       SELECT TOP 1
@@ -387,7 +411,7 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhereU}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
     ),
@@ -401,10 +425,11 @@ async function fetchKpis(unit: ValueUnit, distClause: string): Promise<KomutaKpi
         ON d.LNGYIL = f.LNGYIL
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
+      ${gDetayJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        ${distClause}
+        ${distClause}${gWhereU}
     )
     SELECT
       son.ciro       AS son_ciro,
@@ -826,22 +851,17 @@ async function fetchChannelByCustomerType(unit: ValueUnit, distClause: string): 
     : "f.DBLNETTUTAR";
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
   const sql = `
-    WITH lookup AS (
-      SELECT CAST(LNGKOD AS NVARCHAR(20)) AS kod, TXTACIKLAMA AS adi
-      FROM dbo.TBLEKSAHASECENEK
-      WHERE LNGTAKIPKOD = 8
-    ),
-    base AS (
+    WITH base AS (
       SELECT
         DATEPART(year,  f.TRHISLEMTARIHI) AS yil,
         DATEPART(month, f.TRHISLEMTARIHI) AS ay,
-        ISNULL(NULLIF(LTRIM(RTRIM(l.adi)), ''), '(Tanımsız)') AS kanal,
+        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS kanal,
         ${rowExpr} AS tutar
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-      LEFT JOIN dbo.TBLMUSTERIEKSAHA me
-        ON me.LNGMUSTERIREF = m.LNGKOD AND me.LNGEKSAHAKODU = 8
-      LEFT JOIN lookup l ON l.kod = LTRIM(RTRIM(me.TXTEKSAHAACIKLAMA))
+      -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski
+      -- ek-saha(8) müşteri tipi yerine (TBLMUSTERI.TXTGRUPKIRILIMKOD → kırılım adı).
+      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
@@ -1668,14 +1688,9 @@ type CustomerTypeBrandRaw = { tip: string; marka: string; ciro: number; miktar: 
 async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustomerTypeBrandSnapshot> {
   const { brandTable, joinCol } = getBrandTableMeta();
   const sql = `
-    WITH lookup AS (
-      SELECT CAST(LNGKOD AS NVARCHAR(20)) AS kod, TXTACIKLAMA AS adi
-      FROM dbo.TBLEKSAHASECENEK
-      WHERE LNGTAKIPKOD = 8
-    ),
-    base AS (
+    WITH base AS (
       SELECT
-        ISNULL(NULLIF(LTRIM(RTRIM(l.adi)), ''), '(Tanımsız)') AS tip,
+        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip,
         b.TXTAD AS marka,
         d.DBLNETFIYAT AS ciro,
         d.DBLMIKTAR AS miktar
@@ -1687,9 +1702,8 @@ async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustome
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
       INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-      LEFT JOIN dbo.TBLMUSTERIEKSAHA me
-        ON me.LNGMUSTERIREF = m.LNGKOD AND me.LNGEKSAHAKODU = 8
-      LEFT JOIN lookup l ON l.kod = LTRIM(RTRIM(me.TXTEKSAHAACIKLAMA))
+      -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski ek-saha(8) yerine.
+      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
@@ -1869,7 +1883,9 @@ async function applyReelTL(
   snap: KomutaSnapshot,
   inflation: InflationData,
 ): Promise<KomutaSnapshot> {
-  const now = currentYyyymm();
+  // "now" = TÜFE endeksinde mevcut en son ay (anchor ayı henüz yayınlanmamışsa
+  // ona düşer) — böylece Reel TL gerçek endeksle çalışır, multiplier=1'e çökmez.
+  const now = reelReferenceMonth(inflation);
   const mGecenAy = getMultiplier(yyyymmDaysAgo(45), now, inflation);
   const m3AyOnce = getMultiplier(yyyymmDaysAgo(105), now, inflation);
   const mGecenYil = getMultiplier(yyyymmYearsAgo(1), now, inflation);
@@ -1965,121 +1981,6 @@ async function applyReelTL(
 }
 
 /**
- * ÖTV-net transformasyonu — tüm ciro değerlerinden vergi düşülür.
- * Her ürün grubu için tax.ts'teki master üzerinden oran çıkarılır,
- * (1 - rate) ile çarpılır. KPI'larda ve özet metriklerde matrix top
- * gruplarından türetilen ağırlıklı ortalama oran kullanılır.
- *
- * YoY ratios değişmez (vergi geçmişe de uygulandığı için orantısal eşit).
- */
-function applyOtvNet(snap: KomutaSnapshot, data: OtvData): KomutaSnapshot {
-  // Ağırlıklı ortalama oran — KPI ciro, regions, monthlyTrend, reps, channels
-  // için kullanılacak (KPI breakdown'ları matrix'in dışına çıkıyor).
-  const totalBu = snap.matrix.reduce((a, r) => a + r.buAy, 0);
-  const avgRate =
-    totalBu > 0
-      ? snap.matrix.reduce((acc, r) => acc + r.buAy * getOtvRate(r.grup, r.tier, data), 0) /
-        totalBu
-      : data.fallback;
-  const avgInv = 1 - avgRate;
-
-  return {
-    ...snap,
-    otvNet: true,
-    otvAvgRate: avgRate,
-    kpis: snap.kpis.map((k) => {
-      // Sadece ciro ve sepet vergi etkilenir. Hacim (adet), top marka payı
-      // (oran), aktif SN (sayı) değişmez.
-      if (k.id === "ciro" || k.id === "sepet") {
-        return { ...k, value: k.value * avgInv };
-      }
-      return k;
-    }),
-    regions: snap.regions.map((r) => ({
-      ...r,
-      ciro: r.ciro * avgInv,
-      ciroPrev: r.ciroPrev * avgInv,
-      // deltaPct unchanged — same factor applied to both ciro and ciroPrev
-    })),
-    monthlyTrend: snap.monthlyTrend.map((m) => ({
-      ...m,
-      ciro: m.ciro * avgInv,
-      ciroPrev: m.ciroPrev != null ? m.ciroPrev * avgInv : null,
-    })),
-    channels: snap.channels.map((c) => ({ ...c, ciro: c.ciro * avgInv })),
-    channelMonthly: snap.channelMonthly.map((row) => ({
-      ...row,
-      ciro: row.ciro * avgInv,
-    })),
-    channelByType: snap.channelByType.map((row) => ({
-      ...row,
-      ciro: row.ciro * avgInv,
-    })),
-    reps: snap.reps.map((r) => ({ ...r, ciro: r.ciro * avgInv })),
-    topDists: snap.topDists.map((d) => ({ ...d, ciro: d.ciro * avgInv })),
-    matrix: applyOtvNetToMatrix(snap.matrix, data),
-    portfolio: snap.portfolio.map((p) => {
-      const rate = getOtvRate(p.grup, p.tier, data);
-      const inv = 1 - rate;
-      return {
-        ...p,
-        bu: p.bu * inv,
-        oneYearAgo: p.oneYearAgo * inv,
-        twoYearsAgo: p.twoYearsAgo * inv,
-        // yoyPct, twoYrPct unchanged
-      };
-    }),
-    // heatmap: cells YoY ratios unchanged
-    customerTypeBrand: {
-      markalar: snap.customerTypeBrand.markalar,
-      rows: snap.customerTypeBrand.rows.map((row) => ({
-        ...row,
-        cells: row.cells.map((c) => ({ ...c, ciro: c.ciro * avgInv })),
-      })),
-    },
-  };
-}
-
-/**
- * Matrix satırlarına OTV oranını uygular; her satır kendi `tier`ine göre
- * (yaklaşık) oranlanır — "Diğer" satırı zaten çok-tierli bir katlama olduğu
- * için tek bir "value" oranı kullanır (md17/18 "Diğer" desenindeki mevcut
- * yaklaşıklıkla tutarlı). "Toplam" (dip) satırı ise KENDİ tier'inden bir oran
- * uygulamak yerine, transform edilmiş Top-8+Diğer satırlarının toplamı olarak
- * YENİDEN hesaplanır — böylece tabloda görünen dip toplam, üstündeki
- * satırların toplamıyla her zaman birebir tutar.
- */
-function applyOtvNetToMatrix(rows: KomutaMatrixRow[], data: OtvData): KomutaMatrixRow[] {
-  const mapped = rows.map((row) => {
-    if (row.isTotal) return row; // aşağıda yeniden hesaplanacak
-    const rate = getOtvRate(row.grup, row.tier, data);
-    const inv = 1 - rate;
-    return {
-      ...row,
-      buAy: row.buAy * inv,
-      gecenAy: row.gecenAy * inv,
-      ucAyOnce: row.ucAyOnce * inv,
-      gecenYil: row.gecenYil * inv,
-      ikiYilOnce: row.ikiYilOnce * inv,
-      // yoyPct, trend unchanged (ratio constant)
-    };
-  });
-  const rest = mapped.filter((r) => !r.isTotal);
-  if (rest.length === mapped.length) return mapped; // "Toplam" satırı yok
-  const buAy = sumBy(rest, (r) => r.buAy);
-  const gecenAy = sumBy(rest, (r) => r.gecenAy);
-  const ucAyOnce = sumBy(rest, (r) => r.ucAyOnce);
-  const gecenYil = sumBy(rest, (r) => r.gecenYil);
-  const ikiYilOnce = sumBy(rest, (r) => r.ikiYilOnce);
-  const yoyPct = gecenYil > 0 ? ((buAy - gecenYil) / gecenYil) * 100 : null;
-  return mapped.map((r) =>
-    r.isTotal
-      ? { ...r, buAy, gecenAy, ucAyOnce, gecenYil, ikiYilOnce, yoyPct, trend: matrixTrend(yoyPct) }
-      : r,
-  );
-}
-
-/**
  * VYK-01 (cache-key scope fragmentation) DEĞERLENDİRMESİ — bu snapshot JS-
  * filtreye ÇEVRİLMEDİ, scope'lu (`distClause` enjekte edilmiş) kalıyor:
  *
@@ -2106,11 +2007,102 @@ function applyOtvNetToMatrix(rows: KomutaMatrixRow[], data: OtvData): KomutaMatr
  * (veya en azından en aktif dist'ler için) `getKomutaSnapshot({ allowedDistKods: [distId] })`
  * çağıracak şekilde genişletilmeli** — bu ayrı bir görev/PR gerektirir.
  */
+
+// md2 — Cockpit global filtre dropdown seçenekleri (Bölge / Kanal / Ürün Grubu).
+export type KomutaFacets = {
+  bolgeler: { kod: string; ad: string }[];
+  kanallar: { kod: string; ad: string }[];
+  /** Ürün Grubu = TBLURUNEKGRUP (Kategori: Viski/Votka/Likör…). Marka
+   *  (TBLURUNGRUP) DEĞİL — o zaten Marka ekranı/KPI'sında. */
+  urunGruplari: { kod: string; ad: string }[];
+};
+
+/**
+ * md2 — Şehir→bölge (8 coğrafi bölge) eşlemesi: her bölgenin altındaki GERÇEK
+ * TBLMUSTERI.TXTSEHIR string'leri. Bölge filtresi (SQL IN) ve facet listesi bunu
+ * kullanır. normalizeProvince JS'te olduğu için şehir eşlemesi burada (SQL değil)
+ * yapılır — distinct şehir listesi çekilip region master'a göre gruplanır. Cache'li.
+ */
+async function getRegionCityMap(): Promise<Map<string, string[]>> {
+  const result = await withCache<[string, string[]][]>(
+    CACHE_DOMAIN,
+    "region-city-map-v1",
+    async () => {
+      const master = await loadRegionMaster();
+      const rows = (
+        await runReadOnly(
+          `SELECT DISTINCT LTRIM(RTRIM(TXTSEHIR)) sehir FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTSEHIR)) <> ''`,
+          { limit: 500, timeoutMs: 20_000 },
+        ).catch(() => ({ rows: [] as Record<string, unknown>[] }))
+      ).rows;
+      const map = new Map<string, string[]>();
+      for (const r of rows) {
+        const sehir = String(r.sehir ?? "").trim();
+        if (!sehir) continue;
+        const region = regionForCitySync(sehir, master);
+        if (!region) continue;
+        (map.get(region) ?? map.set(region, []).get(region)!).push(sehir);
+      }
+      return [...map.entries()];
+    },
+  );
+  return new Map(result.value);
+}
+
+export async function getKomutaFacets(): Promise<KomutaFacets> {
+  const clean = (rows: Record<string, unknown>[]) =>
+    rows
+      .map((r) => ({ kod: String(r.kod ?? "").trim(), ad: String(r.ad ?? "").trim() }))
+      .filter((x) => x.kod && x.ad);
+  const result = await withCache<KomutaFacets>(
+    CACHE_DOMAIN,
+    "facets-v4",
+    async () => {
+      const [regionMap, kirilim, kategori] = await Promise.all([
+        // Bölge: müşterisi olan 8 coğrafi bölge (region master sırası korunur).
+        getRegionCityMap(),
+        // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle
+        // aynı boyut (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM), ≥5 müşterili.
+        runReadOnly(
+          `SELECT LTRIM(RTRIM(k.TXTKOD)) kod, MAX(k.TXTAD) ad, COUNT(DISTINCT m.LNGKOD) n
+           FROM dbo.TBLMUSTERIGRUPKIRILIM k
+           INNER JOIN dbo.TBLMUSTERI m ON LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)) = LTRIM(RTRIM(k.TXTKOD)) AND m.BYTDURUM = 0
+           WHERE k.TXTAD IS NOT NULL AND LTRIM(RTRIM(k.TXTKOD)) <> ''
+           GROUP BY LTRIM(RTRIM(k.TXTKOD)) HAVING COUNT(DISTINCT m.LNGKOD) >= 5
+           ORDER BY COUNT(DISTINCT m.LNGKOD) DESC`,
+          { limit: 100, timeoutMs: 20_000 },
+        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+        // Ürün Grubu: TBLURUNEKGRUP (Kategori — Viski/Likör/Tekila…). ≥4 aktif
+        // ürünü olan gerçek kategoriler; junk (FATURA/POSM/STANT/TEST) ve
+        // marka-yanlış-sınıflanmış '0x' kodlu satırlar (01 JAGERMEISTER vb.) elenir.
+        runReadOnly(
+          `SELECT LTRIM(RTRIM(eg.TXTKOD)) kod, MAX(eg.TXTAD) ad, COUNT(u.LNGKOD) n
+           FROM dbo.TBLURUNEKGRUP eg
+           INNER JOIN dbo.TBLURUN u ON LTRIM(RTRIM(u.TXTURUNEKGRUPKOD)) = LTRIM(RTRIM(eg.TXTKOD)) AND u.BYTDURUM = 0
+           WHERE eg.TXTAD IS NOT NULL AND LTRIM(RTRIM(eg.TXTKOD)) <> ''
+             AND LTRIM(RTRIM(eg.TXTKOD)) NOT LIKE '0%'
+             AND UPPER(LTRIM(RTRIM(eg.TXTAD))) NOT IN (N'FATURA', N'POSM', N'PAKET', N'HİZMET BEDELİ', N'RAKİP ÜRÜN', N'GAZOZ')
+             AND eg.TXTAD NOT LIKE N'%TEST%' AND eg.TXTAD NOT LIKE N'%STANT%'
+           GROUP BY LTRIM(RTRIM(eg.TXTKOD)) HAVING COUNT(u.LNGKOD) >= 4
+           ORDER BY COUNT(u.LNGKOD) DESC`,
+          { limit: 100, timeoutMs: 20_000 },
+        ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
+      ]);
+      const master = await loadRegionMaster();
+      // Bölge facet: master sırasında, müşterisi olan bölgeler (kod=ad=bölge adı).
+      const bolgeler = [...master.byRegion.keys()]
+        .filter((rg) => (regionMap.get(rg)?.length ?? 0) > 0)
+        .map((rg) => ({ kod: rg, ad: rg }));
+      return { bolgeler, kanallar: clean(kirilim.rows), urunGruplari: clean(kategori.rows) };
+    },
+  );
+  return result.value;
+}
+
 export async function getKomutaSnapshot(
   options: {
     forceRefresh?: boolean;
     reelTL?: boolean;
-    otvNet?: boolean;
     unit?: ValueUnit;
     /** Dist kullanıcının izinli distribütör kodları; null/undefined → merkez
      *  (filtre yok). Sunucu-otoriter — server.ts JWT scope'undan geçirir. */
@@ -2122,6 +2114,17 @@ export async function getKomutaSnapshot(
      *  sorgularına semi-join predikatı olarak enjekte edilir; cache key
      *  şehir kümesine göre ayrışır. */
     allowedCities?: string[] | null;
+    /** md2 — Cockpit global filtre: Bölge (TBLDISTGRUP.TXTKOD bölge kodu).
+     *  Verilirse tüm paneller o bölgenin distribütörleriyle sınırlanır. */
+    bolge?: string | null;
+    /** md2 — Cockpit global filtre: Kanal (TBLMUSTERIGRUP.TXTKOD müşteri grup
+     *  kodu, ör. ON/OFF TRADE). Verilirse tüm paneller o kanala sınırlanır. */
+    kanal?: string | null;
+    /** md2 — Cockpit global filtre: Ürün Grubu = TBLURUNEKGRUP.TXTKOD (Kategori:
+     *  Viski/Votka/Likör…). Line-level: KPI Net Ciro & Hacim seçili kategorinin
+     *  DETAY satırlarından (d.DBLNETFIYAT) kesin hesaplanır; alt paneller
+     *  kategoriyi İÇEREN faturalarla (EXISTS semi-join) invoice-scoped sınırlanır. */
+    urunGrup?: string | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const unit: ValueUnit = options.unit === "9le" ? "9le" : "tl";
@@ -2138,12 +2141,47 @@ export async function getKomutaSnapshot(
   // `${distClause}` olarak fatura WHERE'ine ekliyor (hepsi `f` alias'lı), bu
   // yüzden şehir semi-join'i (f.LNGMUSTERIKOD) her yerde geçerli.
   const cities = options.allowedCities ?? null;
-  const distClause = distFilterClause(scope, "f.LNGDISTKOD") + cityFactClause(cities);
+  // md2 — Cockpit global Bölge/Kanal filtresi. Her ikisi de fatura `f` üzerinde
+  // semi-join (join eklemeden tüm fetcher'lara yayılır). distClause'a katlanır
+  // → her `${distClause}` bunları da taşır. Değerler facet dropdown'dan gelen
+  // kısa kodlar; tek-tırnak escape + uzunluk sınırı ile injection'a kapalı.
+  const escSql = (v: string) => v.replace(/'/g, "''").slice(0, 80);
+  const bolge = options.bolge?.trim() || null; // şehir-tabanlı 8 coğrafi bölge ADI
+  const kanal = options.kanal?.trim() || null; // müşteri grup kırılımı KODU (TXTGRUPKIRILIMKOD)
+  // Bölge: seçili bölgenin GERÇEK şehirleri (region master → TXTSEHIR) IN listesi.
+  let bolgeClause = "";
+  if (bolge) {
+    const cities = (await getRegionCityMap()).get(bolge) ?? [];
+    bolgeClause = cities.length
+      ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTSEHIR)) IN (${cities.map((c) => `N'${escSql(c)}'`).join(",")}))`
+      : " AND 1=0";
+  }
+  // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle aynı boyut.
+  const kanalClause = kanal
+    ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTGRUPKIRILIMKOD)) = N'${escSql(kanal)}')`
+    : "";
+  // Ürün Grubu (Kategori): base distClause dist+şehir+bölge+kanal içerir (grup
+  // HARİÇ). İki yol:
+  //  - grupExists → kategoriyi içeren faturaları seçen EXISTS semi-join; alt
+  //    panellere (bölge/matris/ısı/temsilci/dist/kanal-mix) katlanır (invoice-scoped).
+  //  - grupCat → fetchKpis kategori aktifken DETAY-tabanlı (line-level) hesaplar;
+  //    base distClause + bu kod ile kesin kategori cirosu/hacmi verir.
+  const urunGrup = options.urunGrup?.trim() || null; // TBLURUNEKGRUP.TXTKOD (kategori)
+  const grupCat = urunGrup ? escSql(urunGrup) : null;
+  const grupExists = grupCat
+    ? ` AND EXISTS (SELECT 1 FROM dbo.TBLMSDBELGEDETAY dgr INNER JOIN dbo.TBLURUN ugr ON ugr.LNGKOD = dgr.LNGURUNKOD WHERE dgr.LNGYIL = f.LNGYIL AND dgr.LNGFATURAKOD = f.LNGBELGEKOD AND dgr.LNGDISTKOD = f.LNGDISTKOD AND LTRIM(RTRIM(ugr.TXTURUNEKGRUPKOD)) = N'${grupCat}')`
+    : "";
+  const distClause =
+    distFilterClause(scope, "f.LNGDISTKOD") + cityFactClause(cities) + bolgeClause + kanalClause;
+  const distClauseGrup = distClause + grupExists;
   const scopeKey =
     (effectiveDistKods == null
       ? "all"
       : "d" + [...effectiveDistKods].sort((a, b) => a - b).join("_")) +
-    "-" + cityCacheTag(cities);
+    "-" + cityCacheTag(cities) +
+    (bolge ? `-b${escSql(bolge)}` : "") +
+    (kanal ? `-k${escSql(kanal)}` : "") +
+    (grupCat ? `-g${grupCat}` : "");
 
   // CACHE_VERSION — snapshot shape veya temel SQL değiştiğinde bump et
   // ki eski entry'ler otomatik invalidate olsun (TTL yok, manuel refresh
@@ -2151,11 +2189,12 @@ export async function getKomutaSnapshot(
   // ("Doğu Anadolu kayboldu" fix'i), 8 bölge garanti. v7: dist-bazlı veri
   // izolasyonu — tüm fatura sorgularına distClause enjekte edildi. v8:
   // Faz 3 (md16 Top8+Diğer+Toplam matrix, md34 yeni customerTypeBrand alanı).
-  const CACHE_VERSION = "v8";
+  // v9: md2 Ürün Grubu (Kategori) filtresi — KPI line-level + alt panel EXISTS.
+  // v10: ÖTV-net görünümü kaldırıldı (cacheKey'den "otv/gross" segmenti çıktı).
+  const CACHE_VERSION = "v10";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
-    options.otvNet ? "otv" : "gross",
     unit,
     scopeKey,
   ].join("-");
@@ -2165,7 +2204,7 @@ export async function getKomutaSnapshot(
     async () => {
       // Önce her dönem için fatura/detay scale factor'ları çek — Matrix ve
       // Portfolio bunlarla detay-tabanı TL'leri fatura-tabanına çevirir.
-      const scales = await fetchPeriodScales(distClause).catch((e) => {
+      const scales = await fetchPeriodScales(distClauseGrup).catch((e) => {
         console.error("[komuta scales]", e);
         return { buAy: 1, gecenAy: 1, ucAyOnce: 1, gecenYil: 1, ikiYilOnce: 1 };
       });
@@ -2186,52 +2225,54 @@ export async function getKomutaSnapshot(
         portfolio,
         customerTypeBrand,
       ] = await Promise.all([
-        fetchKpis(unit, distClause).catch((e) => {
+        // KPI: kategori aktifse line-level (base distClause + grupCat detay filtresi).
+        fetchKpis(unit, distClause, grupCat).catch((e) => {
           console.error("[komuta kpis]", e);
           return [] as KomutaKpiCard[];
         }),
-        fetchRegions(unit, distClause).catch((e) => {
+        // Alt paneller: kategori EXISTS'i katlanmış distClauseGrup (invoice-scoped).
+        fetchRegions(unit, distClauseGrup).catch((e) => {
           console.error("[komuta regions]", e);
           return [] as KomutaRegionRow[];
         }),
-        fetchChannels(unit, distClause).catch((e) => {
+        fetchChannels(unit, distClauseGrup).catch((e) => {
           console.error("[komuta channels]", e);
           return [] as KomutaChannelSlice[];
         }),
-        fetchChannelMonthly(unit, distClause).catch((e) => {
+        fetchChannelMonthly(unit, distClauseGrup).catch((e) => {
           console.error("[komuta channelMonthly]", e);
           return [] as KomutaChannelMonthlyRow[];
         }),
-        fetchChannelByCustomerType(unit, distClause).catch((e) => {
+        fetchChannelByCustomerType(unit, distClauseGrup).catch((e) => {
           console.error("[komuta channelByType]", e);
           return [] as KomutaChannelMonthlyRow[];
         }),
-        fetchMonthlyTrend(unit, distClause).catch((e) => {
+        fetchMonthlyTrend(unit, distClauseGrup).catch((e) => {
           console.error("[komuta trend]", e);
           return [] as KomutaMonthlyBar[];
         }),
         fetchUpcomingEvent().catch(() => null),
-        fetchMatrix(scales, unit, distClause).catch((e) => {
+        fetchMatrix(scales, unit, distClauseGrup).catch((e) => {
           console.error("[komuta matrix]", e);
           return [] as KomutaMatrixRow[];
         }),
-        fetchHeatmap(unit, distClause).catch((e) => {
+        fetchHeatmap(unit, distClauseGrup).catch((e) => {
           console.error("[komuta heatmap]", e);
           return [] as KomutaHeatmapRow[];
         }),
-        fetchTopReps(unit, distClause).catch((e) => {
+        fetchTopReps(unit, distClauseGrup).catch((e) => {
           console.error("[komuta reps]", e);
           return [] as KomutaRep[];
         }),
-        fetchTopDists(unit, distClause).catch((e) => {
+        fetchTopDists(unit, distClauseGrup).catch((e) => {
           console.error("[komuta topDists]", e);
           return [] as KomutaTopDist[];
         }),
-        fetchPortfolio(scales, unit, distClause).catch((e) => {
+        fetchPortfolio(scales, unit, distClauseGrup).catch((e) => {
           console.error("[komuta portfolio]", e);
           return [] as KomutaPortfolioRow[];
         }),
-        fetchCustomerTypeBrand(distClause).catch((e) => {
+        fetchCustomerTypeBrand(distClauseGrup).catch((e) => {
           console.error("[komuta customerTypeBrand]", e);
           return { markalar: [], rows: [] } as KomutaCustomerTypeBrandSnapshot;
         }),
@@ -2240,8 +2281,6 @@ export async function getKomutaSnapshot(
       const partial: Omit<KomutaSnapshot, "brief"> = {
         generatedAt: new Date().toISOString(),
         reelTL: false,
-        otvNet: false,
-        otvAvgRate: null,
         demoDate: demoDate(),
         unit,
         kpis,
@@ -2260,16 +2299,10 @@ export async function getKomutaSnapshot(
       };
       const brief = await fetchBrief(partial);
       let snap: KomutaSnapshot = { ...partial, brief };
-      // Reel TL → ÖTV-net sırası: önce TÜFE arındır, sonra vergi düş.
-      // İkisi de multiplicative olduğu için ters sıra da matematik olarak
-      // aynı sonucu verir; ama sıralama log/banner için tutarlı.
+      // Reel TL: geçmiş değerleri TÜFE ile bugünün parasına çevir.
       if (options.reelTL) {
         const inflation = await loadInflation();
         snap = await applyReelTL(snap, inflation);
-      }
-      if (options.otvNet) {
-        const otv = await loadOtv();
-        snap = applyOtvNet(snap, otv);
       }
       return snap;
     },
@@ -2283,7 +2316,6 @@ export async function getKomutaSnapshot(
     return getKomutaSnapshot({
       forceRefresh: true,
       reelTL: options.reelTL,
-      otvNet: options.otvNet,
       unit: options.unit,
       allowedDistKods: options.allowedDistKods,
       distId: options.distId,
@@ -2299,7 +2331,6 @@ export async function getKomutaSnapshot(
     return getKomutaSnapshot({
       forceRefresh: true,
       reelTL: options.reelTL,
-      otvNet: options.otvNet,
       unit: options.unit,
       allowedDistKods: options.allowedDistKods,
       distId: options.distId,

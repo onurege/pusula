@@ -6,7 +6,8 @@
  *   - Aylık trend: iskonto harcaması ve oranı zamana göre nasıl evriliyor?
  *   - Marka × etkinlik: hangi marka iskonto yatırımı topluyor, sağlıklı mı?
  *   - Müşteri ROI: en çok iskonto verilen müşteriler kim, premium mu bağımlı mı?
- *   - Segment kırılımı: müşteri tipine göre iskonto stratejisi nasıl?
+ *   - Segment kırılımı: müşteri grup kırılımına (Prestige/Premium/Standart…)
+ *     göre iskonto stratejisi nasıl?
  *
  * Cache stratejisi: full dataset (tüm dist'ler) TEK cache anahtarı altında
  * `withCache` — wietnauer-stok.ts `scopedRows` deseni. Dist filtresi/scope
@@ -27,7 +28,9 @@ const CACHE_DOMAIN = "wietnauer-iskonto";
 // SQL'den çıkarıldı; tüm fetcher'lar scope'suz (tüm dist) tek cache anahtarı
 // altında çekilir, dist_id (`LNGDISTKOD`) SELECT/GROUP BY'a eklendi ki JS
 // tarafı scope filtresi + re-aggregate yapabilsin.
-const CACHE_VERSION = "v4";
+// v5: (a) segment kaynağı TBLMUSTERIGRUP → TBLMUSTERIGRUPKIRILIM (md), (b) yeni
+// ekGrupSegments alanı (müşteri ek grup, top 5 + Diğer — Yönetim segment paneli).
+const CACHE_VERSION = "v5";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -98,7 +101,11 @@ export type WietnauerIskontoSnapshot = {
   monthly: DiscountMonthlyPoint[]; // son 12 ay
   brands: DiscountBrandRow[]; // top 15 (brut DESC)
   topCustomers: DiscountTopCustomer[]; // top 20 (iskonto DESC)
+  /** Müşteri Grup Kırılımı (Prestige/Premium/Standart…) × iskonto */
   segments: DiscountSegmentRow[];
+  /** Müşteri Ek Grup (TBLMUSTERIEKGRUP: TEKEL/BÜFE/MARKET/BAR…) × iskonto —
+   *  brüt'e göre ilk 5, kalanı "Diğer" başlığı altında toplanır. */
+  ekGrupSegments: DiscountSegmentRow[];
 };
 
 // ---------- Tarih aralığı yardımcıları --------------------------------------
@@ -557,16 +564,22 @@ function aggregateDiscountTopCustomers(rows: DiscountTopCustomerRawRow[]): Disco
 }
 
 /**
- * Müşteri Tipi (TBLMUSTERIGRUP.TXTAD × TBLMUSTERI.TXTGRUPKOD) × iskonto
- * ortalaması. Müşteri Tipi boş olanlar "(Tanımsız)" fallback'e düşer. Oran =
- * toplam_iskonto / toplam_brüt × 100 — ağırlıklı ortalama (her segment kendi
- * içinde dengeli).
+ * Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM.TXTAD × TBLMUSTERI.TXTGRUPKIRILIMKOD)
+ * × iskonto ortalaması. Değerler: Prestige, Premium, Premium Plus, Standart,
+ * Standart Plus, "Off Trade C&PS Tedarikçi vb." (kod 1..6). Kırılım kodu boş
+ * olanlar "(Tanımsız)" fallback'e düşer. Oran = toplam_iskonto / toplam_brüt
+ * × 100 — ağırlıklı ortalama (her segment kendi içinde dengeli).
+ *
+ * md34 deseni — komuta.ts `fetchChannelByCustomerType` ile aynı kaynak: eski
+ * TBLMUSTERIGRUP (Müşteri Tipi) yerine TBLMUSTERIGRUPKIRILIM (Müşteri Grup
+ * Kırılımı) kullanılır.
  */
 type DiscountSegmentRawRow = Omit<DiscountSegmentRow, "iskontoOraniPct"> & { distId: number | null };
 
 /**
- * Segment × dist ham satırları — scope-free. `f.LNGDISTKOD` GROUP BY'a
- * eklendi (segment sayısı küçük ~10 × 31 dist ≈ 310 satır — ucuz).
+ * Segment (müşteri grup kırılımı) × dist ham satırları — scope-free.
+ * `f.LNGDISTKOD` GROUP BY'a eklendi (kırılım sayısı küçük ~6 × 31 dist ≈ 186
+ * satır — ucuz).
  */
 async function fetchDiscountBySegmentRaw(
   cities: string[] | null | undefined,
@@ -582,7 +595,7 @@ async function fetchDiscountBySegmentRaw(
   const sql = `
     WITH base AS (
       SELECT
-        ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS segment,
+        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment,
         f.LNGDISTKOD AS dist_id,
         f.LNGMUSTERIKOD AS musteri_id,
         f.DBLBRUTTUTAR     AS brut,
@@ -590,7 +603,7 @@ async function fetchDiscountBySegmentRaw(
         f.DBLNETTUTAR      AS net
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-      LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
+      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND ${dateClause}${cityFactClause(cities)}
@@ -617,6 +630,91 @@ async function fetchDiscountBySegmentRaw(
     musteriSayi: Number(r.musteri_sayi ?? 0),
     faturaSayisi: Number(r.fatura_sayi ?? 0),
   }));
+}
+
+/**
+ * Müşteri Ek Grup (TBLMUSTERIEKGRUP: TEKEL/BÜFE/MARKET/BAR… — TBLMUSTERI.
+ * TXTEKGRUPKOD "direct" link) × iskonto ham satırları — scope-free (dist_id
+ * GROUP BY'da). `fetchDiscountBySegmentRaw` ile birebir aynı yapı; tek fark
+ * boyut kaynağı: kırılım yerine ek grup. Ek grup boşsa "(Tanımsız)".
+ */
+async function fetchDiscountByEkGrupRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountSegmentRawRow[]> {
+  const dateClause = dateRangeClause(
+    "f.TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
+  const sql = `
+    WITH base AS (
+      SELECT
+        ISNULL(NULLIF(LTRIM(RTRIM(eg.TXTAD)), ''), '(Tanımsız)') AS segment,
+        f.LNGDISTKOD AS dist_id,
+        f.LNGMUSTERIKOD AS musteri_id,
+        f.DBLBRUTTUTAR     AS brut,
+        f.DBLISKONTOTUTARI AS iskonto,
+        f.DBLNETTUTAR      AS net
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      LEFT JOIN dbo.TBLMUSTERIEKGRUP eg ON eg.TXTKOD = m.TXTEKGRUPKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND m.BYTDURUM = 0
+        AND ${dateClause}${cityFactClause(cities)}
+    )
+    SELECT
+      segment,
+      dist_id,
+      ISNULL(SUM(brut), 0)     AS brut,
+      ISNULL(SUM(iskonto), 0)  AS iskonto,
+      ISNULL(SUM(net), 0)      AS net,
+      COUNT(DISTINCT musteri_id) AS musteri_sayi,
+      COUNT(*)                   AS fatura_sayi
+    FROM base
+    GROUP BY segment, dist_id
+    ORDER BY SUM(brut) DESC
+  `;
+  const result = await runReadOnly(sql, { limit: 4000, timeoutMs: 30_000 });
+  return result.rows.map((r) => ({
+    segment: String(r.segment ?? "(Tanımsız)"),
+    distId: r.dist_id != null ? Number(r.dist_id) : null,
+    brut: Number(r.brut ?? 0),
+    iskonto: Number(r.iskonto ?? 0),
+    net: Number(r.net ?? 0),
+    musteriSayi: Number(r.musteri_sayi ?? 0),
+    faturaSayisi: Number(r.fatura_sayi ?? 0),
+  }));
+}
+
+/**
+ * Aggregate edilmiş (brüt DESC sıralı) satırları ilk N'e indirir; kalanı tek
+ * bir "Diğer" satırında toplar (brüt/iskonto/net/müşteri/fatura toplanır, oran
+ * yeniden hesaplanır). Ek grup gibi kuyruk-uzun boyutlar için.
+ */
+function collapseToTopN(rows: DiscountSegmentRow[], n: number): DiscountSegmentRow[] {
+  if (rows.length <= n) return rows;
+  const head = rows.slice(0, n);
+  const tail = rows.slice(n);
+  const rest = tail.reduce(
+    (acc, r) => {
+      acc.brut += r.brut;
+      acc.iskonto += r.iskonto;
+      acc.net += r.net;
+      acc.musteriSayi += r.musteriSayi;
+      acc.faturaSayisi += r.faturaSayisi;
+      return acc;
+    },
+    { brut: 0, iskonto: 0, net: 0, musteriSayi: 0, faturaSayisi: 0 },
+  );
+  head.push({
+    segment: `Diğer (${tail.length})`,
+    ...rest,
+    iskontoOraniPct: rest.brut > 0 ? Number(((rest.iskonto / rest.brut) * 100).toFixed(2)) : 0,
+  });
+  return head;
 }
 
 /** dist-scope uygulanmış ham satırları segment bazında re-aggregate eder. */
@@ -660,6 +758,7 @@ type RawIskontoBundle = {
   brands: DiscountBrandRawRow[];
   topCustomers: DiscountTopCustomerRawRow[];
   segments: DiscountSegmentRawRow[];
+  ekGrupSegments: DiscountSegmentRawRow[];
   generatedAt: string;
 };
 
@@ -700,12 +799,13 @@ export async function getWietnauerIskontoSnapshot(
     cacheKey,
     async () => {
       // 5 sorgu paralel — toplam latency = en yavaş sorgu
-      const [overall, monthly, brands, topCustomers, segments] = await Promise.all([
+      const [overall, monthly, brands, topCustomers, segments, ekGrupSegments] = await Promise.all([
         fetchDiscountOverallRaw(cities, dateFrom, dateTo),
         fetchDiscountMonthlyTrendRaw(cities, dateFrom, dateTo),
         fetchDiscountByBrandRaw(cities, dateFrom, dateTo),
         fetchDiscountTopCustomersRaw(cities, dateFrom, dateTo),
         fetchDiscountBySegmentRaw(cities, dateFrom, dateTo),
+        fetchDiscountByEkGrupRaw(cities, dateFrom, dateTo),
       ]);
       return {
         overall,
@@ -713,6 +813,7 @@ export async function getWietnauerIskontoSnapshot(
         brands,
         topCustomers,
         segments,
+        ekGrupSegments,
         generatedAt: new Date().toISOString(),
       };
     },
@@ -725,6 +826,7 @@ export async function getWietnauerIskontoSnapshot(
     brands: rawBrands,
     topCustomers: rawTopCustomers,
     segments: rawSegments,
+    ekGrupSegments: rawEkGrupSegments,
     generatedAt,
   } = result.value;
 
@@ -745,6 +847,11 @@ export async function getWietnauerIskontoSnapshot(
   ).slice(0, 15);
   const topCustomers = aggregateDiscountTopCustomers(rawTopCustomers.filter((r) => inScope(r.distId)));
   const segments = aggregateDiscountBySegment(rawSegments.filter((r) => inScope(r.distId)));
+  // Ek grup: aggregate → brüt DESC → ilk 5 + "Diğer".
+  const ekGrupSegments = collapseToTopN(
+    aggregateDiscountBySegment(rawEkGrupSegments.filter((r) => inScope(r.distId))),
+    5,
+  );
 
   return {
     generatedAt,
@@ -754,5 +861,6 @@ export async function getWietnauerIskontoSnapshot(
     brands,
     topCustomers,
     segments,
+    ekGrupSegments,
   };
 }

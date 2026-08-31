@@ -17,6 +17,8 @@ const WINDOW_DAYS = 90;
 const DEMAND_WINDOW_DAYS = 180;
 const DEFAULT_LEAD_TIME_DAYS = 14;
 const SERVICE_LEVEL_Z = 1.65;
+/** `critical` özet listesi (hızlı KPI/özet tüketimi) için üst sınır — md43. */
+const CRITICAL_LIST_LIMIT = 100;
 /** `YYYY-MM-DD` — dateFrom/dateTo yalnızca bu formatta SQL'e interpolate edilir. */
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 /** Net stok / toplam hareket oranı bu eşiğin altındaysa "düşük güven". */
@@ -175,7 +177,12 @@ export type WietnauerStockSnapshot = {
     totalIncomingQty: number;
     leadTimeConfiguredSkuCount: number;
   };
-  /** İlk bakış listesi: en önce bitecek SKU'lar. */
+  /**
+   * İlk bakış listesi: en önce bitecek SKU'lar (üst sınır:
+   * {@link CRITICAL_LIST_LIMIT} — md43: eski 30 satır sınırı çok düşüktü).
+   * Asıl "İlk Bitecek SKU'lar" tablosu bu alanı DEĞİL, kesintisiz `items`
+   * alanını kullanır; bu alan yalnızca hızlı özet/KPI amaçlıdır.
+   */
   critical: WietnauerStockSkuRow[];
   /**
    * Risk sıralı tam SKU listesi (md38: 200 satır sınırı kaldırıldı — UI
@@ -988,9 +995,14 @@ export async function getWietnauerStokSnapshot(
     distFilter,
     distributors,
     totals: buildTotals(filteredRows),
+    // md43: 30 satırlık ilk sınır kaldırıldı (portföy görünümünde 200+
+    // kritik+risk SKU olabiliyor). CRITICAL_LIST_LIMIT ile üst sınır konur;
+    // asıl "İlk Bitecek SKU'lar" tablosu zaten `items` üzerinden (kesintisiz,
+    // client-side sayfalanmış) besleniyor — bu alan yalnızca hızlı özet/KPI
+    // tüketimi için.
     critical: filteredRows
       .filter((r) => r.riskTier === "critical" || r.riskTier === "risk")
-      .slice(0, 30),
+      .slice(0, CRITICAL_LIST_LIMIT),
     // md38: tam SKU listesi — UI (StockoutTable) client-side pagination
     // uygular, artık burada kesme yok.
     items: filteredRows,

@@ -1,13 +1,14 @@
 import { formatCompact } from "@/components/komuta/format";
 
 /**
- * Müşteri Tipi (Ek Saha 8) segment paneli — TBLMUSTERIEKSAHA × TBLEKSAHASECENEK
- * (LNGEKSAHAKODU=8). Perakende / On Trade / Otel / Tali Bayi kanal tipi.
+ * Müşteri Tipi segment paneli — Müşteri Grup Kırılımı ile AYNI kaynak
+ * (TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM). Prestige / Premium
+ * / Premium Plus / Standart / Standart Plus gibi kırılım etiketleri.
  *
- * md24: bu panel önceden yanlışlıkla TBLMUSTERIGRUP verisiyle besleniyordu
- * (gerçek Ek Saha 8 tablosu hiç sorgulanmıyordu); kaynak düzeltildi. Eski
- * (yanlış) veri artık `MusteriGrupPanel`'de doğru adıyla ("Müşteri Grubu")
- * gösteriliyor.
+ * İş kararıyla bu boyut da grup kırılımı kaynağına taşındı. Eski Ek Saha 8
+ * (TBLMUSTERIEKSAHA × TBLEKSAHASECENEK, Perakende/On Trade/Otel/Tali Bayi)
+ * kaynağı artık kullanılmıyor — `MusteriGrupPanel` ile bu panel aynı
+ * kırılım verisini gösterir.
  *
  * Sol: yatay bar — ciro payı yüzdesi (her bar normalize).
  * Sağ: müşteri sayısı, ciro, ortalama iskonto oranı sayısal kolonları.
@@ -36,7 +37,7 @@ export function EkSahaPanel({ rows }: { rows: EkSahaSegmentRow[] }) {
       <div className="seg-head">
         <div className="seg-title">{panelTitle("panel.segment.eksaha", "Müşteri Tipi")}</div>
         <div className="seg-sub">
-          Ek Saha 8 (TBLMUSTERIEKSAHA) · {rows.length} tip · {toplamMusteri.toLocaleString("tr-TR")} müşteri
+          Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM) · {rows.length} kırılım · {toplamMusteri.toLocaleString("tr-TR")} müşteri
         </div>
       </div>
 

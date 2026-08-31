@@ -88,7 +88,7 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
         <div>
           <div className="v3-panel-title">{panelTitle("panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi")}</div>
           <div className="v3-panel-sub">
-            Son 12 ay · AVG(net ciro) / fatura
+            Son {points.length} ay · AVG(net ciro) / fatura
             {trendPct !== null && (
               <>
                 {" "}
@@ -200,7 +200,7 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
 }
 
 /** "2026-04" → "Nis '26". TR ay kısaltmaları. */
-function formatAyLabel(ay: string): string {
+export function formatAyLabel(ay: string): string {
   const [yyyy, mm] = ay.split("-");
   const months = [
     "Oca",

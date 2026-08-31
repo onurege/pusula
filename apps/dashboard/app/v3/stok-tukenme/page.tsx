@@ -10,14 +10,14 @@ import { getTenantConfig } from "@/lib/tenant";
 import { formatCompact } from "@/components/komuta/format";
 import { StokDistSelect } from "@/components/v3/stok/StokDistSelect";
 import { StokSkuTable } from "@/components/v3/stok/StokSkuTable";
-import { StokDateRange } from "@/components/v3/stok/StokDateRange";
+import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 
 export const metadata = { title: "Stok Tükenme · V3 · Insider" };
 
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
 type Props = {
-  searchParams: Promise<{ distId?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string }>;
 };
 
 export default async function V3StokTukenmePage({ searchParams }: Props) {
@@ -30,12 +30,16 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
   // yapar, burası UI için erken/temiz geri bildirim).
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
+  const donem = (sp.donem ?? "").toLowerCase();
 
   let snap: WietnauerStockSnapshot | null = null;
   let err: string | null = null;
 
   try {
-    snap = await getWietnauerStok<WietnauerStockSnapshot>({ distId, dateFrom, dateTo });
+    snap = await getWietnauerStok<WietnauerStockSnapshot>({
+      distId, dateFrom, dateTo,
+      donem: dateFrom && dateTo ? null : donem || null,
+    });
   } catch (e) {
     err = (e as Error).message;
   }
@@ -87,11 +91,8 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
             distributors={snap.distributors}
             selectedDistId={snap.distFilter?.distId ?? null}
           />
-          <StokDateRange
-            from={snap.demandRange.from}
-            to={snap.demandRange.to}
-            appliedDays={snap.demandRange.days}
-          />
+          {/* md2: global dönem filtresi (StokDateRange yerine — preset + serbest). */}
+          <GlobalDonemFilter />
           <div className="stok-kpi-grid">
             {!panelHidden("kpi.stok.kritik") && (
             <KpiTile
@@ -334,16 +335,6 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
           font-variant-numeric: tabular-nums;
           white-space: nowrap;
         }
-        .quality-note {
-          margin: 0 16px 16px;
-          border: 1px solid rgba(217, 119, 6, 0.32);
-          background: rgba(217, 119, 6, 0.08);
-          border-radius: 8px;
-          padding: 10px 11px;
-          font-size: 12px;
-          line-height: 1.45;
-          color: var(--color-fg);
-        }
         .v3-error {
           background: var(--color-bad-bg, rgba(220, 38, 38, 0.05));
           border: 1px solid var(--color-bad, #dc2626);
@@ -443,12 +434,16 @@ function StockoutTable({ rows }: { rows: WietnauerStockSkuRow[] }) {
 
 function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
   if (panelHidden("panel.stok.brandrisk")) return null;
+  // Statik alt-metin yerine gerçek marka özetinden türetilmiş sayılar.
+  const totalCriticalPlusRisk = rows.reduce((sum, r) => sum + r.criticalCount + r.riskCount, 0);
   return (
     <section className="stok-panel">
       <div className="stok-panel-head">
         <div>
           <div className="stok-panel-title">{panelTitle("panel.stok.brandrisk", "Marka Bazında Stok Riski")}</div>
-          <div className="stok-panel-meta">Kritik + risk SKU yoğunluğu ve miktar özeti</div>
+          <div className="stok-panel-meta">
+            {rows.length.toLocaleString("tr-TR")} marka · {totalCriticalPlusRisk.toLocaleString("tr-TR")} kritik+risk SKU
+          </div>
         </div>
       </div>
       <div className="stok-table-wrap">
@@ -491,12 +486,21 @@ function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
 
 function QualityPanel({ snap }: { snap: WietnauerStockSnapshot }) {
   if (panelHidden("panel.stok.quality")) return null;
+  // Statik alt-metin yerine gerçek snapshot sayılarından türetilmiş özet:
+  // sinyal taşıyan SKU oranı ve lead time tanımlı SKU oranı.
+  const total = snap.totals.activeSkuCount;
+  const signalPct = total > 0 ? (snap.quality.stockSignalSkuCount / total) * 100 : 0;
+  const leadTimePct = total > 0 ? (snap.quality.leadTimeConfiguredSkuCount / total) * 100 : 0;
   return (
     <aside className="stok-panel">
       <div className="stok-panel-head">
         <div>
           <div className="stok-panel-title">{panelTitle("panel.stok.quality", "Veri Güveni")}</div>
-          <div className="stok-panel-meta">Stok türetimi ve devir hesap kalitesi</div>
+          <div className="stok-panel-meta">
+            {total > 0
+              ? `%${signalPct.toFixed(0)} sinyal taşıyan · %${leadTimePct.toFixed(0)} lead time tanımlı (${total.toLocaleString("tr-TR")} SKU)`
+              : "Stok türetimi ve devir hesap kalitesi"}
+          </div>
         </div>
       </div>
       <div className="quality-grid">
@@ -508,11 +512,6 @@ function QualityPanel({ snap }: { snap: WietnauerStockSnapshot }) {
         <QualityRow label="Lead time tanımlı SKU" value={snap.quality.leadTimeConfiguredSkuCount} />
         <QualityRow label="90g satış görmeyen SKU" value={snap.totals.noDemandSkuCount} />
       </div>
-      {snap.quality.snapshotTablesEmpty && (
-        <div className="quality-note">
-          Anlık stok snapshot tabloları boş olduğu için stok bakiyesi belge detay hareketlerinden türetilmiştir.
-        </div>
-      )}
     </aside>
   );
 }

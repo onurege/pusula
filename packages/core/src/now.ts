@@ -131,3 +131,33 @@ export function isDemoMode(): boolean {
 export function demoDate(): string | null {
   return readDemoDate();
 }
+
+/**
+ * md2 — Fatura tarih penceresinin alt/üst SQL sınırları (ortak yardımcı).
+ *
+ * `dateFrom`&`dateTo` geçerli (YYYY-MM-DD, from<=to) ise seçili KAPALI pencere
+ * `[from, to]` (üst hariç, +1 gün); değilse anchor-bağıl (donuk-saat) son
+ * `fallbackDays` gün. `key` cache anahtarına eklenir (pencereye göre ayrışsın).
+ *
+ * Kullanım: `const win = resolveWindowBounds(dateFrom, dateTo);` sonra SQL'de
+ * `f.TRHISLEMTARIHI >= ${win.lower} AND f.TRHISLEMTARIHI < ${win.upper}`.
+ */
+export function resolveWindowBounds(
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+  fallbackDays = 30,
+): { lower: string; upper: string; key: string } {
+  const RX = /^\d{4}-\d{2}-\d{2}$/;
+  if (dateFrom && dateTo && RX.test(dateFrom) && RX.test(dateTo) && dateFrom <= dateTo) {
+    return {
+      lower: `CAST('${dateFrom}' AS DATE)`,
+      upper: `DATEADD(day, 1, CAST('${dateTo}' AS DATE))`,
+      key: `${dateFrom}_${dateTo}`,
+    };
+  }
+  return {
+    lower: `DATEADD(day, -${fallbackDays}, ${sqlNow()})`,
+    upper: `DATEADD(day, 1, ${sqlNow()})`,
+    key: `${fallbackDays}g`,
+  };
+}

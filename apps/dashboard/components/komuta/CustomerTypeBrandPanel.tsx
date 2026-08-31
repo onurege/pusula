@@ -18,7 +18,7 @@ type Metric = "ciro" | "miktar";
  */
 export function CustomerTypeBrandPanel({
   data,
-  title = "Müşteri Tipi × Marka",
+  title = "Müşteri Grup Kırılımı × Marka",
   icon = "🧭",
 }: {
   data: KomutaCustomerTypeBrandSnapshot;
@@ -84,7 +84,7 @@ export function CustomerTypeBrandPanel({
             gridTemplateColumns: `minmax(120px, 1.2fr) repeat(${markalar.length}, minmax(58px, 1fr)) minmax(78px, 0.9fr)`,
           }}
         >
-          <div className="ctb-head">Müşteri Tipi</div>
+          <div className="ctb-head">Grup Kırılımı</div>
           {markalar.map((m) => (
             <div key={m} className="ctb-head" title={m}>
               {truncate(m, 12)}
