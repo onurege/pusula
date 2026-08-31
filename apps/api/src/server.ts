@@ -31,6 +31,11 @@ import {
   getWietnauerStokSnapshot,
   getTenantConfig,
   maskDemoSnapshot,
+  getUserPerm,
+  getAllPerms,
+  setUserPerm,
+  deleteUserPerm,
+  isAdminUser,
   getRadarDefinition,
   getReport,
   getSyncStatus,
@@ -187,6 +192,10 @@ async function scopeFromRequest(
   selectedDistKod?: number | null,
 ): Promise<TenantScope> {
   const session = await verifySession(tokenFromRequest(c));
+  // Erişim politikası: yalnızca merkez. Dist tipli (veya eski) token'lar
+  // kimliksiz sayılır → endpoint'ler 401 döner, client login'e yönlendirir
+  // (login de dist kullanıcıyı 403 ile engeller). Sunucu-otoriter.
+  if (session && session.role !== "merkez") throw new Error("UNAUTHENTICATED");
   return resolveTenantScope(session, selectedDistKod ?? null);
 }
 
@@ -214,6 +223,15 @@ app.post("/api/auth/login", async (c) => {
       recordRateLimitHit("login", ip, RATE_LIMIT_WINDOW_MS);
       return c.json({ error: "Geçersiz kullanıcı adı veya şifre" }, 401);
     }
+    // Erişim politikası: şu an yalnızca MERKEZ tipli kullanıcılar. Distribütör
+    // (dist) tipli hesaplar geçerli şifreyle bile giremez. Kimlik doğru olduğu
+    // için rate-limit sayılmaz.
+    if (user.role !== "merkez") {
+      return c.json(
+        { error: "Bu uygulamaya şu an yalnızca merkez kullanıcılar erişebilir." },
+        403,
+      );
+    }
     const token = await signSession(user);
     return c.json({
       token,
@@ -235,13 +253,21 @@ app.post("/api/auth/login", async (c) => {
 app.get("/api/auth/me", async (c) => {
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum bulunamadı" }, 401);
+  // Erişim politikası: yalnızca merkez kullanıcılar. Dist token'ı → 403.
+  if (session.role !== "merkez") {
+    return c.json({ error: "Bu uygulamaya yalnızca merkez kullanıcılar erişebilir." }, 403);
+  }
+  const perm = getUserPerm(session.username); // ekran + (dist/şehir) yetkisi (store)
   return c.json({
     user: {
       userId: session.userId,
       username: session.username,
       displayName: session.displayName,
       role: session.role,
+      isAdmin: isAdminUser(session.username), // içerik + Yetkiler ekranı erişimi
       allowedDistKods: session.allowedDistKods,
+      allowedScreens: perm.screens, // null → hepsi
+      allowedCities: perm.cities, // null → hepsi
     },
   });
 });
@@ -611,6 +637,15 @@ app.get("/api/map/customers", async (c) => {
     const minDaysSinceVisit = minDaysVisitRaw ? parseInt(minDaysVisitRaw, 10) : undefined;
     const limitRaw = c.req.query("limit");
     const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
+    // md11 — üstteki dönem filtresi (satış-aktivite penceresi). Whitelist:
+    // yalnızca 30/60/90; başka bir değer ya da eksikse core tarafı 30'a
+    // (mevcut davranış) düşer.
+    const activityDaysRaw = c.req.query("activityDays") ?? c.req.query("days");
+    const activityDaysParsed = activityDaysRaw ? parseInt(activityDaysRaw, 10) : undefined;
+    const activityDays =
+      activityDaysParsed === 30 || activityDaysParsed === 60 || activityDaysParsed === 90
+        ? activityDaysParsed
+        : undefined;
 
     const bolge = c.req.query("bolge") ?? undefined;
     const region = c.req.query("region") ?? undefined;
@@ -623,8 +658,10 @@ app.get("/api/map/customers", async (c) => {
       riskTier,
       tier,
       minDaysSinceVisit,
+      activityDays,
       limit,
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
+      allowedCities: scope.cities,
     });
     return c.json({ count: customers.length, customers });
   } catch (err) {
@@ -667,7 +704,7 @@ app.get("/api/map/regions", async (c) => {
       riskTier,
       tier,
       minDaysSinceVisit,
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
     });
     return c.json({ count: regions.length, regions });
   } catch (err) {
@@ -688,7 +725,7 @@ app.get("/api/map/cities", async (c) => {
   }
   try {
     const region = c.req.query("region")?.trim() || undefined;
-    const cities = await listMapCityYoY(region, scope.type === "merkez" ? null : scope.distKods);
+    const cities = await listMapCityYoY(region, scope.distKods);
     return c.json({ count: cities.length, cities });
   } catch (err) {
     return c.json({ error: (err as Error).message }, 400);
@@ -766,7 +803,7 @@ app.get("/api/map/customers/:id/sales", async (c) => {
   try {
     const id = parseInt(c.req.param("id"), 10);
     if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
-    const allowedDistKods = scope.type === "merkez" ? null : scope.distKods;
+    const allowedDistKods = scope.distKods;
     if (!customerInScope(REPO_ROOT, id, allowedDistKods)) {
       return c.json({ error: "Bu müşteriye erişim yetkiniz yok" }, 403);
     }
@@ -796,7 +833,7 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
   try {
     const id = parseInt(c.req.param("id"), 10);
     if (!Number.isFinite(id)) return c.json({ error: "invalid id" }, 400);
-    const allowedDistKods = scope.type === "merkez" ? null : scope.distKods;
+    const allowedDistKods = scope.distKods;
     if (!customerInScope(REPO_ROOT, id, allowedDistKods)) {
       return c.json({ error: "Bu müşteriye erişim yetkiniz yok" }, 403);
     }
@@ -849,13 +886,150 @@ app.get("/api/komuta", async (c) => {
       reelTL,
       otvNet,
       unit,
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
       distId: scopeSingleDistId(scope),
+      allowedCities: scope.cities,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
     console.error("[/api/komuta] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// TAM yenileme — "Veriyi Yenile" butonunun çağırdığı tek endpoint. now-anchor'ı
+// yeniden çözer + komuta (tl/9le) + TÜM V3 snapshot'larını + harita aynasını
+// aynı taze anchor'la ısıtır. Böylece cockpit ve yönetim/marka/... ekranları
+// AYNI ciro/pencereyi gösterir (eski davranış: yalnız komuta tazeleniyordu →
+// ekranlar arası tutarsızlık + bayat "son güncelleme"). Merkez kapsam ısıtılır;
+// dist-scope snapshot'ları bu taze ham bundle'dan JS'te türetilir.
+app.post("/api/refresh-all", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (DEMO_DATA) return c.json({ ok: true, skipped: "demo" });
+  try {
+    await refreshAllSnapshots("manual");
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[/api/refresh-all] failed:", err);
+    return c.json({ ok: false, error: (err as Error).message }, 500);
+  }
+});
+
+// --- Admin: kullanıcı yetkileri (ekran + şehir) — yalnız merkez rolü --------
+// Yetkiler DB'ye yazılamaz (salt-okunur) → JSON store (user-perms.ts).
+app.get("/api/admin/perms", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  return c.json({ perms: getAllPerms() });
+});
+
+app.post("/api/admin/perms", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  try {
+    const body = (await c.req.json()) as {
+      username?: string;
+      admin?: boolean;
+      screens?: string[] | null;
+      dists?: number[] | null;
+      cities?: string[] | null;
+    };
+    const username = (body.username ?? "").trim();
+    if (!username) return c.json({ error: "username gerekli" }, 400);
+    // Panorama-otoritesi: admin YALNIZCA kendi yetkili olduğu distribütörleri
+    // atayabilir. Kapsam dışı dist gönderilirse sessizce elenir (sunucu-otoriter).
+    let dists: number[] | null = null;
+    if (body.dists != null) {
+      const allowed = new Set(session.allowedDistKods);
+      dists = body.dists.filter((d) => Number.isInteger(d) && allowed.has(d));
+    }
+    // Admin yetkisi grantable — bir admin başka kullanıcıya admin verebilir
+    // (endpoint zaten admin-gate'li). Verilen kişi de aynı işi yapabilir.
+    const perms = setUserPerm(username, {
+      admin: !!body.admin,
+      screens: body.screens ?? null,
+      dists,
+      cities: body.cities ?? null,
+    });
+    return c.json({ ok: true, perms });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+app.post("/api/admin/perms/delete", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  try {
+    const body = (await c.req.json()) as { username?: string };
+    const username = (body.username ?? "").trim();
+    if (!username) return c.json({ error: "username gerekli" }, 400);
+    return c.json({ ok: true, perms: deleteUserPerm(username) });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Şehir listesi (yetki atama dropdown'u) — TBLMUSTERI'den distinct TXTSEHIR.
+app.get("/api/admin/cities", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  try {
+    const r = await runReadOnly(
+      "SELECT DISTINCT LTRIM(RTRIM(TXTSEHIR)) AS sehir FROM dbo.TBLMUSTERI " +
+        "WHERE BYTDURUM = 0 AND TXTSEHIR IS NOT NULL AND LTRIM(RTRIM(TXTSEHIR)) <> '' " +
+        "ORDER BY sehir",
+      { limit: 500, timeoutMs: 20_000 },
+    );
+    return c.json({ cities: r.rows.map((x) => String(x.sehir)) });
+  } catch (err) {
+    return c.json({ error: (err as Error).message, cities: [] }, 200);
+  }
+});
+
+// Distribütör listesi (yetki atama) — PANORAMA-OTORİTESİ: yalnızca giriş yapan
+// admin'in kendi yetkili olduğu distribütörler (login'de ERCVIEWTBLKULLANICIDIST_
+// DASHBOARD view'ından çözülen allowedDistKods). Admin bu kümenin dışına
+// kullanıcı yetkilendiremez (POST /api/admin/perms sunucu tarafında da eler).
+app.get("/api/admin/dists", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  try {
+    const dists = await listAllowedDistributors(session);
+    return c.json({ dists });
+  } catch (err) {
+    return c.json({ error: (err as Error).message, dists: [] }, 200);
+  }
+});
+
+// Kullanıcı listesi (yetki atama) — yeni hesap AÇILMAZ; yetkiler yalnızca
+// PANORAMA'daki mevcut kullanıcılara atanır. Giriş politikası merkez-only
+// olduğu için yalnızca BYTTIP=0 (merkez) aktif kullanıcılar listelenir.
+app.get("/api/admin/users", async (c) => {
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
+  if (DEMO_DATA) return c.json({ users: [] });
+  try {
+    const r = await runReadOnly(
+      "SELECT TXTKULLANICIISIM AS uname, TXTADSOYAD AS ad FROM dbo.TBLKULLANICI " +
+        "WHERE BYTDURUM = 0 AND BYTTIP = 0 AND TXTKULLANICIISIM IS NOT NULL " +
+        "ORDER BY TXTKULLANICIISIM",
+      { limit: 2000, timeoutMs: 20_000 },
+    );
+    const users = r.rows.map((x) => ({
+      username: String(x.uname).trim(),
+      displayName: x.ad == null ? null : String(x.ad).trim(),
+    }));
+    return c.json({ users });
+  } catch (err) {
+    return c.json({ error: (err as Error).message, users: [] }, 200);
   }
 });
 
@@ -879,8 +1053,9 @@ app.get("/api/wietnauer/yonetim", async (c) => {
     const snap = await getWietnauerYonetimSnapshot({
       forceRefresh,
       strategicBrands: tenant.strategicBrands ?? [],
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
       distId: scopeSingleDistId(scope),
+      allowedCities: scope.cities,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
@@ -902,7 +1077,24 @@ type V3SnapshotOpts = {
   strategicBrands?: string[];
   allowedDistKods?: number[] | null;
   distId?: number | null;
+  allowedCities?: string[] | null;
+  /** Faz 3 — tarih aralığı filtresi (YYYY-MM-DD). Verilmezse fetcher'ın
+   *  varsayılan penceresi (ör. son 30g) kullanılır. */
+  dateFrom?: string | null;
+  dateTo?: string | null;
 };
+
+/** ?from=YYYY-MM-DD&to=YYYY-MM-DD parse — geçersizse null. Sadece tarih formatı. */
+function parseDateRange(c: { req: { query: (k: string) => string | undefined } }): {
+  dateFrom: string | null;
+  dateTo: string | null;
+} {
+  const norm = (v: string | undefined): string | null => {
+    const s = (v ?? "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+  };
+  return { dateFrom: norm(c.req.query("from")), dateTo: norm(c.req.query("to")) };
+}
 function makeV3Handler(
   name: string,
   fn: (o: V3SnapshotOpts) => Promise<unknown>,
@@ -924,11 +1116,15 @@ function makeV3Handler(
     try {
       const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
       const tenant = getTenantConfig();
+      const { dateFrom, dateTo } = parseDateRange(c);
       const snap = await fn({
         forceRefresh,
         strategicBrands: tenant.strategicBrands ?? [],
-        allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+        allowedDistKods: scope.distKods,
         distId: scopeSingleDistId(scope),
+        allowedCities: scope.cities,
+        dateFrom,
+        dateTo,
       });
       return c.json(maskDemoSnapshot(snap));
     } catch (err) {
@@ -966,13 +1162,17 @@ app.get("/api/wietnauer/stok", async (c) => {
   try {
     const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
     const tenant = getTenantConfig();
+    const { dateFrom, dateTo } = parseDateRange(c);
     const snap = await getWietnauerStokSnapshot({
       forceRefresh,
       strategicBrands: tenant.strategicBrands ?? [],
       // merkez tam görünürlük → allowedDistKods null; dist → izinli liste.
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
       // merkez drill-down / dist tek-dist seçimi → scope'tan tek dist.
       distId: scopeSingleDistId(scope),
+      allowedCities: scope.cities,
+      dateFrom,
+      dateTo,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
@@ -1005,7 +1205,7 @@ app.get("/api/komuta/finance/:region", async (c) => {
     const analysis = await analyzeRegionAnomaly(region, {
       forceRefresh,
       productGroup,
-      allowedDistKods: scope.type === "merkez" ? null : scope.distKods,
+      allowedDistKods: scope.distKods,
     });
     return c.json(analysis);
   } catch (err) {

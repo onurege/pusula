@@ -11,11 +11,14 @@ import type { WietnauerSahaSnapshot } from "@/lib/api";
  * (OFF-TRADE WHITE OUTLET, OFF-TRADE YATIRIMLI), kalan müşteriler
  * "(Tanımsız)" altında.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function CoveragePanel({
   coverage,
 }: {
   coverage: WietnauerSahaSnapshot["coverage"];
 }) {
+  if (panelHidden("panel.saha.coverage")) return null;
   const pct = Math.max(0, Math.min(100, coverage.kapsamaPct));
   // Donut: 100×100 viewBox, radius 40, strokeWidth 14.
   const r = 40;
@@ -34,7 +37,7 @@ export function CoveragePanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Aktif Müşteri Kapsama</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.coverage", "Aktif Müşteri Kapsama")}</div>
           <div className="v3-panel-sub">
             Son 30g'de ziyaret edilen / son 90g'de aktif (fatura kesilmiş)
             müşteri.

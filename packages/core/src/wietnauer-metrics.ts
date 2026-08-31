@@ -12,6 +12,7 @@ import { runReadOnly } from "./db.js";
 import { sqlNow } from "./now.js";
 import { withCache } from "./cache.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { cityFactClause, cityColClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer";
 // v3: 30g pencerede ÜST SINIR eksikti — Wietnauer DB'de DEMO_DATE'in ötesine
@@ -105,7 +106,9 @@ type TopDistributorRawRow = Omit<TopDistributor, "rank" | "payPct" | "kapsamPct"
  * Scope-free: tüm dist'ler döner (~31 satır), dist scope + payPct runtime'da
  * JS'te uygulanır (fetchTopCustomers deseniyle aynı). kapsamPct = FKMS/aktif.
  */
-async function fetchTopDistributors(): Promise<TopDistributorRawRow[]> {
+async function fetchTopDistributors(
+  cities?: string[] | null,
+): Promise<TopDistributorRawRow[]> {
   const salesSql = `
     SELECT
       f.LNGDISTKOD AS id,
@@ -119,15 +122,16 @@ async function fetchTopDistributors(): Promise<TopDistributorRawRow[]> {
     LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = dst.TXTEKGRUP
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     GROUP BY f.LNGDISTKOD, dst.TXTAD, dg.TXTAD
     ORDER BY SUM(f.DBLNETTUTAR) DESC
   `;
   // md23: portföy kapsamı — dist altındaki aktif (BYTDURUM=0) müşteri sayısı.
+  // Şehir kısıtı varsa portföy de yalnızca izinli şehir müşterileriyle sınırlanır.
   const custSql = `
     SELECT LNGDISTKOD AS id, COUNT(*) AS aktif
     FROM dbo.TBLMUSTERI
-    WHERE BYTDURUM = 0 AND LNGDISTKOD IS NOT NULL
+    WHERE BYTDURUM = 0 AND LNGDISTKOD IS NOT NULL${cityColClause(cities, "TXTSEHIR")}
     GROUP BY LNGDISTKOD
   `;
   const [salesRes, custRes] = await Promise.all([
@@ -169,7 +173,7 @@ type BrandRawRow = {
  * doğru toplanır (bir müşteri faturası tek dist'e bağlı). payPct scope
  * SONRASI o kapsamın kendi toplamına göre hesaplanır (public API'de).
  */
-async function fetchBrands(): Promise<BrandRawRow[]> {
+async function fetchBrands(cities?: string[] | null): Promise<BrandRawRow[]> {
   // Marka tablosu tenant'a göre değişir (Pernod: TBLURUNEKGRUP, Wietnauer:
   // TBLURUNGRUP). Univera standart hiyerarşi tutmaz; her dağıtıcı kendi
   // kurgusunu yapar — config'den okuyup interpolasyon ile SQL'e yaz.
@@ -199,7 +203,7 @@ async function fetchBrands(): Promise<BrandRawRow[]> {
     INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
     ORDER BY SUM(d.DBLNETFIYAT) DESC
   `;
@@ -261,7 +265,9 @@ type DiscountKpiRawRow = {
  * GROUP BY'a eklendi (~31 satır, ucuz). Marka/SKU kırılımı için ileride
  * detay üzerinden ayrı bir fetcher gerekir.
  */
-async function fetchDiscountKpi(): Promise<DiscountKpiRawRow[]> {
+async function fetchDiscountKpi(
+  cities?: string[] | null,
+): Promise<DiscountKpiRawRow[]> {
   const sql = `
     SELECT
       LNGDISTKOD AS dist_id,
@@ -273,7 +279,7 @@ async function fetchDiscountKpi(): Promise<DiscountKpiRawRow[]> {
     FROM dbo.TBLMSDFATURA
     WHERE BYTTUR = 0 AND BYTDURUM = 0
       AND TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities, "LNGMUSTERIKOD")}
     GROUP BY LNGDISTKOD
   `;
   const result = await runReadOnly(sql, { limit: 200 });
@@ -337,20 +343,24 @@ export async function getWietnauerYonetimSnapshot(
     allowedDistKods?: number[] | null;
     /** Merkez drill-down veya dist tek-dist seçimi. */
     distId?: number | null;
+    /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
+     * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
+    allowedCities?: string[] | null;
   } = {},
 ): Promise<WietnauerYonetimSnapshot> {
   const strategicBrands = options.strategicBrands ?? [];
+  const cities = options.allowedCities ?? null;
 
-  const cacheKey = `${CACHE_VERSION}-30g-all`;
+  const cacheKey = `${CACHE_VERSION}-30g-${cityCacheTag(cities)}`;
   const result = await withCache<RawYonetimBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       // Üç sorgu paralel — toplam latency max(her sorgu).
       const [topDistributors, brands, discount] = await Promise.all([
-        fetchTopDistributors(),
-        fetchBrands(),
-        fetchDiscountKpi(),
+        fetchTopDistributors(cities),
+        fetchBrands(cities),
+        fetchDiscountKpi(cities),
       ]);
       return {
         topDistributors,

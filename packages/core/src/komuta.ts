@@ -12,8 +12,9 @@ import {
 import { getOtvRate, loadOtv, type OtvData } from "./tax.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
-import { distFilterClause, type TenantScope } from "./auth.js";
+import { distFilterClause, cityFactClause, cityCacheTag, type TenantScope } from "./auth.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { foldOther, sumBy } from "./fold-other.js";
 
 /**
  * Komuta Köprüsü — CEO / Satış Direktörü ekranı için veri agregatları.
@@ -174,6 +175,10 @@ export type KomutaMatrixRow = {
   ikiYilOnce: number;
   yoyPct: number | null;
   trend: "rocket" | "up" | "flat" | "down";
+  /** "Diğer" katlanmış satır (Top-8 dışı kalan ürün gruplarının toplamı). */
+  isOther?: boolean;
+  /** Dip toplam satırı (Top-8 + Diğer toplamı). */
+  isTotal?: boolean;
 };
 
 export type KomutaHeatmapCell = {
@@ -225,6 +230,32 @@ export type KomutaUpcomingEvent = {
 };
 
 /**
+ * md34 — Müşteri Tipi (TBLMUSTERIEKSAHA saha 8, `fetchChannelByCustomerType`
+ * ile aynı ek-saha kaynağı) × Marka (`tenant.brandTable`) kırılımı, son 30g.
+ * Satırlar müşteri tipi, sütunlar Top 8 marka (toplam ciroya göre) + "Diğer".
+ * Her hücre hem ciro (TL) hem hacim (adet, DBLMIKTAR) taşır — frontend
+ * refetch'siz Hacim/Ciro toggle yapabilsin diye.
+ */
+export type KomutaCustomerTypeBrandCell = {
+  marka: string;
+  ciro: number;
+  miktar: number;
+};
+
+export type KomutaCustomerTypeBrandRow = {
+  musteriTipi: string;
+  cells: KomutaCustomerTypeBrandCell[];
+  /** Dip toplam satırı (tüm müşteri tiplerinin toplamı). */
+  isTotal?: boolean;
+};
+
+export type KomutaCustomerTypeBrandSnapshot = {
+  /** Sütun başlıkları: Top 8 marka (toplam ciroya göre) + "Diğer". */
+  markalar: string[];
+  rows: KomutaCustomerTypeBrandRow[];
+};
+
+/**
  * Komuta değer birimi — TL ciro vs 9-Litre-Equivalent (volume).
  * Tüm panel veri akışı bu birime göre hesaplanır; UI suffix'i de switch eder
  * ("₺" vs "9LE"). Demo manager TL'den 9L'ye geçince bütün rakamlar
@@ -258,6 +289,8 @@ export type KomutaSnapshot = {
   reps: KomutaRep[];
   topDists: KomutaTopDist[];
   portfolio: KomutaPortfolioRow[];
+  /** md34 — Müşteri Tipi × Marka kırılımı (ciro + hacim), son 30g. */
+  customerTypeBrand: KomutaCustomerTypeBrandSnapshot;
   brief?: string;
 };
 
@@ -983,6 +1016,24 @@ async function fetchUpcomingEvent(): Promise<KomutaUpcomingEvent | null> {
 /** Hacim böleni (tenant): Pernod 9LE→9, Wietnauer 70cl→1 (DBLLITRE zaten 70cl-eşdeğeri). md7. */
 function vd(): string { return String(getTenantConfig().volume.divisor ?? 9); }
 
+/**
+ * Tenant config'inden marka tablosu (`brandTable`) + join kolonunu
+ * (`brandJoinColumn`) alıp doğrular — SQL string interpolasyonuna girmeden
+ * önce hardcoded enum güvencesi (wietnauer-marka.ts `getBrandTableMeta` ile
+ * aynı desen; komuta.ts kendi kopyasını tutar, cross-module private import
+ * yapılmıyor).
+ */
+function getBrandTableMeta(): { brandTable: string; joinCol: string } {
+  const tenant = getTenantConfig();
+  const brandTable = tenant.brandTable;
+  const joinCol = tenant.brandJoinColumn;
+  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
+    throw new Error(`Geçersiz brandTable: ${brandTable}`);
+  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
+    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  return { brandTable, joinCol };
+}
+
 function unitValueExpr(unit: ValueUnit, opts: {
   /** Fatura toplam alias'ı (örn. `f.DBLNETTUTAR`) — TL modunda kullanılır. */
   faturaTL?: string;
@@ -1092,6 +1143,54 @@ async function fetchPeriodScales(distClause: string): Promise<PeriodScales> {
 // Marka × Dönem Matrisi (top 8 ürün grubu × 5 dönem)
 // ---------------------------------------------------------------------------
 
+type MatrixPeriodAgg = {
+  grup: string;
+  buAy: number;
+  gecenAy: number;
+  ucAyOnce: number;
+  gecenYil: number;
+  ikiYilOnce: number;
+};
+
+function matrixTrend(yoyPct: number | null): KomutaMatrixRow["trend"] {
+  if (yoyPct == null) return "flat";
+  if (yoyPct >= 30) return "rocket";
+  if (yoyPct >= 5) return "up";
+  if (yoyPct <= -5) return "down";
+  return "flat";
+}
+
+function toMatrixRow(
+  g: MatrixPeriodAgg,
+  tierMaster: TierMaster,
+  opts: { isOther?: boolean; isTotal?: boolean } = {},
+): KomutaMatrixRow {
+  const yoyPct = g.gecenYil > 0 ? ((g.buAy - g.gecenYil) / g.gecenYil) * 100 : null;
+  return {
+    grup: g.grup,
+    // "Diğer"/"Toplam" sentetik satırlar tek bir ürün grubunu temsil etmez —
+    // tier sınıflandırması anlamsız, "value" varsayılanına düşer.
+    tier: opts.isOther || opts.isTotal ? "value" : classifyTier(g.grup, tierMaster),
+    buAy: g.buAy,
+    gecenAy: g.gecenAy,
+    ucAyOnce: g.ucAyOnce,
+    gecenYil: g.gecenYil,
+    ikiYilOnce: g.ikiYilOnce,
+    yoyPct,
+    trend: matrixTrend(yoyPct),
+    ...(opts.isOther ? { isOther: true as const } : {}),
+    ...(opts.isTotal ? { isTotal: true as const } : {}),
+  };
+}
+
+/**
+ * md16 — Top 8 ürün grubu + "Diğer" (Top-8 dışı kalanların toplamı) + dip
+ * "Toplam" satırı. `fold-other.ts` deseni: tek SQL taraması (800g pencere)
+ * TÜM ürün gruplarını döner (SQL'de TOP N yok); Top-8 seçimi + "Diğer"
+ * katlama JS tarafında `foldOther()` ile yapılır (md17/md18'in SQL-UNION
+ * deseninden farklı ama aynı sonucu üretir — burada tek pass yeterli çünkü
+ * seçim kriteri [bu ay ciro] zaten aggregate sonucun bir sütunu).
+ */
 async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaMatrixRow[]> {
   // Detay-bazlı per-row value — TL ise DBLNETFIYAT, 9LE ise DBLMIKTAR × çarpan.
   const rowExpr = unit === "9le"
@@ -1100,30 +1199,10 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: st
   const eksahaJoin = unit === "9le"
     ? "LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26"
     : "";
-  // Top 8 grup'u bul + her biri için 5 dönem ciro
+  // Tek pass, 800g pencere: TÜM ürün grupları × 5 dönem. Top-8 + "Diğer"
+  // seçimi SQL'de değil JS'de (foldOther) yapılır.
   const sql = `
-    WITH gruplar AS (
-      SELECT TOP 8
-        COALESCE(g.TXTAD, u.TXTAD) AS grup,
-        SUM(${rowExpr}) AS ciro
-      FROM dbo.TBLMSDFATURA f
-      INNER JOIN dbo.TBLMSDBELGEDETAY d
-        ON d.LNGYIL = f.LNGYIL
-       AND d.LNGFATURAKOD = f.LNGBELGEKOD
-       AND d.LNGDISTKOD = f.LNGDISTKOD
-      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      LEFT JOIN dbo.TBLURUNGRUP g
-        ON g.TXTKOD = u.TXTURUNGRUPKOD
-      ${eksahaJoin}
-      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
-        ${distClause}
-      GROUP BY COALESCE(g.TXTAD, u.TXTAD)
-      ORDER BY ciro DESC
-    ),
-    raw AS (
+    WITH raw AS (
       SELECT
         COALESCE(g.TXTAD, u.TXTAD) AS grup,
         f.TRHISLEMTARIHI            AS tarih,
@@ -1144,50 +1223,58 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: st
         ${distClause}
     )
     SELECT
-      gr.grup,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})  THEN raw.satir ELSE 0 END) AS bu_ay,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -60, ${sqlNow()})  AND raw.tarih < DATEADD(day, -30, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS gecen_ay,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -120, ${sqlNow()}) AND raw.tarih < DATEADD(day, -90, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS uc_ay_once,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()}) AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS gecen_yil,
-      SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()}) AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS iki_yil_once
-    FROM gruplar gr
-    LEFT JOIN raw ON raw.grup = gr.grup
-    GROUP BY gr.grup, gr.ciro
-    ORDER BY gr.ciro DESC
+      grup,
+      SUM(CASE WHEN tarih >= DATEADD(day, -30, ${sqlNow()})  THEN satir ELSE 0 END) AS bu_ay,
+      SUM(CASE WHEN tarih >= DATEADD(day, -60, ${sqlNow()})  AND tarih < DATEADD(day, -30, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_ay,
+      SUM(CASE WHEN tarih >= DATEADD(day, -120, ${sqlNow()}) AND tarih < DATEADD(day, -90, ${sqlNow()}) THEN satir ELSE 0 END) AS uc_ay_once,
+      SUM(CASE WHEN tarih >= DATEADD(day, -395, ${sqlNow()}) AND tarih < DATEADD(day, -365, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_yil,
+      SUM(CASE WHEN tarih >= DATEADD(day, -760, ${sqlNow()}) AND tarih < DATEADD(day, -730, ${sqlNow()}) THEN satir ELSE 0 END) AS iki_yil_once
+    FROM raw
+    GROUP BY grup
   `;
-  const out = await runReadOnly(sql, { limit: 10, timeoutMs: 90_000 });
+  const out = await runReadOnly(sql, { limit: 500, timeoutMs: 90_000 });
   const tierMaster = await loadTierMaster();
   // PeriodScales sadece TL modunda anlamlı (detay DBLNETFIYAT → fatura
   // DBLNETTUTAR oranı). 9LE modunda her iki taraf zaten 9LE — scale=1.
   const scale = unit === "tl" ? scales : {
     buAy: 1, gecenAy: 1, ucAyOnce: 1, gecenYil: 1, ikiYilOnce: 1,
   };
-  return out.rows.map((r) => {
-    const grup = String(r.grup ?? "");
-    const bu = Number(r.bu_ay ?? 0) * scale.buAy;
-    const gecenAy = Number(r.gecen_ay ?? 0) * scale.gecenAy;
-    const ucAyOnce = Number(r.uc_ay_once ?? 0) * scale.ucAyOnce;
-    const gecenYil = Number(r.gecen_yil ?? 0) * scale.gecenYil;
-    const ikiYilOnce = Number(r.iki_yil_once ?? 0) * scale.ikiYilOnce;
-    const yoyPct = gecenYil > 0 ? ((bu - gecenYil) / gecenYil) * 100 : null;
-    let trend: KomutaMatrixRow["trend"] = "flat";
-    if (yoyPct != null) {
-      if (yoyPct >= 30) trend = "rocket";
-      else if (yoyPct >= 5) trend = "up";
-      else if (yoyPct <= -5) trend = "down";
-    }
-    return {
-      grup,
-      tier: classifyTier(grup, tierMaster),
-      buAy: bu,
-      gecenAy,
-      ucAyOnce,
-      gecenYil,
-      ikiYilOnce,
-      yoyPct,
-      trend,
-    };
+  const all: MatrixPeriodAgg[] = out.rows.map((r) => ({
+    grup: String(r.grup ?? ""),
+    buAy: Number(r.bu_ay ?? 0) * scale.buAy,
+    gecenAy: Number(r.gecen_ay ?? 0) * scale.gecenAy,
+    ucAyOnce: Number(r.uc_ay_once ?? 0) * scale.ucAyOnce,
+    gecenYil: Number(r.gecen_yil ?? 0) * scale.gecenYil,
+    ikiYilOnce: Number(r.iki_yil_once ?? 0) * scale.ikiYilOnce,
+  }));
+  const sorted = [...all].sort((a, b) => b.buAy - a.buAy);
+
+  const { rows: folded } = foldOther<MatrixPeriodAgg>(sorted, {
+    keep: 8,
+    other: (rest) => ({
+      grup: "Diğer",
+      buAy: sumBy(rest, (r) => r.buAy),
+      gecenAy: sumBy(rest, (r) => r.gecenAy),
+      ucAyOnce: sumBy(rest, (r) => r.ucAyOnce),
+      gecenYil: sumBy(rest, (r) => r.gecenYil),
+      ikiYilOnce: sumBy(rest, (r) => r.ikiYilOnce),
+    }),
   });
+
+  const rows = folded.map((g) => toMatrixRow(g, tierMaster, { isOther: g.grup === "Diğer" }));
+
+  // Dip toplam satırı — Top-8 + "Diğer" toplamı (== tüm gruplar toplamı).
+  const totalAgg: MatrixPeriodAgg = {
+    grup: "Toplam",
+    buAy: sumBy(all, (r) => r.buAy),
+    gecenAy: sumBy(all, (r) => r.gecenAy),
+    ucAyOnce: sumBy(all, (r) => r.ucAyOnce),
+    gecenYil: sumBy(all, (r) => r.gecenYil),
+    ikiYilOnce: sumBy(all, (r) => r.ikiYilOnce),
+  };
+  rows.push(toMatrixRow(totalAgg, tierMaster, { isTotal: true }));
+
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -1566,6 +1653,120 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
 }
 
 // ---------------------------------------------------------------------------
+// md34 — Müşteri Tipi (Ek Saha 8) × Marka kırılımı — ciro + hacim, son 30g
+// ---------------------------------------------------------------------------
+//
+// `fetchChannelByCustomerType` ile aynı ek-saha kaynağı (TBLMUSTERIEKSAHA
+// LNGEKSAHAKODU=8 → TBLEKSAHASECENEK LNGTAKIPKOD=8 lookup) + `fetchBrands`
+// (wietnauer-metrics.ts) ile aynı marka join deseni (tenant.brandTable /
+// brandJoinColumn). Satırlar müşteri tipi, sütunlar Top 8 marka (toplam
+// ciroya göre) + "Diğer" (fold-other.ts deseni); her hücrede hem ciro hem
+// hacim (adet) taşınır ki UI refetch olmadan Hacim/Ciro toggle yapabilsin.
+
+type CustomerTypeBrandRaw = { tip: string; marka: string; ciro: number; miktar: number };
+
+async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustomerTypeBrandSnapshot> {
+  const { brandTable, joinCol } = getBrandTableMeta();
+  const sql = `
+    WITH lookup AS (
+      SELECT CAST(LNGKOD AS NVARCHAR(20)) AS kod, TXTACIKLAMA AS adi
+      FROM dbo.TBLEKSAHASECENEK
+      WHERE LNGTAKIPKOD = 8
+    ),
+    base AS (
+      SELECT
+        ISNULL(NULLIF(LTRIM(RTRIM(l.adi)), ''), '(Tanımsız)') AS tip,
+        b.TXTAD AS marka,
+        d.DBLNETFIYAT AS ciro,
+        d.DBLMIKTAR AS miktar
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMSDBELGEDETAY d
+        ON d.LNGYIL = f.LNGYIL
+       AND d.LNGFATURAKOD = f.LNGBELGEKOD
+       AND d.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      LEFT JOIN dbo.TBLMUSTERIEKSAHA me
+        ON me.LNGMUSTERIREF = m.LNGKOD AND me.LNGEKSAHAKODU = 8
+      LEFT JOIN lookup l ON l.kod = LTRIM(RTRIM(me.TXTEKSAHAACIKLAMA))
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND m.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        ${distClause}
+    )
+    SELECT tip, marka, SUM(ciro) AS ciro, SUM(miktar) AS miktar
+    FROM base
+    GROUP BY tip, marka
+    ORDER BY SUM(ciro) DESC
+  `;
+  const out = await runReadOnly(sql, { limit: 3000, timeoutMs: 45_000 });
+  const raw: CustomerTypeBrandRaw[] = out.rows.map((r) => ({
+    tip: String(r.tip ?? "(Tanımsız)"),
+    marka: String(r.marka ?? ""),
+    ciro: Number(r.ciro ?? 0),
+    miktar: Number(r.miktar ?? 0),
+  }));
+
+  // Sütun seçimi: toplam ciroya göre Top 8 marka + "Diğer" (fold-other.ts).
+  const markaTotals = new Map<string, number>();
+  for (const r of raw) markaTotals.set(r.marka, (markaTotals.get(r.marka) ?? 0) + r.ciro);
+  const sortedMarkalar = [...markaTotals.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([marka, ciro]) => ({ marka, ciro }));
+  const { rows: foldedMarkalar } = foldOther<{ marka: string; ciro: number }>(sortedMarkalar, {
+    keep: 8,
+    other: (rest) => ({ marka: "Diğer", ciro: sumBy(rest, (r) => r.ciro) }),
+  });
+  const markalar = foldedMarkalar.map((m) => m.marka);
+  if (markalar.length === 0) return { markalar: [], rows: [] };
+  const topMarkaSet = new Set(markalar.filter((m) => m !== "Diğer"));
+
+  // Satır sırası: müşteri tipi toplam cirosuna göre büyükten küçüğe.
+  const tipTotals = new Map<string, number>();
+  for (const r of raw) tipTotals.set(r.tip, (tipTotals.get(r.tip) ?? 0) + r.ciro);
+  const tipOrder = [...tipTotals.entries()].sort((a, b) => b[1] - a[1]).map(([tip]) => tip);
+
+  // Hücreler: Top-8 dışı markalar "Diğer" sütununda katlanır (per-row).
+  const cellMap = new Map<string, { ciro: number; miktar: number }>();
+  for (const r of raw) {
+    const col = topMarkaSet.has(r.marka) ? r.marka : "Diğer";
+    const key = `${r.tip}|${col}`;
+    const cur = cellMap.get(key) ?? { ciro: 0, miktar: 0 };
+    cur.ciro += r.ciro;
+    cur.miktar += r.miktar;
+    cellMap.set(key, cur);
+  }
+
+  const rows: KomutaCustomerTypeBrandRow[] = tipOrder.map((tip) => ({
+    musteriTipi: tip,
+    cells: markalar.map((marka) => {
+      const c = cellMap.get(`${tip}|${marka}`);
+      return { marka, ciro: c?.ciro ?? 0, miktar: c?.miktar ?? 0 };
+    }),
+  }));
+
+  // Dip toplam satırı — her sütunun tüm müşteri tiplerindeki toplamı.
+  const totalsByCol = new Map<string, { ciro: number; miktar: number }>();
+  for (const marka of markalar) totalsByCol.set(marka, { ciro: 0, miktar: 0 });
+  for (const row of rows) {
+    for (const cell of row.cells) {
+      const agg = totalsByCol.get(cell.marka)!;
+      agg.ciro += cell.ciro;
+      agg.miktar += cell.miktar;
+    }
+  }
+  rows.push({
+    musteriTipi: "Toplam",
+    isTotal: true,
+    cells: markalar.map((marka) => ({ marka, ...totalsByCol.get(marka)! })),
+  });
+
+  return { markalar, rows };
+}
+
+// ---------------------------------------------------------------------------
 // AI Insight Bar — Gemini ile 3-paragraf brief
 // ---------------------------------------------------------------------------
 
@@ -1816,19 +2017,7 @@ function applyOtvNet(snap: KomutaSnapshot, data: OtvData): KomutaSnapshot {
     })),
     reps: snap.reps.map((r) => ({ ...r, ciro: r.ciro * avgInv })),
     topDists: snap.topDists.map((d) => ({ ...d, ciro: d.ciro * avgInv })),
-    matrix: snap.matrix.map((row) => {
-      const rate = getOtvRate(row.grup, row.tier, data);
-      const inv = 1 - rate;
-      return {
-        ...row,
-        buAy: row.buAy * inv,
-        gecenAy: row.gecenAy * inv,
-        ucAyOnce: row.ucAyOnce * inv,
-        gecenYil: row.gecenYil * inv,
-        ikiYilOnce: row.ikiYilOnce * inv,
-        // yoyPct, trend unchanged (ratio constant)
-      };
-    }),
+    matrix: applyOtvNetToMatrix(snap.matrix, data),
     portfolio: snap.portfolio.map((p) => {
       const rate = getOtvRate(p.grup, p.tier, data);
       const inv = 1 - rate;
@@ -1841,7 +2030,53 @@ function applyOtvNet(snap: KomutaSnapshot, data: OtvData): KomutaSnapshot {
       };
     }),
     // heatmap: cells YoY ratios unchanged
+    customerTypeBrand: {
+      markalar: snap.customerTypeBrand.markalar,
+      rows: snap.customerTypeBrand.rows.map((row) => ({
+        ...row,
+        cells: row.cells.map((c) => ({ ...c, ciro: c.ciro * avgInv })),
+      })),
+    },
   };
+}
+
+/**
+ * Matrix satırlarına OTV oranını uygular; her satır kendi `tier`ine göre
+ * (yaklaşık) oranlanır — "Diğer" satırı zaten çok-tierli bir katlama olduğu
+ * için tek bir "value" oranı kullanır (md17/18 "Diğer" desenindeki mevcut
+ * yaklaşıklıkla tutarlı). "Toplam" (dip) satırı ise KENDİ tier'inden bir oran
+ * uygulamak yerine, transform edilmiş Top-8+Diğer satırlarının toplamı olarak
+ * YENİDEN hesaplanır — böylece tabloda görünen dip toplam, üstündeki
+ * satırların toplamıyla her zaman birebir tutar.
+ */
+function applyOtvNetToMatrix(rows: KomutaMatrixRow[], data: OtvData): KomutaMatrixRow[] {
+  const mapped = rows.map((row) => {
+    if (row.isTotal) return row; // aşağıda yeniden hesaplanacak
+    const rate = getOtvRate(row.grup, row.tier, data);
+    const inv = 1 - rate;
+    return {
+      ...row,
+      buAy: row.buAy * inv,
+      gecenAy: row.gecenAy * inv,
+      ucAyOnce: row.ucAyOnce * inv,
+      gecenYil: row.gecenYil * inv,
+      ikiYilOnce: row.ikiYilOnce * inv,
+      // yoyPct, trend unchanged (ratio constant)
+    };
+  });
+  const rest = mapped.filter((r) => !r.isTotal);
+  if (rest.length === mapped.length) return mapped; // "Toplam" satırı yok
+  const buAy = sumBy(rest, (r) => r.buAy);
+  const gecenAy = sumBy(rest, (r) => r.gecenAy);
+  const ucAyOnce = sumBy(rest, (r) => r.ucAyOnce);
+  const gecenYil = sumBy(rest, (r) => r.gecenYil);
+  const ikiYilOnce = sumBy(rest, (r) => r.ikiYilOnce);
+  const yoyPct = gecenYil > 0 ? ((buAy - gecenYil) / gecenYil) * 100 : null;
+  return mapped.map((r) =>
+    r.isTotal
+      ? { ...r, buAy, gecenAy, ucAyOnce, gecenYil, ikiYilOnce, yoyPct, trend: matrixTrend(yoyPct) }
+      : r,
+  );
 }
 
 /**
@@ -1883,6 +2118,10 @@ export async function getKomutaSnapshot(
     /** Tek bir dist'e drill-down (merkez) ya da dist kullanıcının tek izinli
      *  dist'i (server.ts `scopeSingleDistId` ile hesaplar). */
     distId?: number | null;
+    /** Kullanıcının izinli şehirleri (null → kısıt yok). Tüm fatura
+     *  sorgularına semi-join predikatı olarak enjekte edilir; cache key
+     *  şehir kümesine göre ayrışır. */
+    allowedCities?: string[] | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const unit: ValueUnit = options.unit === "9le" ? "9le" : "tl";
@@ -1893,20 +2132,26 @@ export async function getKomutaSnapshot(
     options.distId != null ? [options.distId] : (options.allowedDistKods ?? null);
   const scope: TenantScope =
     effectiveDistKods == null
-      ? { type: "merkez", distKods: null }
-      : { type: "dist", distKods: effectiveDistKods };
-  const distClause = distFilterClause(scope, "f.LNGDISTKOD");
+      ? { type: "merkez", distKods: null, cities: null }
+      : { type: "dist", distKods: effectiveDistKods, cities: null };
+  // Dist + şehir kısıtı tek stringde birleşir — her fetch* fonksiyonu bunu
+  // `${distClause}` olarak fatura WHERE'ine ekliyor (hepsi `f` alias'lı), bu
+  // yüzden şehir semi-join'i (f.LNGMUSTERIKOD) her yerde geçerli.
+  const cities = options.allowedCities ?? null;
+  const distClause = distFilterClause(scope, "f.LNGDISTKOD") + cityFactClause(cities);
   const scopeKey =
-    effectiveDistKods == null
+    (effectiveDistKods == null
       ? "all"
-      : "d" + [...effectiveDistKods].sort((a, b) => a - b).join("_");
+      : "d" + [...effectiveDistKods].sort((a, b) => a - b).join("_")) +
+    "-" + cityCacheTag(cities);
 
   // CACHE_VERSION — snapshot shape veya temel SQL değiştiğinde bump et
   // ki eski entry'ler otomatik invalidate olsun (TTL yok, manuel refresh
   // tek geri kalan yol oluyor). v2: fetchRegions TBLDISTGRUP driver'a geçti
   // ("Doğu Anadolu kayboldu" fix'i), 8 bölge garanti. v7: dist-bazlı veri
-  // izolasyonu — tüm fatura sorgularına distClause enjekte edildi.
-  const CACHE_VERSION = "v7";
+  // izolasyonu — tüm fatura sorgularına distClause enjekte edildi. v8:
+  // Faz 3 (md16 Top8+Diğer+Toplam matrix, md34 yeni customerTypeBrand alanı).
+  const CACHE_VERSION = "v8";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
@@ -1939,6 +2184,7 @@ export async function getKomutaSnapshot(
         reps,
         topDists,
         portfolio,
+        customerTypeBrand,
       ] = await Promise.all([
         fetchKpis(unit, distClause).catch((e) => {
           console.error("[komuta kpis]", e);
@@ -1985,6 +2231,10 @@ export async function getKomutaSnapshot(
           console.error("[komuta portfolio]", e);
           return [] as KomutaPortfolioRow[];
         }),
+        fetchCustomerTypeBrand(distClause).catch((e) => {
+          console.error("[komuta customerTypeBrand]", e);
+          return { markalar: [], rows: [] } as KomutaCustomerTypeBrandSnapshot;
+        }),
       ]);
 
       const partial: Omit<KomutaSnapshot, "brief"> = {
@@ -2006,6 +2256,7 @@ export async function getKomutaSnapshot(
         reps,
         topDists,
         portfolio,
+        customerTypeBrand,
       };
       const brief = await fetchBrief(partial);
       let snap: KomutaSnapshot = { ...partial, brief };

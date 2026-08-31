@@ -1,4 +1,5 @@
 import { getWietnauerYonetim, getWietnauerIskonto } from "@/lib/api";
+import { cs, panelHidden } from "@/lib/content";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { TopDistributorsPanel } from "@/components/v3/TopDistributorsPanel";
@@ -70,6 +71,8 @@ export default async function V3YonetimKuruluPage() {
       <V3PageHeader
         eyebrow="Dashboard 01"
         title="Yönetim Kurulu"
+        contentKey="page.yonetim.title"
+        descKey="page.yonetim.desc"
         description={`${tenant.displayName} portföy sağlığı tek ekranda — Top müşteri konsantrasyonu, marka katkıları ve iskonto yatırım oranı son 30 günlük net ciro üzerinden.`}
         dataNote="TBLMSDFATURA + TBLMSDBELGEDETAY · DBLNETTUTAR/DBLNETFIYAT · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
@@ -88,28 +91,36 @@ export default async function V3YonetimKuruluPage() {
         <>
           {/* Üst şerit: 4 KPI özet kartı — gerçek portföy toplamları */}
           <div className="v3-kpi-grid">
+            {!panelHidden("kpi.yonetim.ciro") && (
             <KpiTile
-              label="Toplam Net Ciro"
+              label={cs("kpi.yonetim.ciro", "Toplam Net Ciro")}
               value={`₺${formatCompact(toplamCiro)}`}
               sub="son 30 gün"
             />
+          )}
+            {!panelHidden("kpi.yonetim.aktif") && (
             <KpiTile
-              label="Aktif Müşteri"
+              label={cs("kpi.yonetim.aktif", "Aktif Müşteri")}
               value={aktifMusteri.toLocaleString("tr-TR")}
               sub={`${toplamFatura.toLocaleString("tr-TR")} fatura`}
             />
+          )}
+            {!panelHidden("kpi.yonetim.konsantrasyon") && (
             <KpiTile
-              label="Top 10 Konsantrasyon"
+              label={cs("kpi.yonetim.konsantrasyon", "Top 10 Konsantrasyon")}
               value={`%${top10Pay.toFixed(1)}`}
               sub="portföyün payı"
               tone={top10Pay > 50 ? "warn" : "neutral"}
             />
+          )}
+            {!panelHidden("kpi.yonetim.stratejik") && (
             <KpiTile
-              label="Stratejik Marka Payı"
+              label={cs("kpi.yonetim.stratejik", "Stratejik Marka Payı")}
               value={`%${stratPay.toFixed(1)}`}
               sub={`${stratCount} marka takipte`}
               tone="accent"
             />
+          )}
           </div>
 
           {/* Üst içerik: 2 sütun (Marka katkıları + Top Distribütör) */}

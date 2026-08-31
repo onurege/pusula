@@ -103,6 +103,10 @@ export function getLocalDb(repoRoot: string): Database.Database {
   // touch an existing table, so columns added after the initial schema must
   // be applied via ALTER TABLE guarded by pragma_table_info().
   ensureColumn(db, "map_customers", "kisa_ad", "TEXT");
+  // md9: harita aramasında ünvan yanında müşteri kodu (TXTKOD) ve takip kodu
+  // (TXTERPKOD) ile de eşleşme yapılabilsin diye sync sırasında doldurulur.
+  ensureColumn(db, "map_customers", "musteri_kodu", "TEXT");
+  ensureColumn(db, "map_customers", "takip_kodu", "TEXT");
   // Risk / activity recency fields, populated during sync. Letting these be
   // NULL is intentional — a customer with no recorded sale/visit yet should
   // show as "?" instead of "0 gün ago" (which would imply today).

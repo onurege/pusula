@@ -11,6 +11,8 @@ import type { BrandPenetrationRow } from "./types";
  * Pastel YoY paleti: bar yatay horizontal bar; en yüksek penetrasyon en
  * üstte.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function BrandPenetrationPanel({
   rows,
   aktifMusteriToplam,
@@ -18,6 +20,7 @@ export function BrandPenetrationPanel({
   rows: BrandPenetrationRow[];
   aktifMusteriToplam: number;
 }) {
+  if (panelHidden("panel.marka.penetration")) return null;
   // Core zaten Top 15 + "Diğer" + referans toplam döndürüyor — ekstra slice YOK.
   const dataRows = rows.filter((r) => !r.isOther && !r.isTotal);
   const hasData = dataRows.length > 0;
@@ -27,7 +30,7 @@ export function BrandPenetrationPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Marka Penetrasyonu</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.penetration", "Marka Penetrasyonu")}</div>
           <div className="v3-panel-sub">
             Son 30g aktif portföy:{" "}
             <strong>{aktifMusteriToplam.toLocaleString("tr-TR")}</strong>{" "}

@@ -654,8 +654,8 @@ export async function analyzeRegionAnomaly(
   // Scope hesabı — komuta/wietnauer ile aynı desen.
   const scope: TenantScope =
     options.allowedDistKods == null
-      ? { type: "merkez", distKods: null }
-      : { type: "dist", distKods: options.allowedDistKods.filter((n) => Number.isInteger(n)) };
+      ? { type: "merkez", distKods: null, cities: null }
+      : { type: "dist", distKods: options.allowedDistKods.filter((n) => Number.isInteger(n)), cities: null };
   const distClause = distFilterClause(scope, "f.LNGDISTKOD");
   const scopeKey =
     options.allowedDistKods == null

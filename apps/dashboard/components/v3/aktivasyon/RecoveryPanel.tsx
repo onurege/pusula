@@ -9,12 +9,15 @@ import type { RecoveryTarget } from "./types";
  * Saha ekibinin "önce şuna git" listesi. Her satırda risk_tier_v2 chip ile
  * brief'teki renk paletinde işaretlenir.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function RecoveryPanel({ items }: { items: RecoveryTarget[] }) {
+  if (panelHidden("panel.risk.recovery")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Yeniden Kazanım Fırsatları</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.recovery", "Yeniden Kazanım Fırsatları")}</div>
           <div className="v3-panel-sub">
             Yüksek geçmiş cirosu + 60g+ sessizlik · Top {items.length} müşteri
           </div>

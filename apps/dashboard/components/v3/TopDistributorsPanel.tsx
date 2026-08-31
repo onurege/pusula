@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { WietnauerTopDistributor } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
+import { useContent } from "@/components/content-provider";
 
 type Limit = 10 | 20 | 0; // 0 = Tümü
 
@@ -20,15 +21,18 @@ export function TopDistributorsPanel({
 }: {
   distributors: WietnauerTopDistributor[];
 }) {
+  const { t, isHidden } = useContent();
   const [limit, setLimit] = useState<Limit>(10);
   const visible = limit === 0 ? distributors : distributors.slice(0, limit);
   const cumulative = visible.reduce((a, d) => a + d.payPct, 0);
+
+  if (isHidden("panel.yonetim.topdist")) return null;
 
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Top Distribütör Analizi</div>
+          <div className="v3-panel-title">{t("panel.yonetim.topdist.title", "Top Distribütör Analizi")}</div>
           <div className="v3-panel-sub">
             Son 30 gün net ciro · İlk {visible.length} distribütör toplam cironun
             <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor

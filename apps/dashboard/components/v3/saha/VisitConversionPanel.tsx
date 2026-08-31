@@ -12,12 +12,15 @@ export type ConversionRow = {
  * Rut içi'nde dönüşüm yüksek olmalı (planlanmış nokta); rut dışı'nda
  * fırsatçı satış göstergesi.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function VisitConversionPanel({ rows }: { rows: ConversionRow[] }) {
+  if (panelHidden("panel.saha.conversion")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Ziyaret → Sipariş Dönüşümü</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.conversion", "Ziyaret → Sipariş Dönüşümü")}</div>
           <div className="v3-panel-sub">
             Son 30g · Rut içi vs Rut dışı · sipariş, fatura, irsaliye
             kırılımıyla

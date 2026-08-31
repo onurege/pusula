@@ -7,6 +7,7 @@ import {
   listMapRegions,
 } from "@/lib/api";
 import { MapFilters } from "@/components/map-filters";
+import { MapPeriodFilter } from "@/components/map-period-filter";
 import { SalesMap } from "@/components/sales-map-client";
 import { ViewModeToggle } from "@/components/view-mode-toggle";
 import { MapHierarchyBreadcrumb } from "@/components/map-hierarchy-breadcrumb";
@@ -86,6 +87,15 @@ export async function MapPageBody({
     minDaysSinceVisitRaw && !isNaN(Number(minDaysSinceVisitRaw))
       ? Number(minDaysSinceVisitRaw)
       : undefined;
+  // md11 — üstteki dönem filtresi (satış-aktivite penceresi). Whitelist:
+  // yalnızca 30/60/90; başka bir değer veya eksikse 30 (mevcut davranış).
+  const activityDaysRaw =
+    typeof sp.activityDays === "string" ? sp.activityDays : undefined;
+  const activityDaysParsed = activityDaysRaw ? Number(activityDaysRaw) : undefined;
+  const activityDays: 30 | 60 | 90 =
+    activityDaysParsed === 60 || activityDaysParsed === 90
+      ? activityDaysParsed
+      : 30;
 
   // Görünüm modu: customer (default), region veya city.
   //   - region: TR 7 klasik bölgesi polygon fill (YoY renkleriyle)
@@ -120,6 +130,9 @@ export async function MapPageBody({
       riskTier,
       tier,
       minDaysSinceVisit,
+      // 30 = varsayılan davranış; param hiç gönderilmeyip core'un eski
+      // (has_sales kolonu tabanlı) yoluna düşmesi sağlanır — sıfır regresyon.
+      ...(activityDays !== 30 ? { activityDays } : {}),
       limit: 30000,
     }),
     listMapRegions({
@@ -219,6 +232,8 @@ export async function MapPageBody({
                   if (riskTier) params.set("riskTier", riskTier);
                   if (minDaysSinceVisit)
                     params.set("minDaysSinceVisit", String(minDaysSinceVisit));
+                  if (activityDays !== 30)
+                    params.set("activityDays", String(activityDays));
                   return `${basePath}?${params.toString()}`;
                 })()}
                 className="ml-0.5 text-accent/70 hover:text-accent"
@@ -230,6 +245,7 @@ export async function MapPageBody({
           )}
         </div>
         <div className="flex items-center gap-3">
+          <MapPeriodFilter current={activityDays} />
           <ViewModeToggle current={viewMode} />
           {/* SyncButton kaldırıldı — global "Veriyi Yenile" navbar'da merkezi. */}
         </div>

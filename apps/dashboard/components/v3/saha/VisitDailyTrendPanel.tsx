@@ -12,6 +12,8 @@ import type { SahaVisitDailyRow, SahaVisitKpi } from "@/lib/api";
  *
  * Header'da son 7g KPI özet 4 mini-card halinde.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function VisitDailyTrendPanel({
   rows,
   kpi,
@@ -19,6 +21,7 @@ export function VisitDailyTrendPanel({
   rows: SahaVisitDailyRow[];
   kpi: SahaVisitKpi;
 }) {
+  if (panelHidden("panel.saha.daily")) return null;
   const max = Math.max(1, ...rows.map((r) => r.toplam));
   // Hafta sonu (Cumartesi/Pazar) ayrı renk için
   const isWeekend = (iso: string) => {
@@ -41,7 +44,7 @@ export function VisitDailyTrendPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Günlük Ziyaret Trendi</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.daily", "Günlük Ziyaret Trendi")}</div>
           <div className="v3-panel-sub">
             Son 30 gün · {toplam30g.toLocaleString("tr-TR")} ziyaret · Rut dışı
             payı <strong>%{rutDisiPct.toFixed(1)}</strong>

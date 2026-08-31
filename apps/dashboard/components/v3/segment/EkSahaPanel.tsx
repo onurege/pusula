@@ -1,7 +1,13 @@
 import { formatCompact } from "@/components/komuta/format";
 
 /**
- * Müşteri Tipi (Ek Saha 8) segment paneli.
+ * Müşteri Tipi (Ek Saha 8) segment paneli — TBLMUSTERIEKSAHA × TBLEKSAHASECENEK
+ * (LNGEKSAHAKODU=8). Perakende / On Trade / Otel / Tali Bayi kanal tipi.
+ *
+ * md24: bu panel önceden yanlışlıkla TBLMUSTERIGRUP verisiyle besleniyordu
+ * (gerçek Ek Saha 8 tablosu hiç sorgulanmıyordu); kaynak düzeltildi. Eski
+ * (yanlış) veri artık `MusteriGrupPanel`'de doğru adıyla ("Müşteri Grubu")
+ * gösteriliyor.
  *
  * Sol: yatay bar — ciro payı yüzdesi (her bar normalize).
  * Sağ: müşteri sayısı, ciro, ortalama iskonto oranı sayısal kolonları.
@@ -18,16 +24,19 @@ export type EkSahaSegmentRow = {
   ortIskontoOraniPct: number;
 };
 
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function EkSahaPanel({ rows }: { rows: EkSahaSegmentRow[] }) {
+  if (panelHidden("panel.segment.eksaha")) return null;
   const maxCiro = Math.max(1, ...rows.map((r) => r.ciro));
   const toplamMusteri = rows.reduce((a, r) => a + r.musteriSayi, 0);
 
   return (
     <div className="v3-panel seg-panel">
       <div className="seg-head">
-        <div className="seg-title">Müşteri Tipi</div>
+        <div className="seg-title">{panelTitle("panel.segment.eksaha", "Müşteri Tipi")}</div>
         <div className="seg-sub">
-          Ek Saha 8 · {rows.length} tip · {toplamMusteri.toLocaleString("tr-TR")} müşteri
+          Ek Saha 8 (TBLMUSTERIEKSAHA) · {rows.length} tip · {toplamMusteri.toLocaleString("tr-TR")} müşteri
         </div>
       </div>
 

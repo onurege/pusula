@@ -11,6 +11,8 @@ import { formatCompact } from "@/components/komuta/format";
  * KPI: toplam yeni müşteri sayısı + bu müşterilerin son 90g toplam cirosu.
  * Liste: distribütör × yeni müşteri Top 15.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function NewCustomersPanel({
   items,
   totalYeniMusteri,
@@ -20,13 +22,14 @@ export function NewCustomersPanel({
   totalYeniMusteri: number;
   totalYeniCiro: number;
 }) {
+  if (panelHidden("panel.satis.new")) return null;
   const maxYeni = Math.max(1, ...items.map((i) => i.yeniMusteriSayi));
 
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Yeni Müşteri Kazanımı</div>
+          <div className="v3-panel-title">{panelTitle("panel.satis.new", "Yeni Müşteri Kazanımı")}</div>
           <div className="v3-panel-sub">
             Son 90g · ilk faturası bu pencerede kesilmiş müşteriler
           </div>

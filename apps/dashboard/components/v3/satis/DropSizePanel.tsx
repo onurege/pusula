@@ -9,11 +9,21 @@ import { formatCompact } from "@/components/komuta/format";
  * olan distribütörleri filtreliyor (tek müşterilik büyük cirolar listeyi
  * yanıltmasın diye).
  */
-export function DropSizePanel({ rows }: { rows: DropSizeRow[] }) {
+import { panelTitle, panelHidden } from "@/lib/content";
+
+export function DropSizePanel({
+  rows,
+  rangeLabel = "Son 30g",
+}: {
+  rows: DropSizeRow[];
+  /** md21 — seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
+  rangeLabel?: string;
+}) {
+  if (panelHidden("panel.satis.drop")) return null;
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">Drop Size (Nokta Başına Ciro)</div>
+        <div className="v3-panel-title">{panelTitle("panel.satis.drop", "Drop Size (Nokta Başına Ciro)")}</div>
         <p>Yeterli müşteri tabanlı distribütör bulunamadı (≥5 müşteri).</p>
       </div>
     );
@@ -25,9 +35,9 @@ export function DropSizePanel({ rows }: { rows: DropSizeRow[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Drop Size (Nokta Başına Ciro)</div>
+          <div className="v3-panel-title">{panelTitle("panel.satis.drop", "Drop Size (Nokta Başına Ciro)")}</div>
           <div className="v3-panel-sub">
-            Son 30g · ciro / distinct müşteri · Top {rows.length} ·
+            {rangeLabel} · ciro / distinct müşteri · Top {rows.length} ·
             <span className="hint"> en az 5 müşterisi olan distribütörler</span>
           </div>
         </div>

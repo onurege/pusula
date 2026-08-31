@@ -33,11 +33,14 @@ const ETIKET_META: Record<
  *   10-25% → sağlıklı
  *   >25%   → bağımlı
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function IskontoCustomerPanel({
   customers,
 }: {
   customers: CustomerRow[];
 }) {
+  if (panelHidden("panel.iskonto.customer")) return null;
   const premiumCount = customers.filter((c) => c.etiket === "premium").length;
   const bagimliCount = customers.filter((c) => c.etiket === "bagimli").length;
   const toplamIskonto = customers.reduce((a, c) => a + c.iskonto, 0);
@@ -46,7 +49,7 @@ export function IskontoCustomerPanel({
     <div className="cust-panel">
       <div className="cust-head">
         <div>
-          <div className="cust-title">Müşteri ROI · Top 20</div>
+          <div className="cust-title">{panelTitle("panel.iskonto.customer", "Müşteri ROI · Top 20")}</div>
           <div className="cust-sub">
             Son 30g · İskonto tutarı DESC · Toplam ₺
             {formatCompact(toplamIskonto)} iskonto yatırımı

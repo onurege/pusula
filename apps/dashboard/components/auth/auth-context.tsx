@@ -16,7 +16,13 @@ export type AuthUser = {
   username: string;
   displayName: string | null;
   role: UserRole;
+  /** İçerik + Yetkiler ekranına erişebilir mi (grantable admin). */
+  isAdmin?: boolean;
   allowedDistKods: number[];
+  /** Erişilebilen ekran id'leri; null → hepsi. */
+  allowedScreens?: string[] | null;
+  /** Görülebilen şehirler; null → hepsi. */
+  allowedCities?: string[] | null;
 };
 
 type AuthContextType = {
@@ -40,6 +46,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (res.ok && alive) {
           const data = await res.json();
           setUser(data.user ?? null);
+        } else if ((res.status === 401 || res.status === 403) && alive) {
+          // Oturum düşmüş/geçersiz (bayat cookie middleware'in "varlık" kapısını
+          // geçmiş). Bozuk kabuk + çıkış butonsuz durum yerine: cookie'yi temizle
+          // ve login'e dön. /login'deyken yönlendirme yok (sonsuz döngü olmasın).
+          if (!window.location.pathname.startsWith("/login")) {
+            try {
+              await fetch("/api/auth/logout", { method: "POST" });
+            } catch {
+              /* ignore */
+            }
+            window.location.href = "/login";
+            return;
+          }
         }
       } catch {
         /* ignore */

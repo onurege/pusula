@@ -35,16 +35,41 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
   // hâlâ çalışır, sadece select yeni tier'ı yansıtır).
   const tier = params.get("tier") ?? "";
   const minDaysSinceVisit = params.get("minDaysSinceVisit") ?? "";
+  // md11 — üstteki dönem filtresi (30/60/90g). Whitelist dışıysa 30 varsayılan.
+  const activityDaysParam = Number(params.get("activityDays"));
+  const activityDays: 30 | 60 | 90 =
+    activityDaysParam === 60 || activityDaysParam === 90 ? activityDaysParam : 30;
+  // customers zaten bu pencereye göre hesaplanmış `activityCiro` taşıyor
+  // (bkz. packages/core/src/map.ts listMapCustomers) — toplamı burada, ekstra
+  // fetch olmadan çıkarıyoruz.
+  const totalActivityCiro = useMemo(
+    () => customers.reduce((sum, c) => sum + (c.activityCiro ?? c.ciro30 ?? 0), 0),
+    [customers],
+  );
 
   const [q, setQ] = useState("");
   const hits = useMemo(() => {
+    // md9: ünvan + kısa ad yanında müşteri kodu (TXTKOD) ve takip kodu
+    // (TXTERPKOD) üzerinden de eşleşme. Kodlar noktalı/boşluklu olabildiği
+    // için ("120.01.3341") arama terimindeki ayraçları da temizleyip
+    // ikinci bir karşılaştırma yapıyoruz — kullanıcı "1200 13341" yazsa da
+    // bulabilsin.
     const t = q.trim().toLocaleLowerCase("tr");
     if (t.length < 2) return [];
+    const tCompact = t.replace(/[.\s-]/g, "");
     return customers
       .filter((c) => {
         const unvan = c.unvan.toLocaleLowerCase("tr");
         const kisa = (c.kisaAd ?? "").toLocaleLowerCase("tr");
-        return unvan.includes(t) || kisa.includes(t);
+        const musteriKodu = (c.musteriKodu ?? "").toLocaleLowerCase("tr");
+        const takipKodu = (c.takipKodu ?? "").toLocaleLowerCase("tr");
+        if (unvan.includes(t) || kisa.includes(t)) return true;
+        if (musteriKodu.includes(t) || takipKodu.includes(t)) return true;
+        if (tCompact.length >= 2) {
+          if (musteriKodu.replace(/[.\s-]/g, "").includes(tCompact)) return true;
+          if (takipKodu.replace(/[.\s-]/g, "").includes(tCompact)) return true;
+        }
+        return false;
       })
       .slice(0, 10);
   }, [q, customers]);
@@ -74,7 +99,9 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
     );
   }
 
-  const hasFilter = !!sehir || !!distKod || !!salesFilter || !!q || !!tier || !!minDaysSinceVisit;
+  const hasFilter =
+    !!sehir || !!distKod || !!salesFilter || !!q || !!tier || !!minDaysSinceVisit ||
+    activityDays !== 30;
 
   const inputCls =
     "w-full bg-surface border border-border rounded-md px-3 h-9 text-sm shadow-xs " +
@@ -111,7 +138,7 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
             type="text"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Müşteri ünvanı…"
+            placeholder="Ünvan, müşteri kodu veya takip kodu…"
             className={inputCls + " pl-8"}
           />
         </div>
@@ -132,6 +159,13 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
                     {[c.ilce, c.sehir].filter(Boolean).join(" / ")}
                     {c.distributor ? ` · ${c.distributor}` : ""}
                   </div>
+                  {(c.musteriKodu || c.takipKodu) && (
+                    <div className="text-[10px] text-muted-2 truncate mt-0.5 font-mono">
+                      {c.musteriKodu ? `Kod: ${c.musteriKodu}` : ""}
+                      {c.musteriKodu && c.takipKodu ? " · " : ""}
+                      {c.takipKodu ? `Takip: ${c.takipKodu}` : ""}
+                    </div>
+                  )}
                 </button>
               </li>
             ))}
@@ -175,7 +209,7 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Satış aktivitesi (30 gün)</label>
+        <label className={labelCls}>Satış aktivitesi ({activityDays} gün)</label>
         <select
           value={salesFilter}
           onChange={(e) => update({ salesFilter: e.target.value })}
@@ -232,11 +266,19 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
             Yükleniyor…
           </span>
         ) : (
-          <div className="flex items-baseline justify-between">
-            <span className="text-muted">Görüntülenen</span>
-            <span className="text-fg font-semibold tabular-nums">
-              {count.toLocaleString("tr-TR")}
-            </span>
+          <div className="space-y-1">
+            <div className="flex items-baseline justify-between">
+              <span className="text-muted">Görüntülenen</span>
+              <span className="text-fg font-semibold tabular-nums">
+                {count.toLocaleString("tr-TR")}
+              </span>
+            </div>
+            <div className="flex items-baseline justify-between">
+              <span className="text-muted">Ciro (son {activityDays}g)</span>
+              <span className="text-fg font-semibold tabular-nums">
+                {Math.round(totalActivityCiro).toLocaleString("tr-TR")} ₺
+              </span>
+            </div>
           </div>
         )}
       </div>

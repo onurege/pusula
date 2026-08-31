@@ -7,12 +7,22 @@ import { DeltaBadge } from "./DeltaBadge";
  * sıralanmış. Distribütör + bölge etiketi temsilci satırının yanında.
  * Hedef gerçekleşmesi kapsam DIŞI (kullanıcı talebi) — saf performans.
  */
-export function RepLeaderboardPanel({ rows }: { rows: SatisRepRow[] }) {
+import { panelTitle, panelHidden } from "@/lib/content";
+
+export function RepLeaderboardPanel({
+  rows,
+  rangeLabel = "Son 30g",
+}: {
+  rows: SatisRepRow[];
+  /** md21 — seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
+  rangeLabel?: string;
+}) {
+  if (panelHidden("panel.satis.rep")) return null;
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">Satış Temsilcisi Leaderboard</div>
-        <p>Son 30g'de temsilci atamalı fatura bulunamadı.</p>
+        <div className="v3-panel-title">{panelTitle("panel.satis.rep", "Satış Temsilcisi Leaderboard")}</div>
+        <p>{rangeLabel} içinde temsilci atamalı fatura bulunamadı.</p>
       </div>
     );
   }
@@ -21,9 +31,9 @@ export function RepLeaderboardPanel({ rows }: { rows: SatisRepRow[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Satış Temsilcisi Leaderboard</div>
+          <div className="v3-panel-title">{panelTitle("panel.satis.rep", "Satış Temsilcisi Leaderboard")}</div>
           <div className="v3-panel-sub">
-            Son 30g net ciro · Top {rows.length} · vs önceki 30g delta
+            {rangeLabel} net ciro · Top {rows.length} · vs önceki dönem delta
           </div>
         </div>
       </div>
@@ -36,7 +46,7 @@ export function RepLeaderboardPanel({ rows }: { rows: SatisRepRow[] }) {
               <th>Temsilci</th>
               <th>Distribütör</th>
               <th>Bölge</th>
-              <th className="num">Ciro (30g)</th>
+              <th className="num">Ciro</th>
               <th className="num">Müşteri</th>
               <th className="num">Ort. Sepet</th>
               <th className="num">Δ</th>

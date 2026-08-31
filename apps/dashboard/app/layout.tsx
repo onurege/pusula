@@ -5,7 +5,10 @@ import { Navbar } from "@/components/ui/navbar";
 import { WeeklyActionsDrawer } from "@/components/weekly-actions/WeeklyActionsDrawer";
 import { TenantProvider } from "@/components/tenant-provider";
 import { AuthProvider } from "@/components/auth/auth-context";
+import { ScreenGuard } from "@/components/auth/ScreenGuard";
+import { ContentProvider } from "@/components/content-provider";
 import { getTenantConfig } from "@/lib/tenant";
+import { getContentMap } from "@/lib/content";
 
 const inter = Inter({
   subsets: ["latin", "latin-ext"],
@@ -49,6 +52,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // RSC sınırından plain object olarak geçer; client component'ler `useTenant()`
   // ile bu değeri çeker. Her request'te yeniden okunur (process.env stable).
   const tenant = getTenantConfig();
+  const contentMap = getContentMap();
   const themeBootstrap = tenant.ui?.forceLightTheme
     ? THEME_FORCE_LIGHT_SCRIPT
     : THEME_BOOTSTRAP_SCRIPT;
@@ -64,15 +68,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body suppressHydrationWarning>
         <TenantProvider value={tenant}>
-          <AuthProvider>
-            <div className="min-h-dvh">
-              <Navbar />
-              <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
-            </div>
-            {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
-                erişilebilsin diye layout seviyesinde tek seferlik mount. */}
-            <WeeklyActionsDrawer />
-          </AuthProvider>
+          <ContentProvider map={contentMap}>
+            <AuthProvider>
+              <ScreenGuard />
+              <div className="min-h-dvh">
+                <Navbar />
+                <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
+              </div>
+              {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
+                  erişilebilsin diye layout seviyesinde tek seferlik mount. */}
+              <WeeklyActionsDrawer />
+            </AuthProvider>
+          </ContentProvider>
         </TenantProvider>
       </body>
     </html>

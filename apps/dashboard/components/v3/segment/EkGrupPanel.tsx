@@ -16,14 +16,17 @@ export type EkGrupSegmentRow = {
   payPct: number;
 };
 
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function EkGrupPanel({ rows }: { rows: EkGrupSegmentRow[] }) {
+  if (panelHidden("panel.segment.ekgrup")) return null;
   const visible = rows.slice(0, 12);
   const maxCiro = Math.max(1, ...visible.map((r) => r.ciro));
 
   return (
     <div className="v3-panel seg-panel">
       <div className="seg-head">
-        <div className="seg-title">Müşteri Ek Grubu</div>
+        <div className="seg-title">{panelTitle("panel.segment.ekgrup", "Müşteri Ek Grubu")}</div>
         <div className="seg-sub">
           Bayilik formatı · {rows.length} grup
           {rows.length > 12 ? ` · top ${visible.length} gösterimde` : ""}

@@ -1,4 +1,4 @@
-import { getWietnauerAktivasyon } from "@/lib/api";
+import { getWietnauerAktivasyon, getAllowedDistributors, type AllowedDistributor } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { ActiveCustomersPanel } from "@/components/v3/aktivasyon/ActiveCustomersPanel";
@@ -6,10 +6,15 @@ import { SilentCustomersPanel } from "@/components/v3/aktivasyon/SilentCustomers
 import { StrategicSilencePanel } from "@/components/v3/aktivasyon/StrategicSilencePanel";
 import { RiskTierPanel } from "@/components/v3/aktivasyon/RiskTierPanel";
 import { RecoveryPanel } from "@/components/v3/aktivasyon/RecoveryPanel";
+import { AktivasyonDistSelect } from "@/components/v3/aktivasyon/AktivasyonDistSelect";
 import type { AktivasyonSnapshot } from "@/components/v3/aktivasyon/types";
 
 export const metadata = {
   title: "Müşteri Aktivasyon & Risk · V3 · Insider",
+};
+
+type Props = {
+  searchParams: Promise<{ distId?: string }>;
 };
 
 /**
@@ -26,22 +31,44 @@ export const metadata = {
  * mirror (risk tier, recovery targets). Stratejik marka listesi tenant
  * config'ten gelir, SQL'e parametre olarak ilerler.
  */
-export default async function V3AktivasyonRiskPage() {
+export default async function V3AktivasyonRiskPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const sp = await searchParams;
+  const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
+  const distId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+
   let snap: AktivasyonSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerAktivasyon<AktivasyonSnapshot>();
+    snap = await getWietnauerAktivasyon<AktivasyonSnapshot>({ distId });
   } catch (e) {
     err = (e as Error).message;
   }
+
+  // Distribütör dropdown'u ayrı, hataya toleranslı — bu çağrı başarısız olsa
+  // bile (ör. yetki listesi alınamazsa) ana snapshot etkilenmesin. Pattern
+  // ticari-yatırım (iskonto) sayfasıyla aynı.
+  let distributors: AllowedDistributor[] = [];
+  try {
+    distributors = await getAllowedDistributors();
+  } catch {
+    distributors = [];
+  }
+
+  const selectedDist = distId != null ? distributors.find((d) => d.id === distId) ?? null : null;
 
   return (
     <div className="v3-page">
       <V3PageHeader
         eyebrow="Dashboard 06"
         title="Müşteri Aktivasyon & Risk"
-        description={`${tenant.displayName} portföyünde son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Saha ekibi için aksiyon listesi.`}
+        contentKey="page.risk.title"
+        descKey="page.risk.desc"
+        description={
+          selectedDist
+            ? `${selectedDist.ad} — son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Saha ekibi için aksiyon listesi.`
+            : `${tenant.displayName} tüm portföyde son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`
+        }
         dataNote="TBLMSDFATURA · 90/180g pencere · TBLMUSTERIEKSAHA × TBLEKSAHASECENEK segment · map_customers risk_tier_v2"
         generatedAt={snap?.generatedAt}
       />
@@ -53,6 +80,10 @@ export default async function V3AktivasyonRiskPage() {
             VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
           </div>
         </div>
+      )}
+
+      {snap && (
+        <AktivasyonDistSelect distributors={distributors} selectedDistId={distId} />
       )}
 
       {snap && (

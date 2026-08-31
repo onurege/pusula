@@ -8,11 +8,14 @@ import { formatCompact } from "@/components/komuta/format";
  * Trend okuma: son 3 ay'ın ortalaması ile önceki 3 ay arası fark hero
  * etiketinde gösterilir.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] }) {
+  if (panelHidden("panel.satis.avg")) return null;
   if (points.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">Ortalama Sipariş Büyüklüğü Trendi</div>
+        <div className="v3-panel-title">{panelTitle("panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi")}</div>
         <p>Son 12 ayda fatura kaydı bulunamadı.</p>
       </div>
     );
@@ -83,7 +86,7 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Ortalama Sipariş Büyüklüğü Trendi</div>
+          <div className="v3-panel-title">{panelTitle("panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi")}</div>
           <div className="v3-panel-sub">
             Son 12 ay · AVG(net ciro) / fatura
             {trendPct !== null && (

@@ -8,11 +8,14 @@ import type { MarkaPortfolioRow } from "./types";
  * accent rengiyle vurgulanır. Yönetim Kurulu'ndaki BrandContributionPanel'in
  * "fatura" sütunu eklenmiş, daha detaylı sürümü.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function BrandPortfolioPanel({
   rows,
 }: {
   rows: MarkaPortfolioRow[];
 }) {
+  if (panelHidden("panel.marka.portfolio")) return null;
   // Core zaten Top 15 + "Diğer" + dip toplam döndürüyor — burada ekstra slice YOK.
   const dataRows = rows.filter((b) => !b.isOther && !b.isTotal);
   const maxCiro = Math.max(1, ...dataRows.map((b) => b.ciro));
@@ -23,7 +26,7 @@ export function BrandPortfolioPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Marka Portföyü</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.portfolio", "Marka Portföyü")}</div>
           <div className="v3-panel-sub">
             Son 30g · Top {dataRows.length} marka net ciroya göre ·{" "}
             {stratList.length > 0 ? (

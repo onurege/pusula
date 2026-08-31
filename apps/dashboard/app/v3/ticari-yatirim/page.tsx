@@ -1,6 +1,7 @@
-import { getWietnauerIskonto } from "@/lib/api";
+import { getWietnauerIskonto, getAllowedDistributors, type AllowedDistributor } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
+import { IskontoFilterBar } from "@/components/v3/iskonto/IskontoFilterBar";
 import { IskontoHeroPanel } from "@/components/v3/iskonto/IskontoHeroPanel";
 import { IskontoMonthlyTrendPanel } from "@/components/v3/iskonto/IskontoMonthlyTrendPanel";
 import { IskontoBrandPanel } from "@/components/v3/iskonto/IskontoBrandPanel";
@@ -77,26 +78,76 @@ type IskontoSnapshot = {
   }>;
 };
 
-export default async function V3TicariYatirimPage() {
+// `from`/`to` yalnızca YYYY-MM-DD kabul edilir — biçim bozuksa aralık yok
+// sayılır (backend'in `normalizeDateRange`'iyle tutarlı, kısmi aralık kabul
+// edilmez).
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function parseDateParam(v: string | undefined): string | null {
+  const s = (v ?? "").trim();
+  return ISO_DATE_RE.test(s) ? s : null;
+}
+
+type Props = {
+  searchParams: Promise<{ distId?: string; from?: string; to?: string }>;
+};
+
+export default async function V3TicariYatirimPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const sp = await searchParams;
+
+  const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
+  const distId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+
+  const fromParsed = parseDateParam(sp.from);
+  const toParsed = parseDateParam(sp.to);
+  // Kısmi aralık (yalnız biri) yok sayılır — ikisi de olmalı.
+  const dateFrom = fromParsed && toParsed ? fromParsed : null;
+  const dateTo = fromParsed && toParsed ? toParsed : null;
+
   let snap: IskontoSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerIskonto<IskontoSnapshot>();
+    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo });
   } catch (e) {
     err = (e as Error).message;
   }
+
+  // Distribütör dropdown'u ayrı, hataya toleranslı — bu çağrı başarısız olsa
+  // bile (ör. yetki listesi alınamazsa) ana snapshot etkilenmesin.
+  let distributors: AllowedDistributor[] = [];
+  try {
+    distributors = await getAllowedDistributors();
+  } catch {
+    distributors = [];
+  }
+
+  const rangeLabel = dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : null;
 
   return (
     <div className="v3-page">
       <V3PageHeader
         eyebrow="Dashboard 07"
         title="Ticari Yatırım & İskonto"
-        description={`${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
-          "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
-          "Sağlıklı iskonto = küçük yatırım, büyük büyüme."}
+        contentKey="page.iskonto.title"
+        descKey="page.iskonto.desc"
+        description={
+          rangeLabel
+            ? `${tenant.displayName} için ${rangeLabel} aralığında iskonto yatırımı: ` +
+              "brüt → iskonto → net akışı, marka & müşteri & segment ROI'leri."
+            : `${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
+              "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
+              "Sağlıklı iskonto = küçük yatırım, büyük büyüme."
+        }
         dataNote="TBLMSDFATURA · DBLISKONTOTUTARI + TBLMSDBELGEDETAY · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
+      />
+
+      <IskontoFilterBar
+        distributors={distributors}
+        selectedDistId={distId}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
       />
 
       {err && (

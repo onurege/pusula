@@ -34,6 +34,8 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }
 
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function SegmentBrandCrossPanel({
   data,
 }: {
@@ -43,6 +45,7 @@ export function SegmentBrandCrossPanel({
     cells: SegmentBrandCell[];
   };
 }) {
+  if (panelHidden("panel.segment.cross")) return null;
   const { tipler, markalar, cells } = data;
   const hasData = tipler.length > 0 && markalar.length > 0;
 
@@ -69,7 +72,7 @@ export function SegmentBrandCrossPanel({
   return (
     <div className="v3-panel cross-panel">
       <div className="cross-head">
-        <div className="cross-title">Müşteri Tipi × Marka</div>
+        <div className="cross-title">{panelTitle("panel.segment.cross", "Müşteri Tipi × Marka")}</div>
         <div className="cross-sub">
           Son 30g ciro payı (%) · {tipler.length}×{markalar.length} grid · stratejik markalar
           {" "}<span className="strat-dot" /> noktalı

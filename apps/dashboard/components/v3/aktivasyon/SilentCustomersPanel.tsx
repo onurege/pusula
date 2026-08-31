@@ -8,12 +8,15 @@ import type { SilentCustomer } from "./types";
  * dönem cirosuna göre. Saha aksiyonu için her satırda son alındığı marka
  * + sessizleştiği gün sayısı + bölge bilgisi.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
+  if (panelHidden("panel.risk.silent")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Sessizleşen Müşteriler</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.silent", "Sessizleşen Müşteriler")}</div>
           <div className="v3-panel-sub">
             Önceki 90g aktif ama son 90g sıfır · {items.length} müşteri
           </div>

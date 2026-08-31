@@ -2,7 +2,6 @@
 
 import { revalidateTag } from "next/cache";
 import { cookies } from "next/headers";
-import { triggerMapSync } from "@/lib/api";
 
 const API_URL = process.env.ENROUTE_API_URL ?? "http://localhost:8080";
 
@@ -34,22 +33,16 @@ export async function refreshAllData(): Promise<
   { ok: true } | { ok: false; error: string }
 > {
   try {
-    // 1. SQLite mirror sync — TBLMUSTERI'yi MSSQL'den çek (~30s, ağır).
-    //    Hono tarafında 5 dk throttle var; rapid tıklamada NOOP döner.
-    await triggerMapSync();
-
-    // 2. Komuta snapshot — refresh=1 ile Hono'ya zorla yeniden hesaplat.
-    //    Bu Gemini brief'i de yeniden üretir; sonuç SQLite withCache'e yazılır.
-    //    fetch burada no-store: Next.js Data Cache'e girmesin (zaten next adımda
-    //    invalidate edilecek; ayrıca refresh=1 path'i lib/api.ts'te de no-store).
-    // Auth cookie'sini Bearer olarak ilet — komuta dist scope kullanıcıya göre
-    // hesaplansın (token'sız istek guard'a/yanlış scope'a düşer).
+    // TEK sunucu-taraflı tam yenileme: /api/refresh-all → now-anchor'ı yeniden
+    // çözer + komuta (tl/9le) + TÜM V3 snapshot'ları + harita aynasını AYNI taze
+    // anchor'la ısıtır. Eskiden yalnız komuta tazeleniyordu → cockpit taze,
+    // yönetim/marka/... bayat kalıp farklı ciro gösteriyordu. Auth cookie'si
+    // Bearer olarak iletilir (session guard + merkez ısıtma).
     const token = (await cookies()).get("enroute_auth")?.value;
-    await fetch(`${API_URL}/api/komuta?refresh=1`, {
+    await fetch(`${API_URL}/api/refresh-all`, {
+      method: "POST",
       cache: "no-store",
       headers: token ? { Authorization: `Bearer ${token}` } : {},
-    }).catch(() => {
-      /* network sorunu olsa bile mirror sync zaten yapılmış olur */
     });
 
     // 3. Next.js Data Cache invalidate — bir sonraki page render'da fetch'ler
@@ -65,6 +58,7 @@ export async function refreshAllData(): Promise<
     //    bilerek tercih etti (eskinin 60-90s'ine kıyasla hâlâ büyük kazanç).
     revalidateTag("map", { expire: 0 });
     revalidateTag("komuta", { expire: 0 });
+    revalidateTag("wietnauer", { expire: 0 }); // tüm V3 ekranları (yönetim/marka/...)
     revalidateTag("reports", { expire: 0 });
     revalidateTag("radar", { expire: 0 });
 

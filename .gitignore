@@ -50,3 +50,4 @@ scratchpad/
 # repoda bulunmamalı (yerelde saklanır).
 reports/
 tmp/
+apps/dashboard/.content-overrides/

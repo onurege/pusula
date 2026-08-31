@@ -33,6 +33,7 @@ import { sqlNow } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { volumeUnitExpr } from "./volume.js";
+import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-satis";
 // v5: cache-key scope fragmentation düzeltmesi (VYK-01) — dist filtresi
@@ -40,7 +41,71 @@ const CACHE_DOMAIN = "wietnauer-satis";
 // altında çekilir; dist scope runtime'da JS'te satır bazlı filtrelenir. Eski
 // `v4-*-d<n>` scope'lu cache satırları bu versiyon artışıyla geçersiz olur.
 // v6: md26 — distLeaderboard'a hacim (70cl eşdeğer) eklendi; row shape değişti.
+// md27: distLeaderboard'a `satisHizi` (ciro / aktif müşteri) eklendi — SQL/cache
+// şemasına dokunulmadı (mevcut ciro+musteriSayi'dan post-cache türetilir), bu
+// yüzden CACHE_VERSION artışı gerekmedi.
 const CACHE_VERSION = "v6";
+
+// ---------- md21: özel tarih aralığı ----------------------------------------
+//
+// `?from=YYYY-MM-DD&to=YYYY-MM-DD` server.ts'te `parseDateRange` ile zaten
+// regex doğrulanıp geçiriliyor — ama SQL'e interpolate edilecek herhangi bir
+// string'e güvenmemek (defense in depth) için burada TEKRAR doğrulanır.
+// Yalnızca bu formatta değer SQL literaline gömülür.
+const DATE_ONLY_RX = /^\d{4}-\d{2}-\d{2}$/;
+
+function normDateOnly(v: string | null | undefined): string | null {
+  const s = (v ?? "").trim();
+  return DATE_ONLY_RX.test(s) ? s : null;
+}
+
+type DateWindow = {
+  /** current pencere alt sınır (dahil) SQL ifadesi */
+  curLower: string;
+  /** current pencere üst sınır (HARİÇ) SQL ifadesi */
+  curUpper: string;
+  /** karşılaştırma (prev) pencere alt sınır (dahil) SQL ifadesi */
+  prevLower: string;
+  /** karşılaştırma (prev) pencere üst sınır (HARİÇ) SQL ifadesi */
+  prevUpper: string;
+};
+
+/**
+ * Seçili tarih aralığına göre current + kaydırılmış prev (aynı gün sayısı
+ * kadar geri) pencere SQL ifadelerini üretir.
+ *
+ * dateFrom/dateTo ikisi de geçerli YYYY-MM-DD DEĞİLSE (biri eksik/geçersiz)
+ * `fallbackDays` ile mevcut varsayılan davranış (bugüne bağıl, sqlNow
+ * tabanlı `DATEADD(day,-N,sqlNow())..DATEADD(day,1,sqlNow())`) AYNEN korunur
+ * — regresyon yok. from > to gibi geçersiz aralıklarda da aynı fallback'e
+ * düşülür.
+ */
+function resolveWindow(
+  dateFrom: string | null,
+  dateTo: string | null,
+  fallbackDays: number,
+): DateWindow {
+  if (dateFrom && dateTo) {
+    const fromMs = Date.parse(`${dateFrom}T00:00:00Z`);
+    const toMs = Date.parse(`${dateTo}T00:00:00Z`);
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && fromMs <= toMs) {
+      // Kapsayıcı gün sayısı (from..to dahil) — prev pencere bu kadar geri kayar.
+      const spanDays = Math.round((toMs - fromMs) / 86400000) + 1;
+      return {
+        curLower: `CAST('${dateFrom}' AS DATE)`,
+        curUpper: `DATEADD(day, 1, CAST('${dateTo}' AS DATE))`,
+        prevLower: `DATEADD(day, -${spanDays}, CAST('${dateFrom}' AS DATE))`,
+        prevUpper: `CAST('${dateFrom}' AS DATE)`,
+      };
+    }
+  }
+  return {
+    curLower: `DATEADD(day, -${fallbackDays}, ${sqlNow()})`,
+    curUpper: `DATEADD(day, 1, ${sqlNow()})`,
+    prevLower: `DATEADD(day, -${fallbackDays * 2}, ${sqlNow()})`,
+    prevUpper: `DATEADD(day, -${fallbackDays}, ${sqlNow()})`,
+  };
+}
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -62,6 +127,13 @@ export type SatisDistRow = {
   prevCiro: number;
   /** (ciro - prevCiro) / prevCiro * 100 */
   deltaPct: number;
+  /**
+   * md27: Nokta başına satış hızı = ciro / aktif nokta (aktif müşteri).
+   * `musteriSayi` zaten distinct aktif müşteri sayısı — SQL/cache'e
+   * dokunmadan, mevcut cache'lenmiş satırdan runtime'da türetilir (bkz.
+   * `getWietnauerSatisSnapshot`). musteriSayi=0 ise 0 (bölme sıfır koruması).
+   */
+  satisHizi: number;
   rank: number;
 };
 
@@ -138,9 +210,14 @@ export type WietnauerSatisSnapshot = {
  * çekilir (zaten dist_id GROUP BY anahtarı — cardinality ~31 dist, ucuz).
  * `rank` burada atanmaz; scope uygulandıktan sonra çağıran taraf re-rank eder.
  */
-async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">[]> {
+async function fetchDistributorLeaderboard(
+  cities: string[] | null | undefined,
+  win: DateWindow,
+): Promise<Omit<SatisDistRow, "rank" | "satisHizi">[]> {
   // Kapalı pencere pattern x2 (current/prev) — UNION yerine iki CTE; SQL Server
   // her ikisini de aynı index üzerinden tarayabilir, planner birleştirir.
+  // md21: pencere sınırları artık `win` (seçili tarih aralığı VEYA varsayılan
+  // son 30g) üzerinden parametrik — bkz. `resolveWindow`.
   const sql = `
     WITH cur AS (
       SELECT f.LNGDISTKOD AS dist_id,
@@ -149,8 +226,8 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
              COUNT(DISTINCT f.LNGMUSTERIKOD) AS musteri
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}${cityFactClause(cities)}
       GROUP BY f.LNGDISTKOD
     ),
     prev AS (
@@ -158,11 +235,11 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
              SUM(f.DBLNETTUTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${win.prevLower}
+        AND f.TRHISLEMTARIHI <  ${win.prevUpper}${cityFactClause(cities)}
       GROUP BY f.LNGDISTKOD
     ),
-    -- md26: dist bazında son 30g hacim (70cl eşdeğer) — fatura DETAY seviyesi.
+    -- md26: dist bazında seçili pencerede hacim (70cl eşdeğer) — fatura DETAY seviyesi.
     hacimq AS (
       SELECT f.LNGDISTKOD AS dist_id,
              ISNULL(SUM(${volumeUnitExpr("d2", "u", "ue")}), 0) AS hacim
@@ -175,8 +252,8 @@ async function fetchDistributorLeaderboard(): Promise<Omit<SatisDistRow, "rank">
       LEFT JOIN dbo.TBLURUNEKSAHA ue
         ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}${cityFactClause(cities)}
       GROUP BY f.LNGDISTKOD
     )
     SELECT
@@ -228,7 +305,11 @@ type SatisRepRawRow = Omit<SatisRepRow, "rank"> & { distId: number | null };
  * JS tarafı scope uyguladıktan SONRA Top 20'ye keser (bkz. public API).
  * dist_id çıktıya eklendi (rep'in bağlı olduğu distribütör — TBLPERSONEL.LNGDISTKOD).
  */
-async function fetchSalesRepLeaderboard(): Promise<SatisRepRawRow[]> {
+async function fetchSalesRepLeaderboard(
+  cities: string[] | null | undefined,
+  win: DateWindow,
+): Promise<SatisRepRawRow[]> {
+  // md21: pencere sınırları `win` üzerinden parametrik (bkz. `resolveWindow`).
   const sql = `
     WITH cur AS (
       SELECT f.LNGSTKOD AS rep_id,
@@ -237,9 +318,9 @@ async function fetchSalesRepLeaderboard(): Promise<SatisRepRawRow[]> {
              COUNT(DISTINCT f.LNGMUSTERIKOD) AS musteri
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-        AND f.LNGSTKOD IS NOT NULL
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}
+        AND f.LNGSTKOD IS NOT NULL${cityFactClause(cities)}
       GROUP BY f.LNGSTKOD
     ),
     prev AS (
@@ -247,9 +328,9 @@ async function fetchSalesRepLeaderboard(): Promise<SatisRepRawRow[]> {
              SUM(f.DBLNETTUTAR) AS ciro
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
-        AND f.LNGSTKOD IS NOT NULL
+        AND f.TRHISLEMTARIHI >= ${win.prevLower}
+        AND f.TRHISLEMTARIHI <  ${win.prevUpper}
+        AND f.LNGSTKOD IS NOT NULL${cityFactClause(cities)}
       GROUP BY f.LNGSTKOD
     )
     SELECT
@@ -301,7 +382,11 @@ async function fetchSalesRepLeaderboard(): Promise<SatisRepRawRow[]> {
  * Scope-free: `TOP 15` kaldırıldı (dist zaten group key, ~31 satır max) —
  * JS tarafı scope + Top 15'i public API'de uygular.
  */
-async function fetchDropSizeByDist(): Promise<Omit<DropSizeRow, "rank">[]> {
+async function fetchDropSizeByDist(
+  cities: string[] | null | undefined,
+  win: DateWindow,
+): Promise<Omit<DropSizeRow, "rank">[]> {
+  // md21: pencere sınırları `win` üzerinden parametrik (bkz. `resolveWindow`).
   const sql = `
     WITH stats AS (
       SELECT f.LNGDISTKOD AS dist_id,
@@ -309,8 +394,8 @@ async function fetchDropSizeByDist(): Promise<Omit<DropSizeRow, "rank">[]> {
              COUNT(DISTINCT f.LNGMUSTERIKOD) AS musteri
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}${cityFactClause(cities)}
       GROUP BY f.LNGDISTKOD
       HAVING COUNT(DISTINCT f.LNGMUSTERIKOD) >= 5
     )
@@ -349,7 +434,7 @@ async function fetchDropSizeByDist(): Promise<Omit<DropSizeRow, "rank">[]> {
  * hesaplaması scope uygulandıktan SONRA public API'de yapılır (aksi halde
  * dist kullanıcı için toplamlar merkez rakamlarını sızdırır).
  */
-async function fetchNewCustomersAcquisition(): Promise<NewCustomerRow[]> {
+async function fetchNewCustomersAcquisition(cities?: string[] | null): Promise<NewCustomerRow[]> {
   // Strateji:
   //   1) "first_invoice" CTE — her müşterinin TÜM zaman ilk fatura tarihi +
   //      o faturadaki distribütör (ROW_NUMBER ile en eski seçilir).
@@ -366,7 +451,7 @@ async function fetchNewCustomersAcquisition(): Promise<NewCustomerRow[]> {
           ORDER BY f.TRHISLEMTARIHI ASC, f.LNGBELGEKOD ASC
         ) AS rn
       FROM dbo.TBLMSDFATURA f
-      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0${cityFactClause(cities)}
     ),
     yeni_musteri AS (
       SELECT musteri_id, dist_id, first_date
@@ -382,7 +467,7 @@ async function fetchNewCustomersAcquisition(): Promise<NewCustomerRow[]> {
       INNER JOIN yeni_musteri ym ON ym.musteri_id = f.LNGMUSTERIKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
       GROUP BY f.LNGMUSTERIKOD
     )
     SELECT
@@ -423,7 +508,7 @@ type AvgOrderTrendRawRow = {
  * ki JS tarafı scope filtresi sonrası ay bazında re-aggregate (SUM/AVG)
  * yapabilsin. Aylar sqlNow()'in bulunduğu ayın sonundan geriye doğru 12.
  */
-async function fetchAvgOrderTrend(): Promise<AvgOrderTrendRawRow[]> {
+async function fetchAvgOrderTrend(cities?: string[] | null): Promise<AvgOrderTrendRawRow[]> {
   const sql = `
     WITH t AS (
       SELECT
@@ -433,7 +518,7 @@ async function fetchAvgOrderTrend(): Promise<AvgOrderTrendRawRow[]> {
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(month, -12, DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1))
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     )
     SELECT
       dist_id,
@@ -489,7 +574,7 @@ function aggregateAvgOrderTrend(rows: AvgOrderTrendRawRow[]): AvgOrderTrendPoint
 // ---------- Public API ------------------------------------------------------
 
 type RawSatisBundle = {
-  distLeaderboard: Omit<SatisDistRow, "rank">[];
+  distLeaderboard: Omit<SatisDistRow, "rank" | "satisHizi">[];
   repLeaderboard: SatisRepRawRow[];
   dropSize: Omit<DropSizeRow, "rank">[];
   newCustomers: NewCustomerRow[];
@@ -519,6 +604,20 @@ export async function getWietnauerSatisSnapshot(
     strategicBrands?: string[];
     allowedDistKods?: number[] | null;
     distId?: number | null;
+    /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
+     * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
+    allowedCities?: string[] | null;
+    /**
+     * md21 — özel tarih aralığı (YYYY-MM-DD). Server tarafında
+     * `parseDateRange` zaten regex doğruladı; burada da (defense in depth)
+     * tekrar doğrulanır. İkisi de verilmezse/geçersizse distLeaderboard,
+     * repLeaderboard ve dropSize fetcher'ları mevcut varsayılan pencereyi
+     * (son 30g / önceki 30g karşılaştırması) kullanmaya devam eder —
+     * newCustomers (90g ilk fatura) ve avgOrderTrend (12 ay) bu aralıktan
+     * bağımsız, kendi sabit pencerelerini korur (farklı KPI semantiği).
+     */
+    dateFrom?: string | null;
+    dateTo?: string | null;
   } = {},
 ): Promise<WietnauerSatisSnapshot> {
   // strategicBrands bu snapshot için kullanılmıyor; imza uyumu için kabul
@@ -526,18 +625,25 @@ export async function getWietnauerSatisSnapshot(
   void getTenantConfig;
   void options.strategicBrands;
 
-  const cacheKey = `${CACHE_VERSION}-30g-all`;
+  const cities = options.allowedCities ?? null;
+  const dateFrom = normDateOnly(options.dateFrom);
+  const dateTo = normDateOnly(options.dateTo);
+  const win = resolveWindow(dateFrom, dateTo, 30);
+  // Aralık verilmemişken cache key AYNEN korunur (regresyon yok); verildiğinde
+  // ayrı bir satırda cache'lenir ki farklı aralıklar birbirini ezmesin.
+  const dateTag = dateFrom || dateTo ? `-${dateFrom ?? "d"}_${dateTo ?? "d"}` : "";
+  const cacheKey = `${CACHE_VERSION}-30g-${cityCacheTag(cities)}${dateTag}`;
   const result = await withCache<RawSatisBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       const [distLeaderboard, repLeaderboard, dropSize, newCustomers, avgOrderTrendRaw] =
         await Promise.all([
-          fetchDistributorLeaderboard(),
-          fetchSalesRepLeaderboard(),
-          fetchDropSizeByDist(),
-          fetchNewCustomersAcquisition(),
-          fetchAvgOrderTrend(),
+          fetchDistributorLeaderboard(cities, win),
+          fetchSalesRepLeaderboard(cities, win),
+          fetchDropSizeByDist(cities, win),
+          fetchNewCustomersAcquisition(cities),
+          fetchAvgOrderTrend(cities),
         ]);
       return {
         distLeaderboard,
@@ -569,7 +675,15 @@ export async function getWietnauerSatisSnapshot(
     return distId != null && effectiveDistKods.includes(distId);
   };
 
-  const scopedDistLeaderboard = rawDistLeaderboard.filter((r) => inScope(r.id));
+  // md27: satisHizi = ciro / aktif nokta (musteriSayi) — mevcut cache'lenmiş
+  // ciro/musteriSayi'dan türetilir, SQL/cache şemasına dokunulmaz. Bölme
+  // sıfır koruması: musteriSayi=0 ise 0.
+  const scopedDistLeaderboard = rawDistLeaderboard
+    .filter((r) => inScope(r.id))
+    .map((r) => ({
+      ...r,
+      satisHizi: r.musteriSayi > 0 ? r.ciro / r.musteriSayi : 0,
+    }));
   const scopedRepLeaderboard = rawRepLeaderboard.filter((r) => inScope(r.distId));
   const scopedDropSize = rawDropSize.filter((r) => inScope(r.id));
   const scopedNewCustomers = rawNewCustomers.filter((r) => inScope(r.distId));

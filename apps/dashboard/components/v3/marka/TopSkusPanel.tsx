@@ -7,7 +7,10 @@ import type { TopSkuRow } from "./types";
  * TBLURUN seviyesinde son 30g ciro şampiyonları. Marka chip ile birlikte
  * gösterilir; stratejik marka SKU'ları accent vurgusu alır.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
+  if (panelHidden("panel.marka.topsku")) return null;
   // "Diğer" ve dip toplam satırları pay yüzdesi toplamına dahil edilmez.
   const skuRows = rows.filter((r) => !r.isOther && !r.isTotal);
   const top10Pay = skuRows.reduce((a, r) => a + r.payPct, 0);
@@ -16,7 +19,7 @@ export function TopSkusPanel({ rows }: { rows: TopSkuRow[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Top 10 SKU</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.topsku", "Top 10 SKU")}</div>
           <div className="v3-panel-sub">
             Son 30g net ciro · İlk 10 ürün portföyün
             <strong> %{top10Pay.toFixed(1)}</strong>'ini taşıyor

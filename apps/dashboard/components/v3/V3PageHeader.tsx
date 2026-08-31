@@ -1,7 +1,12 @@
+import { getContentMap, t } from "@/lib/content";
+
 /**
  * V3 sayfaları için ortak header bandı. Eyebrow + büyük başlık + alt-açıklama
  * + sağ tarafa kısa data-source info. Tüm 7 dashboard sayfasında aynı
  * yerleşim.
+ *
+ * `contentKey` / `descKey` verilirse başlık/açıklama admin panelinden düzenlenen
+ * override'la çözülür (yoksa gelen title/description varsayılan kalır).
  */
 export function V3PageHeader({
   eyebrow,
@@ -9,13 +14,20 @@ export function V3PageHeader({
   description,
   dataNote,
   generatedAt,
+  contentKey,
+  descKey,
 }: {
   eyebrow: string;
   title: string;
   description: string;
   dataNote?: string;
   generatedAt?: string;
+  contentKey?: string;
+  descKey?: string;
 }) {
+  const content = getContentMap();
+  const resolvedTitle = contentKey ? t(content, contentKey, title) : title;
+  const resolvedDescription = descKey ? t(content, descKey, description) : description;
   const ts = generatedAt
     ? new Date(generatedAt).toLocaleString("tr-TR", {
         day: "2-digit",
@@ -31,8 +43,8 @@ export function V3PageHeader({
           <span className="v3-eyebrow-dot" />
           {eyebrow}
         </div>
-        <h1 className="v3-title">{title}</h1>
-        <p className="v3-desc">{description}</p>
+        <h1 className="v3-title">{resolvedTitle}</h1>
+        <p className="v3-desc">{resolvedDescription}</p>
       </div>
       {(dataNote || ts) && (
         <aside className="v3-meta">

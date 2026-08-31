@@ -1,4 +1,5 @@
 import { getWietnauerSaha } from "@/lib/api";
+import { cs, panelHidden } from "@/lib/content";
 import type { WietnauerSahaSnapshot } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
@@ -35,6 +36,8 @@ export default async function V3SahaOperasyonPage() {
       <V3PageHeader
         eyebrow="Dashboard 05"
         title="Distribütör & Saha Operasyon"
+        contentKey="page.saha.title"
+        descKey="page.saha.desc"
         description={`${tenant.displayName} sahasının günlük ziyaret temposu, müşteri kapsama oranı, temsilci performansı ve sipariş dönüşüm verimliliği — operasyonel ekiplerin tek görünümü.`}
         dataNote="TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · 30g pencere"
         generatedAt={snap?.generatedAt}
@@ -53,23 +56,30 @@ export default async function V3SahaOperasyonPage() {
         <>
           {/* Üst şerit: 7-günlük KPI özet */}
           <div className="v3-kpi-grid">
+            {!panelHidden("kpi.saha.ziyaret") && (
             <KpiTile
-              label="Son 7g Ziyaret"
+              label={cs("kpi.saha.ziyaret", "Son 7g Ziyaret")}
               value={formatCompact(snap.kpi.son7gZiyaret)}
               sub="toplam (rut içi + rut dışı)"
             />
+          )}
+            {!panelHidden("kpi.saha.unique") && (
             <KpiTile
-              label="Unique Müşteri"
+              label={cs("kpi.saha.unique", "Unique Müşteri")}
               value={snap.kpi.son7gUniqueMusteri.toLocaleString("tr-TR")}
               sub="son 7g'de en az 1 ziyaret"
             />
+          )}
+            {!panelHidden("kpi.saha.aktiftemsilci") && (
             <KpiTile
-              label="Aktif Temsilci"
+              label={cs("kpi.saha.aktiftemsilci", "Aktif Temsilci")}
               value={snap.kpi.son7gAktifTemsilci.toLocaleString("tr-TR")}
               sub="son 7g'de en az 1 ziyaret yapan"
             />
+          )}
+            {!panelHidden("kpi.saha.donusum") && (
             <KpiTile
-              label="Dönüşüm Oranı"
+              label={cs("kpi.saha.donusum", "Dönüşüm Oranı")}
               value={`%${snap.kpi.son7gDonusumPct.toFixed(1)}`}
               sub="son 7g · sipariş / ziyaret"
               tone={
@@ -80,6 +90,7 @@ export default async function V3SahaOperasyonPage() {
                     : "neutral"
               }
             />
+          )}
           </div>
 
           {/* Asıl içerik: 2 sütun */}

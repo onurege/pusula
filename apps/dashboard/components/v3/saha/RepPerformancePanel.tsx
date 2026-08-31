@@ -18,12 +18,15 @@ export type RepRow = {
  * Temsilci performans paneli — son 30g Top 20.
  * Sıralama: toplam ziyaret DESC. Yan-metrikler: dönüşüm %, rut dışı %.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function RepPerformancePanel({ rows }: { rows: RepRow[] }) {
+  if (panelHidden("panel.saha.rep")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Temsilci Performansı</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.rep", "Temsilci Performansı")}</div>
           <div className="v3-panel-sub">
             Son 30g · Top {rows.length} temsilci · ziyaret + dönüşüm + rut dışı
             payı

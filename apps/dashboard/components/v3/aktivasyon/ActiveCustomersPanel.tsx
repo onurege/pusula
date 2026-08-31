@@ -8,7 +8,10 @@ import type { ActiveCustomers90d } from "./types";
  * dağılımı yatay bar. Segment etiketleri TBLEKSAHASECENEK üzerinden
  * (Perakende / On Trade / Otel / Tali Bayi / Tanımsız) gelir.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
+  if (panelHidden("panel.risk.active")) return null;
   const change = data.degisimPct;
   const changeTone =
     change > 2 ? "good" : change < -2 ? "bad" : "neutral";
@@ -26,7 +29,7 @@ export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">90 Gün Aktif Müşteri</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.active", "90 Gün Aktif Müşteri")}</div>
           <div className="v3-panel-sub">
             Son 90 gün içinde en az 1 fatura kesilmiş distinct müşteri ·
             önceki 90 güne göre {""}

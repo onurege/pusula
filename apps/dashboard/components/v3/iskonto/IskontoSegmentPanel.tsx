@@ -19,7 +19,10 @@ type SegmentRow = {
  *
  * Yatay bar — bar uzunluğu iskonto oranı %, renk tier.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function IskontoSegmentPanel({ segments }: { segments: SegmentRow[] }) {
+  if (panelHidden("panel.iskonto.segment")) return null;
   // Bar referansı: maksimum oran (en az 25%) — görsel kıyas için
   const maxOran = Math.max(25, ...segments.map((s) => s.iskontoOraniPct));
 
@@ -27,7 +30,7 @@ export function IskontoSegmentPanel({ segments }: { segments: SegmentRow[] }) {
     <div className="seg-panel">
       <div className="seg-head">
         <div>
-          <div className="seg-title">Segment Kırılımı</div>
+          <div className="seg-title">{panelTitle("panel.iskonto.segment", "Segment Kırılımı")}</div>
           <div className="seg-sub">
             Son 30g · Müşteri tipi × ortalama iskonto oranı (TBLMUSTERIEKSAHA
             saha 8)

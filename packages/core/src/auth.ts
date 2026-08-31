@@ -21,6 +21,7 @@ import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { getUserPerm } from "./user-perms.js";
 
 const DEV_JWT_SECRET_FALLBACK = "enroute-pusula-secret-change-in-production";
 const MIN_JWT_SECRET_LENGTH = 16;
@@ -81,8 +82,8 @@ export type UserSession = {
  *                                   sınırlı, client ne gönderirse göndersin
  */
 export type TenantScope =
-  | { type: "merkez"; distKods: number[] | null }
-  | { type: "dist"; distKods: number[] };
+  | { type: "merkez"; distKods: number[] | null; cities: string[] | null }
+  | { type: "dist"; distKods: number[]; cities: string[] | null };
 
 // ---------------------------------------------------------------------------
 // Şifre doğrulama (AES-128-ECB pluggable + demo fallback)
@@ -255,18 +256,11 @@ export async function authenticateUser(
     .map((r) => Number(r.LNGDISTKOD))
     .filter((n) => Number.isInteger(n));
 
-  // Toplam aktif dist — merkez/dist ayrımı için.
-  const totalRes = await runReadOnly(
-    `SELECT COUNT(*) AS c FROM dbo.TBLDIST WHERE BYTDURUM = 0`,
-    { limit: 1 },
-  );
-  const totalDists = Number(totalRes.rows[0]?.c ?? 0);
-
+  // Merkez/dist ayrımı DOĞRUDAN kullanıcı tablosundan: TBLKULLANICI.BYTTIP=0
+  // → merkez kullanıcı, aksi halde dist. (Erişim politikası: şu an yalnızca
+  // merkez giriş yapabilir — bkz. server.ts login/scope kapıları.)
   const byttip = Number(user.BYTTIP ?? 0);
-  const role: UserRole =
-    byttip === 0 && totalDists > 0 && allowedDistKods.length >= totalDists * 0.8
-      ? "merkez"
-      : "dist";
+  const role: UserRole = byttip === 0 ? "merkez" : "dist";
 
   return {
     userId,
@@ -325,25 +319,39 @@ export function resolveTenantScope(
 ): TenantScope {
   if (!session) throw new Error("UNAUTHENTICATED");
 
+  // Demo tenant (fmcg-demo): Panorama/MSSQL yok, tek statik merkez kullanıcı
+  // `allowedDistKods=[]` ile gelir. Panorama-scoping BURADA geçerli değildir —
+  // demo kullanıcısı tüm sentetik veriyi görür (filtresiz merkez).
+  if (getTenantConfig().demoData === true) {
+    return { type: "merkez", distKods: null, cities: null };
+  }
+
   const sel =
     selectedDistKod != null && Number.isInteger(selectedDistKod) ? selectedDistKod : null;
 
-  if (session.role === "merkez") {
-    // Merkez: tam görünürlük; ama izinli bir dist'e drill-down yapabilir.
-    if (sel != null && session.allowedDistKods.includes(sel)) {
-      return { type: "merkez", distKods: [sel] };
-    }
-    return { type: "merkez", distKods: null };
-  }
+  // Perms store — admin-yönetimli yetki override'ı (null → kısıt yok).
+  // Sunucu-otoriter; client bunu değiştiremez.
+  const perm = getUserPerm(session.username);
+  const cities = perm.cities;
+  const permDists =
+    perm.dists != null ? perm.dists.filter((n) => Number.isInteger(n)) : null;
 
-  // Dist: sunucu otoritesi. Client'tan gelen distKod YALNIZCA kendi izinli
-  // dist'lerinden biriyse kabul edilir; aksi halde tüm izinli listeye düşer.
-  // Asla genişletmez → başka dist'in verisi görülemez.
-  const allowed = session.allowedDistKods.filter((n) => Number.isInteger(n));
-  if (sel != null && allowed.includes(sel)) {
-    return { type: "dist", distKods: [sel] };
+  // VERİ KAPSAMI = PANORAMA yetkisi (allowedDistKods) — HERKES İÇİN, merkez
+  // dahil. Panorama tek otorite: BYTTIP=0 (merkez) sadece "giriş yapabilir"
+  // demek; ne göreceği Panorama'daki distribütör yetkisiyle sınırlıdır. Admin
+  // override'ı (perm.dists) bu kümeyi yalnızca DARALTIR (asla genişletemez).
+  // `type` login rolünü yansıtır (merkez-only güç işlemleri bununla gate'lenir),
+  // ama distKods artık merkez için de Panorama kümesidir (null=filtresiz DEĞİL).
+  let allowed = session.allowedDistKods.filter((n) => Number.isInteger(n));
+  if (permDists != null) {
+    const permSet = new Set(permDists);
+    allowed = allowed.filter((d) => permSet.has(d));
   }
-  return { type: "dist", distKods: allowed };
+  // İzinli bir dist'e drill-down (yalnızca kendi kapsamı içinde).
+  const distKods = sel != null && allowed.includes(sel) ? [sel] : allowed;
+  return session.role === "merkez"
+    ? { type: "merkez", distKods, cities }
+    : { type: "dist", distKods, cities };
 }
 
 /**
@@ -357,6 +365,72 @@ export function distFilterClause(scope: TenantScope, alias = "LNGDISTKOD"): stri
   const ids = (scope.distKods ?? []).filter((n) => Number.isInteger(n));
   if (ids.length === 0) return " AND 1=0";
   return ` AND ${alias} IN (${ids.join(",")})`;
+}
+
+/**
+ * Şehir scope'unu SQL WHERE fragment'ına çevir (kullanıcının izinli şehirleri).
+ * - cities null  → "" (kısıt yok)
+ * - boş liste    → " AND 1=0"
+ * - aksi         → " AND LTRIM(RTRIM(<alias>)) IN (N'İstanbul',...)"
+ * `alias` şehir kolonu (TBLMUSTERI.TXTSEHIR) — çağıran join'i sağlamalı.
+ */
+export function cityFilterClause(scope: TenantScope, alias = "TXTSEHIR"): string {
+  const cities = scope.cities;
+  if (!cities) return "";
+  if (cities.length === 0) return " AND 1=0";
+  const escaped = cities.map((c) => `N'${c.replace(/'/g, "''")}'`).join(",");
+  return ` AND LTRIM(RTRIM(${alias})) IN (${escaped})`;
+}
+
+/**
+ * Şehir scope'unu AGREGAT fatura sorgularına GROUP BY'ı bozmadan uygulamak için
+ * semi-join predikatı. TBLMUSTERI'ye JOIN eklemek yerine fact satırlarını
+ * yalnızca izinli şehirlerdeki müşterilere daraltır — satır çoğalması / grup
+ * kayması yok. `custKeyCol` fact tablosundaki müşteri anahtarı (LNGMUSTERIKOD).
+ * - cities null  → "" (kısıt yok)
+ * - boş liste    → " AND 1=0"
+ */
+export function cityFactClause(
+  cities: string[] | null | undefined,
+  custKeyCol = "f.LNGMUSTERIKOD",
+): string {
+  if (!cities) return "";
+  if (cities.length === 0) return " AND 1=0";
+  const escaped = cities.map((c) => `N'${c.replace(/'/g, "''")}'`).join(",");
+  return (
+    ` AND ${custKeyCol} IN (SELECT LNGKOD FROM dbo.TBLMUSTERI` +
+    ` WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTSEHIR)) IN (${escaped}))`
+  );
+}
+
+/**
+ * Doğrudan bir şehir kolonuna (ör. TBLMUSTERI.TXTSEHIR) uygulanan şehir
+ * kısıtı — cityFilterClause'un ham (scope'suz) sürümü.
+ */
+export function cityColClause(
+  cities: string[] | null | undefined,
+  alias: string,
+): string {
+  if (!cities) return "";
+  if (cities.length === 0) return " AND 1=0";
+  const escaped = cities.map((c) => `N'${c.replace(/'/g, "''")}'`).join(",");
+  return ` AND LTRIM(RTRIM(${alias})) IN (${escaped})`;
+}
+
+/**
+ * İzinli şehir kümesi için deterministik, kısa cache etiketi. Sıra bağımsız
+ * (sıralanır), djb2 hash — Date/Math.random yok. cities null → "all".
+ */
+export function cityCacheTag(cities: string[] | null | undefined): string {
+  if (!cities) return "all";
+  if (cities.length === 0) return "none";
+  const norm = cities
+    .map((c) => c.trim().toLocaleLowerCase("tr"))
+    .sort()
+    .join("|");
+  let h = 5381;
+  for (let i = 0; i < norm.length; i++) h = ((h << 5) + h + norm.charCodeAt(i)) | 0;
+  return `c${(h >>> 0).toString(36)}`;
 }
 
 /** Scope tek bir dist'e sabitlenmişse onu döner; aksi halde null. */

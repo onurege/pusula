@@ -11,11 +11,14 @@ import { formatCompact } from "@/components/komuta/format";
  * göre listelenir; "stratejik" işareti vurgu için. Top 5 stratejik markanın
  * toplam payı üst-banner'da öne çıkarılır.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function BrandContributionPanel({
   brands,
 }: {
   brands: WietnauerBrandContribution[];
 }) {
+  if (panelHidden("panel.yonetim.brands")) return null;
   const visible = brands.slice(0, 15);
   const maxCiro = Math.max(1, ...visible.map((b) => b.ciro));
   const stratPayToplam = brands
@@ -27,7 +30,7 @@ export function BrandContributionPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Marka Katkıları</div>
+          <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", "Marka Katkıları")}</div>
           <div className="v3-panel-sub">
             Son 30g · Net ciro sıralaması ·{" "}
             {stratList.length > 0 ? (

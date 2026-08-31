@@ -20,6 +20,7 @@ import { withCache } from "./cache.js";
 import { sqlNow } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getTenantConfig } from "./tenant/index.js";
+import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-iskonto";
 // v4: cache-key scope fragmentation düzeltmesi (VYK-01) — dist filtresi
@@ -100,13 +101,70 @@ export type WietnauerIskontoSnapshot = {
   segments: DiscountSegmentRow[];
 };
 
+// ---------- Tarih aralığı yardımcıları --------------------------------------
+
+/** `dateFrom`/`dateTo` yalnızca YYYY-MM-DD formatındaysa kabul edilir — SQL
+ * interpolasyonu öncesi enjeksiyon emniyeti (defense in depth; server.ts
+ * ?from&to'yu zaten aynı regex ile doğruluyor). */
+function isIsoDate(s: string | null | undefined): s is string {
+  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+}
+
+/**
+ * Normalize edilmiş {dateFrom, dateTo} — ikisi de geçerli YYYY-MM-DD değilse
+ * ikisi de null döner (kısmi aralık kabul edilmez, varsayılan pencereye düşer).
+ */
+function normalizeDateRange(
+  dateFrom: string | null | undefined,
+  dateTo: string | null | undefined,
+): { dateFrom: string | null; dateTo: string | null } {
+  if (isIsoDate(dateFrom) && isIsoDate(dateTo)) return { dateFrom, dateTo };
+  return { dateFrom: null, dateTo: null };
+}
+
+/**
+ * KAPALI PENCERE tarih clause'u: aralık verilmişse `>= dateFrom AND <
+ * dateTo+1gün`; verilmemişse `defaultClause` (fetcher'ın kendi varsayılan
+ * penceresi, ör. son 30g / son 12 ay) kullanılır.
+ */
+function dateRangeClause(
+  column: string,
+  dateFrom: string | null,
+  dateTo: string | null,
+  defaultClause: string,
+): string {
+  if (dateFrom != null && dateTo != null) {
+    return `${column} >= '${dateFrom}' AND ${column} < DATEADD(day, 1, '${dateTo}')`;
+  }
+  return defaultClause;
+}
+
+/**
+ * Marka fetcher'ının YoY karşılaştırması için — aynı aralığın bir yıl
+ * öncesi. Aralık verilmemişse `defaultClause` kullanılır.
+ */
+function dateRangeClausePrevYear(
+  column: string,
+  dateFrom: string | null,
+  dateTo: string | null,
+  defaultClause: string,
+): string {
+  if (dateFrom != null && dateTo != null) {
+    return `${column} >= DATEADD(year, -1, '${dateFrom}') AND ${column} < DATEADD(day, 1, DATEADD(year, -1, '${dateTo}'))`;
+  }
+  return defaultClause;
+}
+
 // ---------- Fetcher'lar -----------------------------------------------------
 
 /**
- * Son 30g header toplamları: brüt, iskonto, net, oran, fatura/aktif müşteri.
+ * Header toplamları: brüt, iskonto, net, oran, fatura/aktif müşteri.
  * TBLMSDFATURA.DBLISKONTOTUTARI fatura başlığındaki TOPLAM iskonto;
  * brüt = DBLBRUTTUTAR, net = DBLNETTUTAR. Header-bazlı çünkü hızlı &
  * snapshot-grade. Marka/SKU kırılımı için detay sorgusu ayrı.
+ *
+ * Varsayılan pencere: son 30g. `dateFrom`/`dateTo` verilirse KAPALI PENCERE
+ * (`>=`/`<`) o aralığa daralır.
  */
 type DiscountOverallRawRow = {
   distId: number | null;
@@ -118,7 +176,17 @@ type DiscountOverallRawRow = {
 };
 
 /** Scope-free ham satırlar — dist bazında (~31 satır, ucuz). */
-async function fetchDiscountOverallRaw(): Promise<DiscountOverallRawRow[]> {
+async function fetchDiscountOverallRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountOverallRawRow[]> {
+  const dateClause = dateRangeClause(
+    "TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
   const sql = `
     SELECT
       LNGDISTKOD AS dist_id,
@@ -129,8 +197,7 @@ async function fetchDiscountOverallRaw(): Promise<DiscountOverallRawRow[]> {
       COUNT(DISTINCT LNGMUSTERIKOD) AS aktif_musteri_count
     FROM dbo.TBLMSDFATURA
     WHERE BYTTUR = 0 AND BYTDURUM = 0
-      AND TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND ${dateClause}${cityFactClause(cities, "LNGMUSTERIKOD")}
     GROUP BY LNGDISTKOD
   `;
   const result = await runReadOnly(sql, { limit: 200 });
@@ -175,10 +242,21 @@ type DiscountMonthlyRawRow = {
 };
 
 /**
- * Son 12 ay × dist × {brüt, iskonto, net} ham satırları — scope-free.
- * `LNGDISTKOD` GROUP BY'a eklendi (31 dist × 12 ay ≈ 372 satır — ucuz).
+ * Son 12 ay (veya `dateFrom`/`dateTo` verilmişse o aralık) × dist × {brüt,
+ * iskonto, net} ham satırları — scope-free. `LNGDISTKOD` GROUP BY'a eklendi
+ * (31 dist × 12 ay ≈ 372 satır — ucuz).
  */
-async function fetchDiscountMonthlyTrendRaw(): Promise<DiscountMonthlyRawRow[]> {
+async function fetchDiscountMonthlyTrendRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountMonthlyRawRow[]> {
+  const dateClause = dateRangeClause(
+    "TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `TRHISLEMTARIHI >= DATEADD(month, -12, ${sqlNow()}) AND TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
   const sql = `
     SELECT
       LNGDISTKOD AS dist_id,
@@ -189,8 +267,7 @@ async function fetchDiscountMonthlyTrendRaw(): Promise<DiscountMonthlyRawRow[]> 
       ISNULL(SUM(DBLNETTUTAR), 0) AS net
     FROM dbo.TBLMSDFATURA
     WHERE BYTTUR = 0 AND BYTDURUM = 0
-      AND TRHISLEMTARIHI >= DATEADD(month, -12, ${sqlNow()})
-      AND TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND ${dateClause}${cityFactClause(cities, "LNGMUSTERIKOD")}
     GROUP BY LNGDISTKOD, DATEPART(year, TRHISLEMTARIHI), DATEPART(month, TRHISLEMTARIHI)
     ORDER BY yil, ay
   `;
@@ -265,7 +342,11 @@ type DiscountBrandRawRow = {
  * kaldırıldı, `f.LNGDISTKOD` GROUP BY'a eklendi (55 marka × 31 dist ≈ 1700
  * satır — ucuz). Top 30 + YoY% scope SONRASI public API'de hesaplanır.
  */
-async function fetchDiscountByBrandRaw(): Promise<DiscountBrandRawRow[]> {
+async function fetchDiscountByBrandRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountBrandRawRow[]> {
   const tenant = getTenantConfig();
   const brandTable = tenant.brandTable;
   const joinCol = tenant.brandJoinColumn;
@@ -275,6 +356,19 @@ async function fetchDiscountByBrandRaw(): Promise<DiscountBrandRawRow[]> {
     throw new Error(`Geçersiz brandTable: ${brandTable}`);
   if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
     throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+
+  const curClause = dateRangeClause(
+    "f.TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
+  const prevClause = dateRangeClausePrevYear(
+    "f.TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `f.TRHISLEMTARIHI >= DATEADD(day, -30, DATEADD(year, -1, ${sqlNow()})) AND f.TRHISLEMTARIHI < DATEADD(day, 1, DATEADD(year, -1, ${sqlNow()}))`,
+  );
 
   const sql = `
     WITH cur AS (
@@ -292,8 +386,7 @@ async function fetchDiscountByBrandRaw(): Promise<DiscountBrandRawRow[]> {
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
       INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND ${curClause}${cityFactClause(cities)}
       GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
     ),
     prev AS (
@@ -309,8 +402,7 @@ async function fetchDiscountByBrandRaw(): Promise<DiscountBrandRawRow[]> {
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
       INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, DATEADD(year, -1, ${sqlNow()}))
-        AND f.TRHISLEMTARIHI <  DATEADD(day,   1, DATEADD(year, -1, ${sqlNow()}))
+        AND ${prevClause}${cityFactClause(cities)}
       GROUP BY b.TXTKOD, f.LNGDISTKOD
     )
     SELECT
@@ -398,7 +490,17 @@ type DiscountTopCustomerRawRow = Omit<DiscountTopCustomer, "rank" | "etiket" | "
  * stok.ts'teki cardinality ile aynı mertebede, güvenli. Top 20 + etiket
  * scope SONRASI public API'de hesaplanır.
  */
-async function fetchDiscountTopCustomersRaw(): Promise<DiscountTopCustomerRawRow[]> {
+async function fetchDiscountTopCustomersRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountTopCustomerRawRow[]> {
+  const dateClause = dateRangeClause(
+    "f.TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
   const sql = `
     SELECT
       f.LNGMUSTERIKOD AS id,
@@ -412,9 +514,8 @@ async function fetchDiscountTopCustomersRaw(): Promise<DiscountTopCustomerRawRow
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
-      AND f.DBLISKONTOTUTARI > 0
+      AND ${dateClause}
+      AND f.DBLISKONTOTUTARI > 0${cityFactClause(cities)}
     GROUP BY f.LNGMUSTERIKOD, f.LNGDISTKOD, m.TXTUNVAN, m.TXTSEHIR
     ORDER BY SUM(f.DBLISKONTOTUTARI) DESC
   `;
@@ -467,7 +568,17 @@ type DiscountSegmentRawRow = Omit<DiscountSegmentRow, "iskontoOraniPct"> & { dis
  * Segment × dist ham satırları — scope-free. `f.LNGDISTKOD` GROUP BY'a
  * eklendi (segment sayısı küçük ~10 × 31 dist ≈ 310 satır — ucuz).
  */
-async function fetchDiscountBySegmentRaw(): Promise<DiscountSegmentRawRow[]> {
+async function fetchDiscountBySegmentRaw(
+  cities: string[] | null | undefined,
+  dateFrom: string | null,
+  dateTo: string | null,
+): Promise<DiscountSegmentRawRow[]> {
+  const dateClause = dateRangeClause(
+    "f.TRHISLEMTARIHI",
+    dateFrom,
+    dateTo,
+    `f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
+  );
   const sql = `
     WITH base AS (
       SELECT
@@ -482,8 +593,7 @@ async function fetchDiscountBySegmentRaw(): Promise<DiscountSegmentRawRow[]> {
       LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND ${dateClause}${cityFactClause(cities)}
     )
     SELECT
       segment,
@@ -565,22 +675,37 @@ export async function getWietnauerIskontoSnapshot(
     strategicBrands?: string[];
     allowedDistKods?: number[] | null;
     distId?: number | null;
+    /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
+     * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
+    allowedCities?: string[] | null;
+    /** Faz — tarih aralığı filtresi (YYYY-MM-DD). İkisi de verilmezse
+     * fetcher'ların varsayılan pencereleri (son 30g / son 12 ay) kullanılır.
+     * Kısmi (yalnız biri verilmiş) aralık yok sayılır. */
+    dateFrom?: string | null;
+    dateTo?: string | null;
   } = {},
 ): Promise<WietnauerIskontoSnapshot> {
   const strategicBrands = options.strategicBrands ?? [];
+  const cities = options.allowedCities ?? null;
+  const { dateFrom, dateTo } = normalizeDateRange(options.dateFrom, options.dateTo);
+  const hasRange = dateFrom != null && dateTo != null;
 
-  const cacheKey = `${CACHE_VERSION}-30g-all`;
+  // Aralık yokken cache key eskisiyle birebir aynı kalır (mevcut cache
+  // ısıtması bozulmaz); aralık verildiğinde ayrı bir key altına düşer.
+  const cacheKey = hasRange
+    ? `${CACHE_VERSION}-range-${cityCacheTag(cities)}-${dateFrom}_${dateTo}`
+    : `${CACHE_VERSION}-30g-${cityCacheTag(cities)}`;
   const result = await withCache<RawIskontoBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       // 5 sorgu paralel — toplam latency = en yavaş sorgu
       const [overall, monthly, brands, topCustomers, segments] = await Promise.all([
-        fetchDiscountOverallRaw(),
-        fetchDiscountMonthlyTrendRaw(),
-        fetchDiscountByBrandRaw(),
-        fetchDiscountTopCustomersRaw(),
-        fetchDiscountBySegmentRaw(),
+        fetchDiscountOverallRaw(cities, dateFrom, dateTo),
+        fetchDiscountMonthlyTrendRaw(cities, dateFrom, dateTo),
+        fetchDiscountByBrandRaw(cities, dateFrom, dateTo),
+        fetchDiscountTopCustomersRaw(cities, dateFrom, dateTo),
+        fetchDiscountBySegmentRaw(cities, dateFrom, dateTo),
       ]);
       return {
         overall,

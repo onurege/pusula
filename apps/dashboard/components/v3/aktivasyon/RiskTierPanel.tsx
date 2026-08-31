@@ -8,7 +8,10 @@ import type { RiskTierBucket } from "./types";
  * + her tier için müşteri sayısı + %. SVG donut tek-pass arc'larla çizilir
  * (recharts dependency'siz, server-renderable).
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
+  if (panelHidden("panel.risk.tier")) return null;
   // Tier display sırası — kötüden iyiye
   const order = ["critical", "risk", "watch", "healthy", "unknown"];
   const sorted = [...buckets].sort(
@@ -35,7 +38,7 @@ export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Risk Tier Dağılımı</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.tier", "Risk Tier Dağılımı")}</div>
           <div className="v3-panel-sub">
             map_customers.risk_tier_v2 · {toplam.toLocaleString("tr-TR")} müşteri
           </div>

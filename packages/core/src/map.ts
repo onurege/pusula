@@ -22,8 +22,8 @@ function sqliteDistFilter(allowedDistKods: number[] | null | undefined): string 
  *  ile aynı desen. */
 function scopeFromAllowed(allowedDistKods: number[] | null | undefined): TenantScope {
   return allowedDistKods == null
-    ? { type: "merkez", distKods: null }
-    : { type: "dist", distKods: allowedDistKods.filter((n) => Number.isInteger(n)) };
+    ? { type: "merkez", distKods: null, cities: null }
+    : { type: "dist", distKods: allowedDistKods.filter((n) => Number.isInteger(n)), cities: null };
 }
 
 /**
@@ -51,6 +51,13 @@ export type MapCustomer = {
   distKod: number | null;
   unvan: string;
   kisaAd: string | null;
+  /** Müşteri kodu — TBLMUSTERI.TXTKOD (ör. "000022120.01.3341"). Saha
+   *  ekibinin fiziksel etiket/fatura üzerinde gördüğü kod; md9 harita
+   *  aramasında ünvan yanında bununla da eşleşme yapılır. */
+  musteriKodu: string | null;
+  /** Takip kodu — TBLMUSTERI.TXTERPKOD (distribütörün kendi ERP/muhasebe
+   *  sisteminde bu müşteriyi izlediği kısa kod, ör. "120.01.3341"). */
+  takipKodu: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;
@@ -70,6 +77,20 @@ export type MapCustomer = {
   /** 30-day ciro and the prior 30-day ciro — feed momentum view. */
   ciro30: number;
   ciroPrev30: number;
+  /**
+   * md11 — üstteki dönem filtresiyle seçilen satış-aktivite penceresi
+   * (30/60/90 gün). Filtre verilmezse 30 (eski davranış).
+   */
+  activityDays: number;
+  /**
+   * md11 — `activityDays` penceresine göre hesaplanan ciro. 30g için
+   * `ciro30`, 60g için `ciro30 + ciroPrev30` (0-60g kümülatif), 90g için
+   * sync anında ayrıca toplanan 90g cirosu. Yalnızca haritada gösterilen
+   * birincil ciro/aktivite metriğini besler — risk skoru bileşenlerini
+   * (`momentum` vb.) etkilemez, onlar sabit pencerelerle hesaplanmaya
+   * devam eder.
+   */
+  activityCiro: number;
   /** @deprecated Tek-tier eski model. Yeni UI `riskScore.tier` kullanır.
    *  Sync hâlâ doldurur; geriye dönük uyumluluk için bir süre kalır. */
   riskTier: RiskTier;
@@ -561,10 +582,37 @@ export type MapCustomerFilters = {
   /** Show only customers not visited for ≥ N days. */
   minDaysSinceVisit?: number;
   limit?: number;
+  /**
+   * md11 — üstteki dönem filtresinin satış-aktivite penceresi. Yalnızca
+   * 30/60/90 kabul edilir (whitelist); başka bir değer veya undefined ise
+   * mevcut 30-günlük davranışa (regresyonsuz) düşer.
+   *
+   * Etkilediği alanlar:
+   *   - `MapCustomer.activityCiro` / `activityDays` (haritada gösterilen
+   *     birincil ciro metriği bu pencereye göre hesaplanır).
+   *   - `salesFilter` ("with"/"without") — açıkça geçirilirse bu pencereye
+   *     göre filtrelenir; verilmezse eski `has_sales` (sabit 30g) kolonu
+   *     kullanılır.
+   *
+   * BİLEREK dokunulmayan: `riskTier` / `riskScore` (composite Risk Score) —
+   * bunlar sync anında sabit pencerelerle (30/60/90/YoY) hesaplanıp SQLite'a
+   * yazılır; harita dönem filtresi risk modelini DEĞİŞTİRMEZ.
+   */
+  activityDays?: number;
   /** Dist-bazlı veri izolasyonu — sunucu-otoriter. null/undefined → merkez
    *  (filtre yok), dizi → yalnızca bu dist_kod'lara ait müşteriler. */
   allowedDistKods?: number[] | null;
+  /** Şehir-bazlı veri izolasyonu (kullanıcı yetkisi). null → kısıt yok. */
+  allowedCities?: string[] | null;
 };
+
+/** md11 dönem filtresi — yalnızca bu üç değer kabul edilir. */
+const ACTIVITY_DAY_OPTIONS = [30, 60, 90] as const;
+type ActivityDays = (typeof ACTIVITY_DAY_OPTIONS)[number];
+
+function isActivityDays(n: unknown): n is ActivityDays {
+  return typeof n === "number" && (ACTIVITY_DAY_OPTIONS as readonly number[]).includes(n);
+}
 
 export type MapFacets = {
   cities: string[];
@@ -635,10 +683,27 @@ export async function listMapCustomers(
     where.push("dist_kod = @distKod");
     params.distKod = Math.floor(filters.distKod);
   }
+  // md11 dönem filtresi — açıkça geçirilip whitelist'te ise (30/60/90)
+  // salesFilter bu pencereye göre `days_since_last_sale`'dan hesaplanır;
+  // aksi halde (parametre yok / geçersiz değer) eski sabit 30g `has_sales`
+  // kolonu kullanılır — regresyon yok. `has_sales` zaten "son 30g'de satış
+  // var mı" ile aynı anlama geldiği için activityDays=30 iki yol da eşdeğer
+  // sonuç verir.
+  const activityDaysExplicit = isActivityDays(filters.activityDays);
   if (filters.salesFilter === "with") {
-    where.push("has_sales = 1");
+    if (activityDaysExplicit) {
+      where.push("(days_since_last_sale IS NOT NULL AND days_since_last_sale <= @activityDays)");
+      params.activityDays = filters.activityDays;
+    } else {
+      where.push("has_sales = 1");
+    }
   } else if (filters.salesFilter === "without") {
-    where.push("has_sales = 0");
+    if (activityDaysExplicit) {
+      where.push("(days_since_last_sale IS NULL OR days_since_last_sale > @activityDays)");
+      params.activityDays = filters.activityDays;
+    } else {
+      where.push("has_sales = 0");
+    }
   }
 
   // Yeni tier filter (composite Risk Score) varsa onu kullan; yoksa eski
@@ -659,14 +724,31 @@ export async function listMapCustomers(
   const distIsoClause = sqliteDistFilter(filters.allowedDistKods);
   if (distIsoClause) where.push(distIsoClause.replace(/^ AND /, ""));
 
+  // Şehir-bazlı veri izolasyonu (kullanıcı yetkisi) — sunucu-otoriter,
+  // parametreli. null → kısıt yok; boş → hiçbir şey.
+  if (filters.allowedCities) {
+    if (filters.allowedCities.length === 0) {
+      where.push("1=0");
+    } else {
+      const cityRefs = filters.allowedCities.map((c, i) => {
+        params[`ycity${i}`] = c.trim();
+        return `@ycity${i}`;
+      });
+      where.push(`TRIM(sehir) IN (${cityRefs.join(",")})`);
+    }
+  }
+
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
-    SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd, adres, sehir,
+    SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd,
+           musteri_kodu AS musteriKodu, takip_kodu AS takipKodu,
+           adres, sehir,
            ilce, distributor, bolge, lat, lng, has_sales AS hasSales,
            days_since_last_sale  AS daysSinceLastSale,
            days_since_last_visit AS daysSinceLastVisit,
            ciro_30d              AS ciro30,
            ciro_prev_30d         AS ciroPrev30,
+           ciro_t90              AS ciroT90,
            risk_tier             AS riskTier,
            risk_score            AS riskScore,
            risk_tier_v2          AS riskTierV2,
@@ -685,6 +767,8 @@ export async function listMapCustomers(
     distKod: number | null;
     unvan: string;
     kisaAd: string | null;
+    musteriKodu: string | null;
+    takipKodu: string | null;
     adres: string | null;
     sehir: string | null;
     ilce: string | null;
@@ -697,6 +781,7 @@ export async function listMapCustomers(
     daysSinceLastVisit: number | null;
     ciro30: number | null;
     ciroPrev30: number | null;
+    ciroT90: number | null;
     riskTier: string | null;
     riskScore: number | null;
     riskTierV2: string | null;
@@ -704,11 +789,26 @@ export async function listMapCustomers(
     riskReasons: string | null;
   }>;
 
+  // md11 — birincil aktivite/ciro penceresi, sync anında önceden toplanmış
+  // 30g/30-60g/90g pencerelerden derlenir (yeni bir MSSQL sorgusu gerekmez,
+  // mirror zaten bunları tutuyor). Whitelist dışı/eksik değer → 30 (mevcut
+  // davranış).
+  const activityDays: ActivityDays = isActivityDays(filters.activityDays)
+    ? filters.activityDays
+    : 30;
+  const activityCiroFor = (r: { ciro30: number | null; ciroPrev30: number | null; ciroT90: number | null }): number => {
+    if (activityDays === 60) return (r.ciro30 ?? 0) + (r.ciroPrev30 ?? 0);
+    if (activityDays === 90) return r.ciroT90 ?? 0;
+    return r.ciro30 ?? 0;
+  };
+
   return rows.map((r) => ({
     id: r.id,
     distKod: r.distKod ?? null,
     unvan: r.unvan,
     kisaAd: r.kisaAd ?? null,
+    musteriKodu: r.musteriKodu ?? null,
+    takipKodu: r.takipKodu ?? null,
     adres: r.adres,
     sehir: r.sehir,
     ilce: r.ilce,
@@ -721,6 +821,8 @@ export async function listMapCustomers(
     daysSinceLastVisit: r.daysSinceLastVisit ?? null,
     ciro30: r.ciro30 ?? 0,
     ciroPrev30: r.ciroPrev30 ?? 0,
+    activityDays,
+    activityCiro: activityCiroFor(r),
     riskTier: (r.riskTier as RiskTier) ?? "low",
     riskScore: rehydrateRiskScore(r),
   }));
@@ -1171,6 +1273,11 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       m.LNGDISTKOD   AS distKod,
       m.TXTUNVAN     AS unvan,
       m.TXTKISAAD    AS kisaAd,
+      -- md9: harita aramasında ünvan yanında müşteri kodu (TXTKOD, saha
+      -- ekibinin gördüğü fiziksel kod) ve takip kodu (TXTERPKOD, distribütör
+      -- ERP/muhasebe eşleştirme kodu) ile de arama yapılabilsin diye çekilir.
+      NULLIF(LTRIM(RTRIM(m.TXTKOD)), '')    AS musteriKodu,
+      NULLIF(LTRIM(RTRIM(m.TXTERPKOD)), '') AS takipKodu,
       m.TXTADRES1    AS adres,
       m.TXTSEHIR     AS sehir,
       m.TXTILCE      AS ilce,
@@ -1236,7 +1343,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const db = getLocalDb(repoRoot);
   const insCustomer = db.prepare(`
     INSERT INTO map_customers
-      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor, bolge,
+      (id, dist_kod, unvan, kisa_ad, musteri_kodu, takip_kodu, adres, sehir, ilce, distributor, bolge,
        lat, lng, has_sales,
        days_since_last_sale, days_since_last_visit,
        ciro_30d, ciro_prev_30d, risk_tier,
@@ -1246,7 +1353,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
        ziyaret_90d,
        risk_score, risk_tier_v2, risk_components, risk_reasons)
     VALUES
-      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor, @bolge,
+      (@id, @distKod, @unvan, @kisaAd, @musteriKodu, @takipKodu, @adres, @sehir, @ilce, @distributor, @bolge,
        @lat, @lng, @hasSales,
        @daysSinceLastSale, @daysSinceLastVisit,
        @ciro30, @ciroPrev30, @riskTier,
@@ -1298,6 +1405,8 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         distKod: r.distKod == null ? null : Number(r.distKod),
         unvan: String(r.unvan ?? ""),
         kisaAd: (r.kisaAd as string | null) ?? null,
+        musteriKodu: (r.musteriKodu as string | null) ?? null,
+        takipKodu: (r.takipKodu as string | null) ?? null,
         adres: (r.adres as string | null) ?? null,
         sehir: (r.sehir as string | null) ?? null,
         ilce: (r.ilce as string | null) ?? null,

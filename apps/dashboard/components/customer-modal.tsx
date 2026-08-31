@@ -313,6 +313,11 @@ export function CustomerModal({ customer, onClose }: Props) {
                 <Hash size={11} />
                 {customer.id}
               </span>
+              {customer.musteriKodu && (
+                <span className="text-muted-2 font-mono">
+                  Kod: {customer.musteriKodu}
+                </span>
+              )}
             </div>
             {(customer.daysSinceLastSale !== null || customer.daysSinceLastVisit !== null) && (
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
@@ -715,12 +720,12 @@ function RiskScoreCard({
               window="Son 30 / 90 gün + geçen yıl aynı 30 gün (YoY)"
               base="4 bileşenin ağırlıklı toplamı"
               notes={[
-                "Satış Momentumu %40 — ciro ivmesi: son 30g vs önceki 30g, 90g baseline ve geçen yıl aynı dönem.",
-                "Davranışsal %30 — sipariş sıklığı + sepet çeşitliliği sapması (fatura sayısı + distinct ürün grubu).",
-                "Ödeme %20 — ödeme/tahsilat düzeni sinyali.",
-                "Etkileşim %10 — ziyaret cadence'i (son 90g ziyaret sıklığına göre beklenen temas).",
+                "Satış Momentumu %40 — ciro ivmesi: son 30g vs önceki 30g (%45), 90g aylık baseline (%35) ve geçen yıl aynı dönem (%20); uzun sessizlik düşüşü büyütür (×1.5'e kadar).",
+                "Davranışsal %30 — sessizlik: son siparişten bu yana geçen gün (%50, ana sinyal) + sipariş sıklığı düşüşü (%30, fatura sayısı) + sepet daralması (%20, distinct ürün grubu).",
+                "Ödeme %20 — bu ekranda görüntülenirken tahsilat verisinden anlık hesaplanır: son 30g tahsilat/ciro karşılama oranı + çek/senet (vade) payı cezası.",
+                "Etkileşim %10 — ziyaret cadence'i: son 90g ziyaret sıklığına göre beklenen aralık (15/30/60 gün) ile son ziyaretten bu yana geçen süre kıyaslanır.",
                 "Tier eşikleri: 0–29 sağlıklı · 30–54 izlemede · 55–74 riskli · 75+ kritik.",
-                "Baz ciro < 1.000 TL ise sinyal 'yok' sayılır — yeni/dormant müşteri skoru bozmaz.",
+                "Baz ciro < 1.000 TL ise ilgili sinyal 'yok' sayılır — yeni/dormant müşteri skoru bozmaz. Hiçbir bileşen hesaplanamazsa tier 'Yetersiz veri' olur.",
               ]}
             />
           </div>

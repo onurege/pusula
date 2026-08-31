@@ -25,6 +25,7 @@ import { runReadOnly } from "./db.js";
 import { getLocalDb } from "./local-db.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { fileURLToPath } from "node:url";
+import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-aktivasyon";
 // v4: cache-key scope fragmentation düzeltmesi (VYK-01) — MSSQL fetcher'lar
@@ -133,7 +134,7 @@ type ActiveCustomers90dRawRow = {
  * mertebede wietnauer-stok.ts ile) — dist ve segment JS tarafında
  * hesaplanabilsin diye. `f.LNGDISTKOD` her satırda mevcut.
  */
-async function fetchActiveCustomers90dRaw(): Promise<ActiveCustomers90dRawRow[]> {
+async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<ActiveCustomers90dRawRow[]> {
   // Müşteri tipi: TBLMUSTERIGRUP.TXTAD (TBLMUSTERI.TXTGRUPKOD üzerinden).
   const sql = `
     WITH aktif AS (
@@ -141,14 +142,14 @@ async function fetchActiveCustomers90dRaw(): Promise<ActiveCustomers90dRawRow[]>
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     ),
     onceki AS (
       SELECT DISTINCT f.LNGMUSTERIKOD AS musteri_id, f.LNGDISTKOD AS dist_id
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})${cityFactClause(cities)}
     ),
     combos AS (
       SELECT musteri_id, dist_id FROM aktif
@@ -217,7 +218,7 @@ type SilentCustomerRawRow = Omit<SilentCustomer, "sessizGun"> & { distId: number
  * (ROW_NUMBER ile en yüksek ciro) temsil eder. Top 50 scope SONRASI public
  * API'de hesaplanır.
  */
-async function fetchSilentCustomersRaw(): Promise<SilentCustomerRawRow[]> {
+async function fetchSilentCustomersRaw(cities?: string[] | null): Promise<SilentCustomerRawRow[]> {
   const tenant = getTenantConfig();
   const brandTable = tenant.brandTable;
   const joinCol = tenant.brandJoinColumn;
@@ -232,7 +233,7 @@ async function fetchSilentCustomersRaw(): Promise<SilentCustomerRawRow[]> {
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     ),
     onceki_90 AS (
       SELECT
@@ -253,7 +254,7 @@ async function fetchSilentCustomersRaw(): Promise<SilentCustomerRawRow[]> {
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})${cityFactClause(cities)}
       GROUP BY f.LNGMUSTERIKOD
     ),
     sessiz AS (
@@ -354,6 +355,7 @@ type StrategicBrandSilenceRawRow = {
  */
 async function fetchStrategicBrandSilenceRaw(
   strategicBrands: string[],
+  cities?: string[] | null,
 ): Promise<StrategicBrandSilenceRawRow[]> {
   if (strategicBrands.length === 0) return [];
 
@@ -391,7 +393,7 @@ async function fetchStrategicBrandSilenceRaw(
       INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     ),
     toplam AS (
       SELECT DISTINCT
@@ -408,7 +410,7 @@ async function fetchStrategicBrandSilenceRaw(
       INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
     )
     SELECT
       t.marka,
@@ -461,7 +463,23 @@ function aggregateStrategicBrandSilence(rows: StrategicBrandSilenceRawRow[]): St
  * map_customers tablosu boşsa veya `risk_tier_v2` kolonu null'sa boş array
  * döner — UI tarafı bu durumu "henüz hesaplanmamış" olarak ele alır.
  */
-function fetchRiskTierDistribution(allowedDistKods: number[] | null): RiskTierBucket[] {
+/**
+ * SQLite (map_customers) mirror'u için şehir filtresi — MSSQL cityColClause'un
+ * sqlite lehçesi karşılığı (N'...' yok, TRIM + tek-tırnak escape). cities null
+ * → "" (kısıt yok), boş dizi → "AND 1=0". `map_customers.sehir` MSSQL TXTSEHIR'
+ * den seed edildiği için birebir eşleşir.
+ */
+function citySqliteFilter(cities: string[] | null | undefined): string {
+  if (!cities) return "";
+  if (cities.length === 0) return "AND 1=0";
+  const esc = cities.map((c) => `'${c.trim().replace(/'/g, "''")}'`).join(",");
+  return `AND TRIM(sehir) IN (${esc})`;
+}
+
+function fetchRiskTierDistribution(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+): RiskTierBucket[] {
   const db = getLocalDb(DEFAULT_REPO_ROOT);
   try {
     // Dist kullanıcı → yalnızca izinli dist_kod'lara sahip müşteriler.
@@ -480,7 +498,7 @@ function fetchRiskTierDistribution(allowedDistKods: number[] | null): RiskTierBu
            COALESCE(NULLIF(TRIM(risk_tier_v2), ''), 'unknown') AS tier,
            COUNT(*) AS sayi
          FROM map_customers
-         WHERE 1=1 ${distFilter}
+         WHERE 1=1 ${distFilter} ${citySqliteFilter(cities)}
          GROUP BY COALESCE(NULLIF(TRIM(risk_tier_v2), ''), 'unknown')`,
       )
       .all() as Array<{ tier: string; sayi: number }>;
@@ -505,7 +523,10 @@ function fetchRiskTierDistribution(allowedDistKods: number[] | null): RiskTierBu
  * 60 günden eski olan müşterileri sıralıyoruz — sessiz olmasına rağmen 90g
  * pencere içinde küçük bir aktivite olabilir (geriye doğru kayan pencere).
  */
-function fetchRecoveryTargets(allowedDistKods: number[] | null): RecoveryTarget[] {
+function fetchRecoveryTargets(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+): RecoveryTarget[] {
   const db = getLocalDb(DEFAULT_REPO_ROOT);
   try {
     const distFilter =
@@ -526,7 +547,7 @@ function fetchRecoveryTargets(allowedDistKods: number[] | null): RecoveryTarget[
          FROM map_customers
          WHERE COALESCE(days_since_last_sale, 999) > 60
            AND COALESCE(ciro_t90, 0) > 0
-           ${distFilter}
+           ${distFilter} ${citySqliteFilter(cities)}
          ORDER BY ciro_t90 DESC, sessiz_gun DESC
          LIMIT 20`,
       )
@@ -573,24 +594,28 @@ export async function getWietnauerAktivasyonSnapshot(
     strategicBrands?: string[];
     allowedDistKods?: number[] | null;
     distId?: number | null;
+    /** Kullanıcının izinli şehirleri (null → kısıt yok). SQL'e semi-join
+     * predikatı olarak uygulanır; cache key şehir kümesine göre ayrışır. */
+    allowedCities?: string[] | null;
   } = {},
 ): Promise<WietnauerAktivasyonSnapshot> {
   const strategicBrands = options.strategicBrands ?? [];
+  const cities = options.allowedCities ?? null;
   const stratKey = strategicBrands
     .map((b) => b.toLocaleLowerCase("tr"))
     .sort()
     .join("|");
 
-  const cacheKey = `${CACHE_VERSION}-90g-${stratKey || "none"}-all`;
+  const cacheKey = `${CACHE_VERSION}-90g-${stratKey || "none"}-${cityCacheTag(cities)}`;
   const result = await withCache<RawAktivasyonMssqlBundle>(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
       // MSSQL sorguları paralel.
       const [active, silent, strategicSilence] = await Promise.all([
-        fetchActiveCustomers90dRaw(),
-        fetchSilentCustomersRaw(),
-        fetchStrategicBrandSilenceRaw(strategicBrands),
+        fetchActiveCustomers90dRaw(cities),
+        fetchSilentCustomersRaw(cities),
+        fetchStrategicBrandSilenceRaw(strategicBrands, cities),
       ]);
       return {
         active,
@@ -622,8 +647,8 @@ export async function getWietnauerAktivasyonSnapshot(
 
   // SQLite çağrıları senkron (better-sqlite3) — zaten lokal mirror, cache'e
   // girmiyor; allowedDistKods doğrudan filtre olarak uygulanır.
-  const riskTiers = fetchRiskTierDistribution(effectiveDistKods);
-  const recovery = fetchRecoveryTargets(effectiveDistKods);
+  const riskTiers = fetchRiskTierDistribution(effectiveDistKods, cities);
+  const recovery = fetchRecoveryTargets(effectiveDistKods, cities);
 
   return {
     generatedAt,

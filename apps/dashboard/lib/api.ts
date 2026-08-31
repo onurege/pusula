@@ -68,6 +68,7 @@ export type GenerateReportResponse = {
 function inferCacheTag(path: string): string {
   if (path.startsWith("/api/map")) return "map";
   if (path.startsWith("/api/komuta")) return "komuta";
+  if (path.startsWith("/api/wietnauer")) return "wietnauer";
   if (path.startsWith("/api/reports")) return "reports";
   if (path.startsWith("/api/radars")) return "radar";
   if (path.startsWith("/api/retrieve")) return "schema";
@@ -271,6 +272,11 @@ export type MapCustomer = {
   distKod: number | null;
   unvan: string;
   kisaAd: string | null;
+  /** Müşteri kodu (TXTKOD) — md9 harita aramasında ünvan yanında bununla da
+   *  eşleşme yapılır. */
+  musteriKodu: string | null;
+  /** Takip kodu (TXTERPKOD) — distribütör ERP eşleştirme kodu. */
+  takipKodu: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;
@@ -283,6 +289,10 @@ export type MapCustomer = {
   daysSinceLastVisit: number | null;
   ciro30: number;
   ciroPrev30: number;
+  /** md11 — üstteki dönem filtresiyle seçilen pencere (30/60/90 gün, varsayılan 30). */
+  activityDays: number;
+  /** md11 — `activityDays` penceresine göre hesaplanan ciro (haritada gösterilen birincil metrik). */
+  activityCiro: number;
   /** @deprecated Eski 4-tier alan. Yeni UI `riskScore.tier` kullanır. */
   riskTier: RiskTier;
   /** Composite Risk Score — 0..100 + bileşenler + sebepler. */
@@ -300,6 +310,8 @@ export async function listMapCustomers(params: {
   /** Composite Risk Score tier filter. */
   tier?: RiskTierV2;
   minDaysSinceVisit?: number;
+  /** md11 — üstteki dönem filtresi (30/60/90 gün). Verilmezse 30 (mevcut davranış). */
+  activityDays?: 30 | 60 | 90;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
@@ -311,6 +323,7 @@ export async function listMapCustomers(params: {
   if (params.riskTier) qp.set("riskTier", params.riskTier);
   if (params.tier) qp.set("tier", params.tier);
   if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
+  if (typeof params.activityDays === "number") qp.set("activityDays", String(params.activityDays));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
 }
@@ -533,6 +546,10 @@ export type KomutaMatrixRow = {
   ikiYilOnce: number;
   yoyPct: number | null;
   trend: "rocket" | "up" | "flat" | "down";
+  /** "Diğer" katlanmış satır (Top-8 dışı kalan ürün gruplarının toplamı). */
+  isOther?: boolean;
+  /** Dip toplam satırı (Top-8 + Diğer toplamı). */
+  isTotal?: boolean;
 };
 
 export type KomutaHeatmapCell = {
@@ -583,6 +600,27 @@ export type KomutaUpcomingEvent = {
   yoyImpact?: number;
 };
 
+/** md34 — Müşteri Tipi (Ek Saha 8) × Marka kırılımı, son 30g. Satırlar
+ *  müşteri tipi, sütunlar Top 8 marka + "Diğer"; her hücrede ciro + hacim. */
+export type KomutaCustomerTypeBrandCell = {
+  marka: string;
+  ciro: number;
+  miktar: number;
+};
+
+export type KomutaCustomerTypeBrandRow = {
+  musteriTipi: string;
+  cells: KomutaCustomerTypeBrandCell[];
+  /** Dip toplam satırı (tüm müşteri tiplerinin toplamı). */
+  isTotal?: boolean;
+};
+
+export type KomutaCustomerTypeBrandSnapshot = {
+  /** Sütun başlıkları: Top 8 marka (toplam ciroya göre) + "Diğer". */
+  markalar: string[];
+  rows: KomutaCustomerTypeBrandRow[];
+};
+
 /** TL (currency, ₺) ya da 9LE (9-Liter-Equivalent volume). Tüm value alanları
  *  bu birimde gelir; snapshot.unit alanı UI'da suffix formatlamasını sürer. */
 export type ValueUnit = "tl" | "9le";
@@ -608,6 +646,8 @@ export type KomutaSnapshot = {
   reps: KomutaRep[];
   topDists: KomutaTopDist[];
   portfolio: KomutaPortfolioRow[];
+  /** md34 — Müşteri Tipi × Marka kırılımı (ciro + hacim), son 30g. */
+  customerTypeBrand: KomutaCustomerTypeBrandSnapshot;
   brief?: string;
 };
 
@@ -693,6 +733,18 @@ export type MapFacets = {
 
 export async function getMapFacets(): Promise<MapFacets> {
   return request("/api/map/facets");
+}
+
+// md43: dist dropdown'u için izinli distribütör listesi — mevcut
+// `/api/auth/distributors`'ı sarar (yeni endpoint eklenmedi). Birden fazla
+// V3 sayfası (aktivasyon-risk, stok-tükenme, ticari-yatırım) aynı export'u
+// paylaşır; burada TEK yerde tanımlı.
+export type AllowedDistributor = { id: number; ad: string };
+export async function getAllowedDistributors(): Promise<AllowedDistributor[]> {
+  const res = await request<{ distributors: AllowedDistributor[] }>(
+    "/api/auth/distributors",
+  );
+  return res.distributors ?? [];
 }
 
 export type MapSyncStatus = {
@@ -802,10 +854,36 @@ async function fetchV3<T = unknown>(name: string, refresh = false): Promise<T> {
 }
 export const getWietnauerMarka = <T = unknown>(o: { refresh?: boolean } = {}) =>
   fetchV3<T>("marka", o.refresh);
-export const getWietnauerAktivasyon = <T = unknown>(o: { refresh?: boolean } = {}) =>
-  fetchV3<T>("aktivasyon", o.refresh);
-export const getWietnauerIskonto = <T = unknown>(o: { refresh?: boolean } = {}) =>
-  fetchV3<T>("iskonto", o.refresh);
+// md43: aktivasyon endpoint'i de stok gibi distId query param'ı destekler
+// (backend makeV3Handler zaten geneldi — foundation). Belirtilmezse portföy
+// toplamı, verilirse o distribütörün aktivasyon/risk kırılımı döner.
+export const getWietnauerAktivasyon = <T = unknown>(
+  o: { refresh?: boolean; distId?: number | null } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/aktivasyon${qs ? `?${qs}` : ""}`);
+};
+// md43: dist dropdown'u için izinli distribütör listesi — mevcut
+// `getAllowedDistributors()` (yukarıda, /api/map/facets'in yanında tanımlı,
+// /api/auth/distributors'ı sarar) kullanılır; yeni endpoint eklenmedi.
+// İskonto endpoint'i distId (drill-down) + from/to (tarih aralığı) query
+// param'ları destekler — UI'daki distribütör dropdown'u ve tarih aralığı
+// seçicisinden gelir. Hiçbiri verilmezse portföy toplamı + son 30g/son 12 ay
+// varsayılan pencereleri döner.
+export const getWietnauerIskonto = <T = unknown>(
+  o: { refresh?: boolean; distId?: number | null; dateFrom?: string | null; dateTo?: string | null } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  if (o.dateFrom) params.set("from", o.dateFrom);
+  if (o.dateTo) params.set("to", o.dateTo);
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/iskonto${qs ? `?${qs}` : ""}`);
+};
 export const getWietnauerSegment = <T = unknown>(o: { refresh?: boolean } = {}) =>
   fetchV3<T>("segment", o.refresh);
 // `getWietnauerSaha` typed signature aşağıda; jenerik kalmasın diye burada
@@ -814,12 +892,21 @@ export const getWietnauerSatis = <T = unknown>(o: { refresh?: boolean } = {}) =>
   fetchV3<T>("satis", o.refresh);
 // Stok endpoint'i distId query param'ı destekler — UI dropdown'undan gelir.
 // distId verilmezse portföy toplamı, verilirse o distribütörün kırılımı döner.
+// md42: `dateFrom`/`dateTo` (?from&to) — talep/satış hızı penceresi; ikisi de
+// verilmezse API varsayılan pencereyi kullanır.
 export const getWietnauerStok = <T = unknown>(
-  o: { refresh?: boolean; distId?: number | null } = {},
+  o: {
+    refresh?: boolean;
+    distId?: number | null;
+    dateFrom?: string | null;
+    dateTo?: string | null;
+  } = {},
 ) => {
   const params = new URLSearchParams();
   if (o.refresh) params.set("refresh", "1");
   if (o.distId != null) params.set("distId", String(o.distId));
+  if (o.dateFrom) params.set("from", o.dateFrom);
+  if (o.dateTo) params.set("to", o.dateTo);
   const qs = params.toString();
   return request<T>(`/api/wietnauer/stok${qs ? `?${qs}` : ""}`);
 };
@@ -992,6 +1079,13 @@ export type WietnauerStockSnapshot = {
   generatedAt: string;
   demoDate: string | null;
   windowDays: 90;
+  /** md42 — uygulanan talep/satış hızı penceresi (`?from&to` verilirse custom). */
+  demandRange: {
+    custom: boolean;
+    from: string | null;
+    to: string | null;
+    days: number;
+  };
   distFilter: {
     distId: number;
     distName: string;

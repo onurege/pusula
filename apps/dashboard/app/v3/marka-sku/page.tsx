@@ -1,4 +1,5 @@
 import { getWietnauerMarka } from "@/lib/api";
+import { cs, panelHidden } from "@/lib/content";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { formatCompact } from "@/components/komuta/format";
@@ -6,6 +7,7 @@ import { BrandPortfolioPanel } from "@/components/v3/marka/BrandPortfolioPanel";
 import { TopSkusPanel } from "@/components/v3/marka/TopSkusPanel";
 import { BrandPenetrationPanel } from "@/components/v3/marka/BrandPenetrationPanel";
 import { StrategicBrandZoom } from "@/components/v3/marka/StrategicBrandZoom";
+import { MarkaSkuExportButton } from "@/components/v3/marka/ExportButton";
 import type { WietnauerMarkaSnapshot } from "@/components/v3/marka/types";
 
 export const metadata = { title: "Marka & SKU · V3 · Insider" };
@@ -54,6 +56,8 @@ export default async function V3MarkaSkuPage() {
       <V3PageHeader
         eyebrow="Dashboard 04"
         title="Marka & SKU Performansı"
+        contentKey="page.marka.title"
+        descKey="page.marka.desc"
         description={`${tenant.displayName} marka portföyü, SKU şampiyonları, penetrasyon ve stratejik marka zoom — son 30 gün net ciro odağında, YTD ivme metrikleriyle.`}
         dataNote="TBLURUNGRUP / TBLURUNEKGRUP · TBLURUN · TBLMSDBELGEDETAY · DBLNETFIYAT · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
@@ -71,30 +75,45 @@ export default async function V3MarkaSkuPage() {
 
       {snap && (
         <>
+          <div className="v3-toolbar">
+            <MarkaSkuExportButton
+              portfolio={snap.portfolio}
+              topSkus={snap.topSkus}
+            />
+          </div>
+
           {/* Üst şerit: 4 KPI özet kartı */}
           <div className="v3-kpi-grid">
+            {!panelHidden("kpi.marka.ciro") && (
             <KpiTile
-              label="Toplam Net Ciro"
+              label={cs("kpi.marka.ciro", "Toplam Net Ciro")}
               value={`₺${formatCompact(toplamCiro)}`}
               sub="son 30 gün · marka × SKU bazlı"
             />
+          )}
+            {!panelHidden("kpi.marka.aktif") && (
             <KpiTile
-              label="Aktif Müşteri"
+              label={cs("kpi.marka.aktif", "Aktif Müşteri")}
               value={aktifMusteri.toLocaleString("tr-TR")}
               sub="son 30g fatura kesilen distinct"
             />
+          )}
+            {!panelHidden("kpi.marka.top5") && (
             <KpiTile
-              label="Top 5 Marka Payı"
+              label={cs("kpi.marka.top5", "Top 5 Marka Payı")}
               value={`%${top5Pay.toFixed(1)}`}
               sub="portföyün konsantrasyonu"
               tone={top5Pay > 70 ? "warn" : "neutral"}
             />
+          )}
+            {!panelHidden("kpi.marka.stratejik") && (
             <KpiTile
-              label="Stratejik Marka Payı"
+              label={cs("kpi.marka.stratejik", "Stratejik Marka Payı")}
               value={`%${stratSharePct.toFixed(1)}`}
               sub={`${stratActive}/${stratTotal} marka aktif`}
               tone="accent"
             />
+          )}
           </div>
 
           {/* İçerik: full-width A, sonra 2 sütun B+C, full-width D, full-width E */}
@@ -119,6 +138,11 @@ export default async function V3MarkaSkuPage() {
         dangerouslySetInnerHTML={{
           __html: `
         .v3-page { padding: 4px 0 24px; }
+        .v3-toolbar {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 12px;
+        }
         .v3-kpi-grid {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

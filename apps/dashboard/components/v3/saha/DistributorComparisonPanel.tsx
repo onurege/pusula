@@ -15,12 +15,15 @@ export type DistRow = {
  * Distribütör karşılaştırma — Top 10 son 30g operasyonel performans.
  * Aktif temsilci × ziyaret × kapsama × dönüşüm matrisi.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function DistributorComparisonPanel({ rows }: { rows: DistRow[] }) {
+  if (panelHidden("panel.saha.distcompare")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Distribütör Karşılaştırma</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.distcompare", "Distribütör Karşılaştırma")}</div>
           <div className="v3-panel-sub">
             Son 30g · Top {rows.length} distribütör operasyonel performansı
           </div>

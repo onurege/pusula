@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { getTenantConfig } from "@/lib/tenant";
+import { getContentMap, t } from "@/lib/content";
 
 export const metadata = { title: "V3 Özet · Insider" };
 
@@ -24,12 +25,13 @@ export const metadata = { title: "V3 Özet · Insider" };
  */
 export default function V3LandingPage() {
   const tenant = getTenantConfig();
+  const content = getContentMap();
 
   return (
     <div className="v3-page">
       <V3PageHeader
         eyebrow="V3 · Özet"
-        title={`${tenant.displayName} — Yönetim Paneli`}
+        title={`${tenant.displayName} — ${t(content, "page.ozet.title", "Yönetim Paneli")}`}
         description="Sekiz dashboard, sekiz soru: yönetici özeti, satış performansı, müşteri segmenti, marka katkısı, stok tükenme, saha operasyonu, müşteri sağlığı ve ticari yatırım. Her kart kendi sayfasında açılır."
       />
 

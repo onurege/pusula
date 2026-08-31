@@ -7,11 +7,14 @@ import type { StrategicBrandSilence } from "./types";
  * son 90g sessizleşen" müşteri sayısı. Yatay bar — yüksek sessizlik = saha
  * önceliği.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function StrategicSilencePanel({
   items,
 }: {
   items: StrategicBrandSilence[];
 }) {
+  if (panelHidden("panel.risk.strategic")) return null;
   // En kötüden iyiye sırala
   const sorted = [...items].sort((a, b) => b.sessizMusteri - a.sessizMusteri);
   const maxSessiz = Math.max(1, ...sorted.map((b) => b.sessizMusteri));
@@ -20,7 +23,7 @@ export function StrategicSilencePanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Stratejik Marka Sessizliği</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.strategic", "Stratejik Marka Sessizliği")}</div>
           <div className="v3-panel-sub">
             Önceden alan ama son 90 gün sessiz · stratejik markalar için
             saha aksiyon listesi

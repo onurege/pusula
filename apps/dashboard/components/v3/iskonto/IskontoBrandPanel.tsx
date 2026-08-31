@@ -25,14 +25,17 @@ type BrandRow = {
  *
  * yoY rengi: >0 yeşil, <0 kırmızı, null gri.
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function IskontoBrandPanel({ brands }: { brands: BrandRow[] }) {
+  if (panelHidden("panel.iskonto.brand")) return null;
   const stratList = brands.filter((b) => b.isStratejik);
 
   return (
     <div className="brand-panel">
       <div className="brand-head">
         <div>
-          <div className="brand-title">Marka × İskonto Etkinliği</div>
+          <div className="brand-title">{panelTitle("panel.iskonto.brand", "Marka × İskonto Etkinliği")}</div>
           <div className="brand-sub">
             Son 30g · Top 15 marka · Detay seviyesi (brüt = birim × miktar)
             {stratList.length > 0 && (

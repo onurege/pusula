@@ -17,6 +17,8 @@ const WINDOW_DAYS = 90;
 const DEMAND_WINDOW_DAYS = 180;
 const DEFAULT_LEAD_TIME_DAYS = 14;
 const SERVICE_LEVEL_Z = 1.65;
+/** `YYYY-MM-DD` — dateFrom/dateTo yalnızca bu formatta SQL'e interpolate edilir. */
+const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 /** Net stok / toplam hareket oranı bu eşiğin altındaysa "düşük güven". */
 const LOW_CONFIDENCE_RATIO = 0.02;
 const TREND_FACTOR_MIN = 0.5;
@@ -132,6 +134,18 @@ export type WietnauerStockSnapshot = {
   demoDate: string | null;
   windowDays: typeof WINDOW_DAYS;
   /**
+   * md42 — uygulanan talep/satış hızı penceresi. `custom: false` iken
+   * varsayılan {@link DEMAND_WINDOW_DAYS} günlük pencere; `dateFrom`/`dateTo`
+   * `?from&to` verilip geçerliyse `custom: true` ve o aralık uygulanır. Stok
+   * bakiyesi (on-hand) bu pencereden bağımsızdır.
+   */
+  demandRange: {
+    custom: boolean;
+    from: string | null;
+    to: string | null;
+    days: number;
+  };
+  /**
    * Aktif dist filtresi. `null` → tüm distribütörler (portföy görünümü).
    * Verilirse `items`/`critical`/`totals`/`brandSummary` bu dist bağlamına göre
    * filtrelenmiş halde döner.
@@ -163,7 +177,11 @@ export type WietnauerStockSnapshot = {
   };
   /** İlk bakış listesi: en önce bitecek SKU'lar. */
   critical: WietnauerStockSkuRow[];
-  /** Risk sıralı SKU listesi; UI için 200 satırla sınırlandırılır. */
+  /**
+   * Risk sıralı tam SKU listesi (md38: 200 satır sınırı kaldırıldı — UI
+   * client-side pagination ile tüketir). Sınır artık yok; büyüklük dist
+   * scope'una göre değişir (portföy görünümünde SKU × dist kombinasyonu).
+   */
   items: WietnauerStockSkuRow[];
   brandSummary: WietnauerStockBrandSummary[];
   quality: {
@@ -233,6 +251,69 @@ function daysBetween(fromIsoDate: string | null, toDate: Date): number | null {
   const from = new Date(`${fromIsoDate}T12:00:00`);
   if (Number.isNaN(from.getTime())) return null;
   return Math.max(0, Math.floor((toDate.getTime() - from.getTime()) / 86_400_000));
+}
+
+/**
+ * Talep/satış hızı penceresi — `dateFrom`/`dateTo` verilirse o aralığa göre,
+ * verilmezse mevcut varsayılan (son {@link DEMAND_WINDOW_DAYS} gün) hesaplanır.
+ *
+ * Stok BAKİYESİ (on-hand) bu pencereden ETKİLENMEZ — anlık kavram olarak
+ * `stock` CTE'sinde her zaman `sqlNow()` bazlı hesaplanır. Yalnızca satış
+ * hacmi/hızı (sold_qty_90d/180d, trend, mevsimsellik ay kovaları) bu
+ * pencereye göre yeniden hesaplanır.
+ */
+type DemandWindow = {
+  /** Custom aralık mı (dateFrom/dateTo geçerli) yoksa varsayılan mı. */
+  custom: boolean;
+  /** Pencere alt sınırı — SQL DATETIME ifadesi (dahil). */
+  startExpr: string;
+  /** Pencere üst sınırı (exclusive) — SQL DATETIME ifadesi. */
+  endExclusiveExpr: string;
+  /** "90g satış" / "son 30g" gibi alt-pencerelerin çapa noktası — SQL ifadesi. */
+  anchorEndExpr: string;
+  /** Toplam pencere uzunluğu (gün) — avgDemandInterval bölen'i. */
+  windowLengthDays: number;
+  /** sold_qty_90d bölen'i — custom aralık 90g'den kısaysa aralığa küçülür. */
+  salesWindowDays: number;
+  /** Cache key / API şeffaflığı için — custom ise YYYY-MM-DD, değilse null. */
+  from: string | null;
+  to: string | null;
+};
+
+function isValidIsoDate(value: string): boolean {
+  if (!ISO_DATE_RX.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime());
+}
+
+function resolveDemandWindow(dateFrom?: string | null, dateTo?: string | null): DemandWindow {
+  const defaultWindow: DemandWindow = {
+    custom: false,
+    startExpr: `DATEADD(day, -${DEMAND_WINDOW_DAYS}, ${sqlNow()})`,
+    endExclusiveExpr: `DATEADD(day, 1, ${sqlNow()})`,
+    anchorEndExpr: sqlNow(),
+    windowLengthDays: DEMAND_WINDOW_DAYS,
+    salesWindowDays: WINDOW_DAYS,
+    from: null,
+    to: null,
+  };
+  if (!dateFrom || !dateTo) return defaultWindow;
+  if (!isValidIsoDate(dateFrom) || !isValidIsoDate(dateTo)) return defaultWindow;
+  if (dateFrom > dateTo) return defaultWindow;
+
+  const lengthDays = (daysBetween(dateFrom, new Date(`${dateTo}T12:00:00`)) ?? 0) + 1;
+  if (lengthDays <= 0) return defaultWindow;
+
+  return {
+    custom: true,
+    startExpr: `CAST('${dateFrom}' AS DATE)`,
+    endExclusiveExpr: `DATEADD(day, 1, CAST('${dateTo}' AS DATE))`,
+    anchorEndExpr: `CAST('${dateTo}' AS DATE)`,
+    windowLengthDays: lengthDays,
+    salesWindowDays: Math.min(WINDOW_DAYS, lengthDays),
+    from: dateFrom,
+    to: dateTo,
+  };
 }
 
 function riskTierFor(daysLeft: number | null, forecastDailyQty: number, onHandQty: number): StockRiskTier {
@@ -352,7 +433,7 @@ function stockConfidenceFor(args: {
   };
 }
 
-function mapStockRow(row: RawStockRow): WietnauerStockSkuRow {
+function mapStockRow(row: RawStockRow, demandWindow: DemandWindow): WietnauerStockSkuRow {
   const onHandQty = num(row.on_hand_qty);
   const soldQty90d = num(row.sold_qty_90d);
   const soldQty180d = num(row.sold_qty_180d);
@@ -367,9 +448,12 @@ function mapStockRow(row: RawStockRow): WietnauerStockSkuRow {
   const leadTimeRaw = num(row.lead_time_days);
   const leadTimeDays = leadTimeRaw > 0 ? round(clamp(leadTimeRaw, 1, 60), 0) : DEFAULT_LEAD_TIME_DAYS;
   const leadTimeSource: LeadTimeSource = leadTimeRaw > 0 ? "dist-table" : "default";
-  const avgDailyQty = soldQty90d / WINDOW_DAYS;
+  // Custom talep penceresi WINDOW_DAYS'ten (90g) kısaysa sold_qty_90d de o
+  // ölçüde küçük gelir (dış WHERE aralığı sınırlıyor); bölen de küçülmezse
+  // avgDailyQty yapay şekilde düşük çıkar. `salesWindowDays` bunu telafi eder.
+  const avgDailyQty = soldQty90d / demandWindow.salesWindowDays;
   const avgDemandInterval =
-    demandDays180 > 0 ? DEMAND_WINDOW_DAYS / demandDays180 : null;
+    demandDays180 > 0 ? demandWindow.windowLengthDays / demandDays180 : null;
   const monthlyDemand = [
     num(row.month_0_qty),
     num(row.month_1_qty),
@@ -470,7 +554,10 @@ function mapStockRow(row: RawStockRow): WietnauerStockSkuRow {
   };
 }
 
-async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerStockSkuRow[]> {
+async function fetchStockRows(
+  distIdFilter: number | null,
+  demandWindow: DemandWindow,
+): Promise<WietnauerStockSkuRow[]> {
   const { brandTable, brandJoinCol, categoryTable, categoryJoinCol } = getBrandAndCategoryMeta();
   // Bölge etiketi tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP), Wietnauer
   // TBLDISTEKGRUP(TXTEKGRUP). (komuta/saha ile aynı desen.)
@@ -547,33 +634,39 @@ async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerSto
       GROUP BY LNGDISTKOD
     ),
     sales AS (
+      -- md42: talep/satış hızı penceresi dateFrom/dateTo verilirse o aralığa
+      -- (demandWindow.startExpr/endExclusiveExpr) sabitlenir; alt-pencereler
+      -- (90g/30g/ay kovaları) demandWindow.anchorEndExpr'e göre (varsayılanda
+      -- sqlNow(), custom'da dateTo) geriye sayılır. Dış WHERE zaten aralığı
+      -- sınırladığı için kısa aralıklarda 90g/30g toplamları doğal olarak
+      -- küçülür (bkz. mapStockRow / salesWindowDays telafisi).
       SELECT
         d.LNGURUNKOD AS sku_id,
         f.LNGDISTKOD AS dist_id,
         SUM(CASE
-          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -${WINDOW_DAYS}, ${sqlNow()})
+          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -${WINDOW_DAYS}, ${demandWindow.anchorEndExpr})
           THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1)
           ELSE 0
         END) AS sold_qty_90d,
         SUM(d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1)) AS sold_qty_180d,
         COUNT(DISTINCT CAST(f.TRHISLEMTARIHI AS DATE)) AS demand_days_180,
         SUM(CASE
-          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${demandWindow.anchorEndExpr})
           THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1)
           ELSE 0
         END) AS sold_qty_30d,
         SUM(CASE
-          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
-           AND f.TRHISLEMTARIHI < DATEADD(day, -30, ${sqlNow()})
+          WHEN f.TRHISLEMTARIHI >= DATEADD(day, -60, ${demandWindow.anchorEndExpr})
+           AND f.TRHISLEMTARIHI < DATEADD(day, -30, ${demandWindow.anchorEndExpr})
           THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1)
           ELSE 0
         END) AS sold_qty_prev_30d,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 0 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_0_qty,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 1 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_1_qty,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 2 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_2_qty,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 3 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_3_qty,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 4 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_4_qty,
-        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${sqlNow()}), MONTH(${sqlNow()}), 1)) = 5 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_5_qty
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 0 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_0_qty,
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 1 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_1_qty,
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 2 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_2_qty,
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 3 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_3_qty,
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 4 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_4_qty,
+        SUM(CASE WHEN DATEDIFF(month, DATEFROMPARTS(YEAR(f.TRHISLEMTARIHI), MONTH(f.TRHISLEMTARIHI), 1), DATEFROMPARTS(YEAR(${demandWindow.anchorEndExpr}), MONTH(${demandWindow.anchorEndExpr}), 1)) = 5 THEN d.DBLMIKTAR * ISNULL(d.DBLCEVRIM, 1) ELSE 0 END) AS month_5_qty
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMSDBELGEDETAY d
         ON d.LNGYIL = f.LNGYIL
@@ -581,8 +674,8 @@ async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerSto
        AND d.LNGDISTKOD = f.LNGDISTKOD
       WHERE f.BYTTUR = 0
         AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -${DEMAND_WINDOW_DAYS}, ${sqlNow()})
-        AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= ${demandWindow.startExpr}
+        AND f.TRHISLEMTARIHI < ${demandWindow.endExclusiveExpr}
         ${salesDistFilter}
       GROUP BY d.LNGURUNKOD, f.LNGDISTKOD
     ),
@@ -634,6 +727,9 @@ async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerSto
     LEFT JOIN dbo.${brandTable} b ON b.TXTKOD = u.${brandJoinCol}
     LEFT JOIN dbo.${categoryTable} c ON c.TXTKOD = u.${categoryJoinCol}
     ORDER BY
+      -- Yaklaşık ön-sıralama; kısa custom pencerelerde WINDOW_DAYS sabit
+      -- bölen kullanır (hafif yanlılık kabul edilir) — nihai sıralama JS
+      -- tarafında mapStockRow sonrası riskTier/daysLeft ile yapılır.
       CASE
         WHEN ISNULL(s.sold_qty_90d, 0) > 0 AND ISNULL(st.stock_end_qty, 0) > 0
           THEN ISNULL(st.stock_end_qty, 0) / NULLIF(ISNULL(s.sold_qty_90d, 0) / ${WINDOW_DAYS}.0, 0)
@@ -645,14 +741,16 @@ async function fetchStockRows(distIdFilter: number | null): Promise<WietnauerSto
   // Dist × SKU cartesian dolayısıyla yüksek satır sayısı: 287 SKU × ~21 dist
   // = ~6000. Filter yoksa bile taşımıyor.
   const result = await runReadOnly(sql, { limit: 20000, timeoutMs: 180_000 });
-  return result.rows.map(mapStockRow).sort((a, b) => {
-    const tierDelta = riskOrder(a.riskTier) - riskOrder(b.riskTier);
-    if (tierDelta !== 0) return tierDelta;
-    const aDays = a.daysLeft ?? Number.POSITIVE_INFINITY;
-    const bDays = b.daysLeft ?? Number.POSITIVE_INFINITY;
-    if (aDays !== bDays) return aDays - bDays;
-    return b.soldQty90d - a.soldQty90d;
-  });
+  return result.rows
+    .map((row) => mapStockRow(row, demandWindow))
+    .sort((a, b) => {
+      const tierDelta = riskOrder(a.riskTier) - riskOrder(b.riskTier);
+      if (tierDelta !== 0) return tierDelta;
+      const aDays = a.daysLeft ?? Number.POSITIVE_INFINITY;
+      const bDays = b.daysLeft ?? Number.POSITIVE_INFINITY;
+      if (aDays !== bDays) return aDays - bDays;
+      return b.soldQty90d - a.soldQty90d;
+    });
 }
 
 /**
@@ -790,14 +888,39 @@ export async function getWietnauerStokSnapshot(
      * bu kümeyle sınırlanır; kapsam dışı distId göz ardı edilir.
      */
     allowedDistKods?: number[] | null;
+    /**
+     * Şehir kapsamı — API sözleşmesi gereği kabul edilir ama STOK ekranına
+     * UYGULANMAZ. Envanter (depo stoğu, açık sipariş, tedarik süresi) bir
+     * distribütör/depo kavramıdır; müşteri-şehir boyutu taşımaz ve şehre
+     * bölünemez. Yalnızca sales-velocity alt-sorgusunu şehirle filtrelemek
+     * dist-geneli stoğa karşı yanıltıcı days-of-cover üretirdi. Şehir kısıtı
+     * dist-scope üzerinden dolaylı korunur (kullanıcının izinli dist'leri).
+     */
+    allowedCities?: string[] | null;
+    /**
+     * md42 — talep/satış hızı penceresi (YYYY-MM-DD, dahil aralık). İkisi de
+     * geçerli ve dateFrom <= dateTo değilse yok sayılır, varsayılan
+     * {@link DEMAND_WINDOW_DAYS} günlük pencereye düşer. Stok BAKİYESİ
+     * (on-hand) bu parametreden etkilenmez — yalnızca satış hızı/trend/
+     * mevsimsellik hesapları bu aralığa göre yeniden çekilir.
+     */
+    dateFrom?: string | null;
+    dateTo?: string | null;
   } = {},
 ): Promise<WietnauerStockSnapshot> {
   void options.strategicBrands;
+  void options.allowedCities;
+
+  const demandWindow = resolveDemandWindow(options.dateFrom, options.dateTo);
 
   // Cache stratejisi: full dataset ("all") tek sefer çekilir, dist filter'ı
   // runtime'da uygulanır. Bu sayede aynı dataset tüm dropdown seçimlerini
-  // besliyor, MSSQL'e 21 ayrı sorgu gitmiyor.
-  const cacheKey = `${CACHE_VERSION}-${WINDOW_DAYS}g-all`;
+  // besliyor, MSSQL'e 21 ayrı sorgu gitmiyor. Custom talep penceresi
+  // verilmediğinde cache key eskisiyle birebir aynı kalır (mevcut cache
+  // bozulmaz); verildiğinde aralık etiketi eklenir.
+  const cacheKey = demandWindow.custom
+    ? `${CACHE_VERSION}-${WINDOW_DAYS}g-all-${demandWindow.from}_${demandWindow.to}`
+    : `${CACHE_VERSION}-${WINDOW_DAYS}g-all`;
   const result = await withCache<{
     allRows: WietnauerStockSkuRow[];
     emptySnapshotTables: boolean;
@@ -807,7 +930,7 @@ export async function getWietnauerStokSnapshot(
     cacheKey,
     async () => {
       const [rows, emptySnapshotTables] = await Promise.all([
-        fetchStockRows(null),
+        fetchStockRows(null, demandWindow),
         snapshotTablesEmpty(),
       ]);
       return {
@@ -856,13 +979,21 @@ export async function getWietnauerStokSnapshot(
     generatedAt,
     demoDate: demoDate(),
     windowDays: WINDOW_DAYS,
+    demandRange: {
+      custom: demandWindow.custom,
+      from: demandWindow.from,
+      to: demandWindow.to,
+      days: demandWindow.windowLengthDays,
+    },
     distFilter,
     distributors,
     totals: buildTotals(filteredRows),
     critical: filteredRows
       .filter((r) => r.riskTier === "critical" || r.riskTier === "risk")
       .slice(0, 30),
-    items: filteredRows.slice(0, 200),
+    // md38: tam SKU listesi — UI (StockoutTable) client-side pagination
+    // uygular, artık burada kesme yok.
+    items: filteredRows,
     brandSummary: buildBrandSummary(filteredRows),
     quality: buildQuality(filteredRows, emptySnapshotTables),
   };

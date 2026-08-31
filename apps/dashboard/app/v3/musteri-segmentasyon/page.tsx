@@ -1,6 +1,10 @@
 import { getWietnauerSegment } from "@/lib/api";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import {
+  MusteriGrupPanel,
+  type MusteriGrupSegmentRow,
+} from "@/components/v3/segment/MusteriGrupPanel";
+import {
   EkSahaPanel,
   type EkSahaSegmentRow,
 } from "@/components/v3/segment/EkSahaPanel";
@@ -12,14 +16,22 @@ import {
   SegmentBrandCrossPanel,
   type SegmentBrandCell,
 } from "@/components/v3/segment/SegmentBrandCrossPanel";
+import {
+  IskontoBreakdownPanel,
+  type EkGrupIskontoRow,
+  type MusteriIskontoRow,
+} from "@/components/v3/segment/IskontoBreakdownPanel";
 
 export const metadata = { title: "Müşteri Segmentasyon · V3 · Insider" };
 
 type SegmentSnapshot = {
   generatedAt: string;
   demoDate: string | null;
-  ekSaha: EkSahaSegmentRow[];
+  musteriGrubu: MusteriGrupSegmentRow[];
   ekGrup: EkGrupSegmentRow[];
+  ekSaha: EkSahaSegmentRow[];
+  ekGrupIskonto: EkGrupIskontoRow[];
+  musteriIskonto: MusteriIskontoRow[];
   cross: {
     tipler: string[];
     markalar: string[];
@@ -30,15 +42,20 @@ type SegmentSnapshot = {
 /**
  * V3 Dashboard #3 — Müşteri Segmentasyon.
  *
- * Üç bağımsız segment boyutu yan yana + altta cross-segment heatmap.
+ * md24: üç bağımsız segment boyutu yan yana + altta cross-segment heatmap
+ * + iskonto kırılımı (md35).
  *
- *   A) Müşteri Tipi (Ek Saha 8)
+ *   A) Müşteri Grubu (TBLMUSTERIGRUP)
  *   B) Müşteri Ek Grubu (bayilik formatı)
- *   C) Cirosal Segment (Wietnauer'da boş olabilir → empty state)
+ *   C) Müşteri Tipi (Ek Saha 8)
  *   D) Cross: Müşteri Tipi × Marka heatmap
+ *   E) İskonto Kırılımı: Ek Grup / nokta (müşteri) bazında (md35)
  *
- * Layout: lg breakpoint'te 3 sütun, sm'de tek sütun. Cross panel her zaman
- * tam genişlikte altta.
+ * Cirosal segment (Wietnauer'da genelde boş) md32'den beri sayfada
+ * gösterilmiyor; snapshot'ta hâlâ mevcut ama burada tüketilmiyor.
+ *
+ * Layout: lg breakpoint'te 3 sütun, sm'de tek sütun. Cross panel ve iskonto
+ * kırılım paneli her zaman tam genişlikte altta.
  */
 export default async function V3MusteriSegmentasyonPage() {
   let snap: SegmentSnapshot | null = null;
@@ -54,8 +71,10 @@ export default async function V3MusteriSegmentasyonPage() {
       <V3PageHeader
         eyebrow="Dashboard 03"
         title="Müşteri Segmentasyon"
-        description="Müşteri Tipi (Ek Saha), Ek Grubu (bayilik formatı) ve Cirosal Segment — üç bağımsız boyut son 30 günlük ciro üzerinden yan yana. Altta Tip × Marka heatmap'i kanal-bazlı odaklanmayı gösterir."
-        dataNote="TBLMUSTERIEKSAHA · TBLMUSTERIEKGRUP · TBLCIROSALSEGMENTMUSTERI · TBLURUNGRUP"
+        contentKey="page.segment.title"
+        descKey="page.segment.desc"
+        description="Müşteri Grubu, Ek Grubu (bayilik formatı) ve Müşteri Tipi (Ek Saha 8) — üç bağımsız boyut son 30 günlük ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı."
+        dataNote="TBLMUSTERIGRUP · TBLMUSTERIEKGRUP · TBLMUSTERIEKSAHA · TBLEKSAHASECENEK · TBLURUNGRUP · TBLMSDFATURA.DBLISKONTOTUTARI"
         generatedAt={snap?.generatedAt}
       />
 
@@ -70,16 +89,21 @@ export default async function V3MusteriSegmentasyonPage() {
 
       {snap && (
         <>
-          {/* Üst sıra: 3 bağımsız segment boyutu yan yana. */}
-          {/* md32: cirosal segment kaldırıldı → 2 kırılım (md24'te 3'e çıkacak). */}
+          {/* Üst sıra: 3 bağımsız segment boyutu yan yana (md24). */}
           <div className="seg-triple-grid">
-            <EkSahaPanel rows={snap.ekSaha} />
+            <MusteriGrupPanel rows={snap.musteriGrubu} />
             <EkGrupPanel rows={snap.ekGrup} />
+            <EkSahaPanel rows={snap.ekSaha} />
           </div>
 
           {/* Alt sıra: tam genişlik cross-segment heatmap. */}
           <div className="seg-cross-wrap">
             <SegmentBrandCrossPanel data={snap.cross} />
+          </div>
+
+          {/* İskonto kırılımı: Ek Grup / nokta (müşteri) bazında (md35). */}
+          <div className="seg-cross-wrap">
+            <IskontoBreakdownPanel ekGrup={snap.ekGrupIskonto} musteri={snap.musteriIskonto} />
           </div>
         </>
       )}
@@ -102,6 +126,7 @@ export default async function V3MusteriSegmentasyonPage() {
         }
         .seg-cross-wrap {
           display: block;
+          margin-bottom: 16px;
         }
         .v3-error {
           background: var(--color-bad-bg, rgba(220, 38, 38, 0.05));

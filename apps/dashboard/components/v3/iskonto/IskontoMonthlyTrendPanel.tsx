@@ -6,6 +6,8 @@ import { formatCompact } from "@/components/komuta/format";
  * Son 12 ay × {iskonto toplamı (bar), iskonto oranı % (line overlay)}.
  * Tek SVG; iki eksen — sol: tutar (bar), sağ: % (line).
  */
+import { panelTitle, panelHidden } from "@/lib/content";
+
 export function IskontoMonthlyTrendPanel({
   points,
 }: {
@@ -16,11 +18,12 @@ export function IskontoMonthlyTrendPanel({
     iskontoOraniPct: number;
   }>;
 }) {
+  if (panelHidden("panel.iskonto.monthly")) return null;
   if (points.length === 0) {
     return (
       <div className="trend-panel">
         <div className="trend-head">
-          <div className="trend-title">Aylık İskonto Trendi</div>
+          <div className="trend-title">{panelTitle("panel.iskonto.monthly", "Aylık İskonto Trendi")}</div>
           <div className="trend-sub">Veri yok</div>
         </div>
       </div>
@@ -72,7 +75,7 @@ export function IskontoMonthlyTrendPanel({
     <div className="trend-panel">
       <div className="trend-head">
         <div>
-          <div className="trend-title">Aylık İskonto Trendi</div>
+          <div className="trend-title">{panelTitle("panel.iskonto.monthly", "Aylık İskonto Trendi")}</div>
           <div className="trend-sub">
             Son 12 ay · İskonto tutarı (bar) ve iskonto/ciro oranı (çizgi)
           </div>
