@@ -9,7 +9,9 @@ export function RepLeaderboard({
   reps: KomutaRep[];
   unit?: ValueUnit;
 }) {
-  const max = Math.max(1, ...reps.map((r) => r.ciro));
+  // Panel sözleşmesi "Top 10" — kaynak fazla satır dönse de ilk 10 gösterilir.
+  const topReps = reps.slice(0, 10);
+  const max = Math.max(1, ...topReps.map((r) => r.ciro));
   return (
     <div className="panel leaderboard">
       <div className="panel-header">
@@ -28,10 +30,10 @@ export function RepLeaderboard({
         </div>
         <div className="panel-meta">Son 30g · ciro sırası</div>
       </div>
-      {reps.length === 0 ? (
+      {topReps.length === 0 ? (
         <div className="empty-note">Temsilci verisi yok.</div>
       ) : (
-        reps.map((r) => {
+        topReps.map((r) => {
           const pct = (r.ciro / max) * 100;
           const tone = pct >= 70 ? "" : pct >= 40 ? " warn" : " bad";
           const pctTone = pct >= 70 ? "" : pct >= 40 ? "warn" : "bad";

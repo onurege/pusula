@@ -9,10 +9,17 @@ data/schema-v2.json
 data/schema-v2.enriched.json
 data/vectors/
 
-# Local SQLite mirror — populated by /api/map/sync, regenerable from MSSQL
+# Local SQLite mirror — populated by /api/map/sync, regenerable from MSSQL.
+# Pernod canlı verisi; bu repoda ASLA olmamalı.
 data/local.sqlite
 data/local.sqlite-shm
 data/local.sqlite-wal
+
+# FMCG demo SQLite — transient WAL/SHM dosyaları repo'ya girmesin
+# (data/fmcg-demo.sqlite ana dosya commit edilir, demo'nun çalışması için
+# clone sonrası seed gerekmesin).
+data/fmcg-demo.sqlite-shm
+data/fmcg-demo.sqlite-wal
 
 # Reports are local state for now (will become committed canonical
 # reports once we promote them; until then they are user/session output).
@@ -29,3 +36,18 @@ apps/dashboard/next-env.d.ts
 .idea
 *.log
 .claude/worktrees/
+
+# Wietnauer canlı SQLite mirror — GERÇEK müşteri verisi, repoda ASLA olmamalı
+# (regenerable: /api/map/sync ile MSSQL'den yeniden üretilir).
+data/wietnauer.sqlite
+data/wietnauer.sqlite-shm
+data/wietnauer.sqlite-wal
+
+# Geçici doğrulama/dump script'leri (session output)
+scratchpad/
+
+# Güvenlik denetim raporları — açık-açık listesi; production'a klonlanan
+# repoda bulunmamalı (yerelde saklanır).
+reports/
+tmp/
+apps/dashboard/.content-overrides/

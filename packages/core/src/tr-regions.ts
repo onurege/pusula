@@ -101,6 +101,29 @@ export async function regionForCity(
   return master.byProvince.get(norm)?.region ?? null;
 }
 
+/**
+ * Alias → kanonik (geojson'da bulunan) il adı eşlemesi.
+ *
+ * Master JSON tarihsel/alternatif isimleri de provinces listesinde tutar
+ * (örn. "AFYONKARAHISAR" ve "AFYON" ayrı entry). Customer.TXTSEHIR herhangi
+ * birini içerebilir. Ama tr-provinces.geojson'da TR'nin 81 ilinin sadece
+ * KANONİK adı var (TÜİK convention). Bu yüzden customer match'i sonrası
+ * canonical'a çevirmek gerek, yoksa polygon lookup başarısız → harita
+ * "bayisiz" gösterir.
+ */
+const ALIAS_TO_CANONICAL: Record<string, string> = {
+  AFYONKARAHISAR: "AFYON",
+  ICEL: "MERSIN",
+  "K.MARAS": "KAHRAMANMARAS",
+  KMARAS: "KAHRAMANMARAS",
+  URFA: "SANLIURFA",
+};
+
+/** Alias varsa geojson kanonik adına çevir. Yoksa girdiyi olduğu gibi döner. */
+export function canonicalProvince(norm: string): string {
+  return ALIAS_TO_CANONICAL[norm] ?? norm;
+}
+
 /** Sync versiyonu — master önceden load edilmişse hızlı. Yoksa null. */
 export function regionForCitySync(
   city: string | null | undefined,

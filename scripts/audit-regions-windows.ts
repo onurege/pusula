@@ -7,6 +7,36 @@
  */
 import { runReadOnly } from "../packages/core/src/index.js";
 
+type WindowName = "son" | "onceki";
+
+type DailyWindowRow = {
+  pencere: WindowName;
+  gun: string | Date;
+  satir: number;
+  ciro: number;
+};
+
+type WindowBucket = {
+  gun: string;
+  satir: number;
+  ciro: number;
+};
+
+type RegionWindowRow = {
+  pencere: WindowName;
+  satir: number;
+  ciro: number;
+  minTrh: string | Date | null;
+  maxTrh: string | Date | null;
+};
+
+type MonthlyTrendRow = {
+  yil: number;
+  ay: number;
+  satir: number;
+  ciro: number;
+};
+
 async function main() {
   // 1) Daily total invoiced amount in each of the two windows
   const sql1 = `
@@ -36,13 +66,12 @@ async function main() {
   `;
   const o1 = await runReadOnly(sql1, { limit: 200, timeoutMs: 120_000 });
 
-  const byWindow: Record<string, { gun: string; satir: number; ciro: number }[]> = { son: [], onceki: [] };
-  for (const r of o1.rows as any[]) {
-    const w = String(r.pencere);
-    byWindow[w].push({ gun: String(r.gun), satir: Number(r.satir), ciro: Number(r.ciro) });
+  const byWindow: Record<WindowName, WindowBucket[]> = { son: [], onceki: [] };
+  for (const r of o1.rows as DailyWindowRow[]) {
+    byWindow[r.pencere].push({ gun: String(r.gun), satir: Number(r.satir), ciro: Number(r.ciro) });
   }
 
-  const sum = (xs: { ciro: number }[]) => xs.reduce((s, x) => s + x.ciro, 0);
+  const sum = (xs: WindowBucket[]) => xs.reduce((s, x) => s + x.ciro, 0);
   console.log("=== Window totals (all regions) ===");
   console.log("son    days:", byWindow.son.length, "total ciro:", sum(byWindow.son).toLocaleString("tr-TR"));
   console.log("onceki days:", byWindow.onceki.length, "total ciro:", sum(byWindow.onceki).toLocaleString("tr-TR"));
@@ -87,7 +116,7 @@ async function main() {
   const o2 = await runReadOnly(sql2, { limit: 5, timeoutMs: 60_000 });
   console.log();
   console.log("=== IST-AVRUPA (TXTGRUP='60') raw ===");
-  for (const r of o2.rows as any[]) {
+  for (const r of o2.rows as RegionWindowRow[]) {
     console.log(`  ${r.pencere}: satir=${r.satir} ciro=${Number(r.ciro).toLocaleString("tr-TR")}  trh ${r.minTrh}..${r.maxTrh}`);
   }
 
@@ -108,7 +137,7 @@ async function main() {
   const o3 = await runReadOnly(sql3, { limit: 30, timeoutMs: 60_000 });
   console.log();
   console.log("=== Monthly trend (BYTTUR=0, BYTDURUM=0) ===");
-  for (const r of o3.rows as any[]) {
+  for (const r of o3.rows as MonthlyTrendRow[]) {
     console.log(`  ${r.yil}-${String(r.ay).padStart(2, "0")}  satir=${String(r.satir).padStart(6)}  ciro=${Number(r.ciro).toLocaleString("tr-TR")}`);
   }
 }

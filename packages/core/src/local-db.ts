@@ -1,20 +1,36 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
+import { getTenantConfig } from "./tenant/index.js";
 
 let dbInstance: Database.Database | null = null;
 let dbRoot: string | null = null;
+let dbFileName: string | null = null;
 
 /**
- * Open (or create) the local SQLite database next to the repo's data
- * folder. Cached for the process lifetime — better-sqlite3 is synchronous
- * and a single connection is the recommended pattern.
+ * Open (or create) the tenant's local SQLite database next to the repo's
+ * data folder. Cached for the process lifetime — better-sqlite3 is
+ * synchronous and a single connection is the recommended pattern.
+ *
+ * Tenant config'inden `sqliteFileName` okunur:
+ *   - Pernod: `data/local.sqlite` (default, legacy path)
+ *   - FMCG demo: `data/fmcg-demo.sqlite`
+ *
+ * TENANT env var değiştirilirse cached instance kapatılıp yenisi açılır —
+ * runtime switcher (Faz 3) için hazır.
  *
  * Schema is created idempotently on first open; safe to call from any
- * code path. The DB lives at <repoRoot>/data/local.sqlite by default.
+ * code path.
  */
 export function getLocalDb(repoRoot: string): Database.Database {
-  if (dbInstance && dbRoot === repoRoot) return dbInstance;
+  const tenant = getTenantConfig();
+  if (
+    dbInstance &&
+    dbRoot === repoRoot &&
+    dbFileName === tenant.sqliteFileName
+  ) {
+    return dbInstance;
+  }
   if (dbInstance) {
     dbInstance.close();
     dbInstance = null;
@@ -22,7 +38,7 @@ export function getLocalDb(repoRoot: string): Database.Database {
 
   const dataDir = path.join(repoRoot, "data");
   mkdirSync(dataDir, { recursive: true });
-  const dbPath = path.join(dataDir, "local.sqlite");
+  const dbPath = path.join(dataDir, tenant.sqliteFileName);
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
@@ -87,6 +103,10 @@ export function getLocalDb(repoRoot: string): Database.Database {
   // touch an existing table, so columns added after the initial schema must
   // be applied via ALTER TABLE guarded by pragma_table_info().
   ensureColumn(db, "map_customers", "kisa_ad", "TEXT");
+  // md9: harita aramasında ünvan yanında müşteri kodu (TXTKOD) ve takip kodu
+  // (TXTERPKOD) ile de eşleşme yapılabilsin diye sync sırasında doldurulur.
+  ensureColumn(db, "map_customers", "musteri_kodu", "TEXT");
+  ensureColumn(db, "map_customers", "takip_kodu", "TEXT");
   // Risk / activity recency fields, populated during sync. Letting these be
   // NULL is intentional — a customer with no recorded sale/visit yet should
   // show as "?" instead of "0 gün ago" (which would imply today).
@@ -131,6 +151,7 @@ export function getLocalDb(repoRoot: string): Database.Database {
 
   dbInstance = db;
   dbRoot = repoRoot;
+  dbFileName = tenant.sqliteFileName;
   return db;
 }
 
@@ -155,5 +176,6 @@ export function closeLocalDb(): void {
     dbInstance.close();
     dbInstance = null;
     dbRoot = null;
+    dbFileName = null;
   }
 }

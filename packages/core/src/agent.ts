@@ -223,6 +223,117 @@ const TOOLS: Tool[] = [
 const MAX_ITERATIONS = 8;
 const RETRIEVE_TOPK_CAP = 20;
 
+// ---------------------------------------------------------------------------
+// GUV-04 — sunucu-tarafı tablo erişim politikası (koda gömülü, LLM'e değil)
+//
+// `run_sql` tool'u önceden yalnızca "agent'ın bu oturumda retrieve_schema ile
+// gördüğü tablolar" kümesine karşı doğrulanıyordu (`allowedUpper`, aşağıda).
+// Bu kontrol prompt-injection'a karşı yetersiz: model kullanıcı isteğiyle ikna
+// edilip TBLKULLANICI gibi hassas bir tabloyu retrieve_schema ile arayıp
+// (örn. "kullanıcı" sorgusuyla) sonra run_sql'e verebilir — retrieve_schema
+// şema snapshot'ında görünen HER tabloyu döndürür, semantik alaka dışında bir
+// filtre yoktur.
+//
+// Bu yüzden run_sql'de iki BAĞIMSIZ, LLM'in kontrol edemeyeceği kapı var:
+//   1. DENYLIST — parola/login/kimlik içeren tablolar kesin yasak. Bu liste
+//      retrieve_schema'nın döndürdüğü hiçbir şeyden etkilenmez; regex ile
+//      FROM/JOIN sonrası tablo adı bu listeyle eşleşirse run_sql SQL'i MSSQL'e
+//      hiç göndermeden reddeder.
+//   2. ALLOWLIST — analitik/dashboard tabloları (mevcut Wietnauer/Komuta
+//      panellerinin kullandığı kümeyle aynı). Prefiks bazlı: yeni TBLMSD*,
+//      TBLURUN*, TBLDIST*, TBLMUSTERI*, TBLPMP* türevleri elle güncelleme
+//      olmadan geçer, ama listede olmayan bambaşka bir alan (örn. TBLLOG,
+//      TBLPARAMETRE, sistem/konfig tabloları) reddedilir.
+//
+// DENYLIST, ALLOWLIST'ten önce kontrol edilir ve her zaman kazanır — bir
+// tablo hem allow-prefix'e uysa bile denylist'teyse reddedilir.
+// ---------------------------------------------------------------------------
+
+/** Tam tablo adı (case-insensitive) — kesin yasak, prompt-injection'a karşı ilk kapı. */
+const TABLE_DENYLIST_EXACT = new Set<string>(
+  [
+    "TBLKULLANICI",
+    "TBLKULLANICIGRUP",
+    "TBLKULLANICIYETKI",
+    "TBLKULLANICILOG",
+    "TBLKULLANICIROL",
+  ].map((s) => s.toUpperCase()),
+);
+
+/** Ad kalıbı — parola/login/kimlik/yetki içeren her şeyi prefiks/substring ile yakala. */
+const TABLE_DENYLIST_PATTERNS: RegExp[] = [
+  /KULLANICI/i, // TBLKULLANICI* ve ERCVIEWTBLKULLANICIDIST* dahil
+  /PAROLA/i,
+  /SIFRE/i, // şifre (login secret) — normal tabloda TXTSIFRE gibi kolonlar da olabilir, tablo adında ise reddet
+  /PASSWORD/i,
+  /^ERCVIEW.*KULLANICI/i,
+  /LOGIN/i,
+  /YETKI/i, // yetki/rol tabloları
+];
+
+// Analitik/dashboard tablo prefiksleri — mevcut Wietnauer/Komuta panellerinin
+// (packages/core/src/wietnauer-*.ts, komuta.ts, finance-agent.ts) kullandığı
+// küme ile birebir. Prefiks eşleşmesi (startsWith) kullanıldığı için
+// TBLURUN → TBLURUNGRUP/TBLURUNEKGRUP, TBLDIST → TBLDISTGRUP/TBLDISTEKGRUP/
+// TBLDISTPERSONEL/TBLDISTGUNLUKSTOK, TBLMUSTERI → TBLMUSTERIGRUP gibi
+// türevleri ayrıca listelemeye gerek kalmadan kapsar.
+const TABLE_ALLOWLIST_PREFIXES = [
+  "TBLMSDFATURA",
+  "TBLMSDBELGEDETAY",
+  "TBLURUN",
+  "TBLDIST",
+  "TBLMUSTERI",
+  "TBLPMP",
+];
+
+/** Tablo adı (schema.table veya bare table) kara listede mi? Substring/pattern eşleşmesi de kapsar. */
+function isDenylisted(tableRef: string): boolean {
+  const bare = (tableRef.split(".").pop() ?? tableRef).toUpperCase();
+  if (TABLE_DENYLIST_EXACT.has(bare)) return true;
+  return TABLE_DENYLIST_PATTERNS.some((rx) => rx.test(bare));
+}
+
+/** Tablo adı analitik allowlist prefiksleriyle başlıyor mu? */
+function isAllowlisted(tableRef: string): boolean {
+  const bare = (tableRef.split(".").pop() ?? tableRef).toUpperCase();
+  return TABLE_ALLOWLIST_PREFIXES.some((prefix) => bare.startsWith(prefix));
+}
+
+/**
+ * GUV-04 sunucu-tarafı politika kapısı. `run_sql`'e giden SQL'deki her
+ * FROM/JOIN tablosunu denetler. Denylist her zaman kazanır; ardından
+ * allowlist'te olmayan HERHANGİ bir tablo da reddedilir (yalnızca
+ * retrieve_schema'nın gösterdiği tablolara güvenmek yeterli değil — bkz.
+ * yukarıdaki blok açıklaması).
+ *
+ * Döner: `{ ok: true }` veya `{ ok: false, reason, table }`.
+ *
+ * `export`: birim testler (Vitest) bu saf fonksiyonu Gemini'ye hiç
+ * dokunmadan doğrudan çağırabilsin diye — güvenlik-kritik mantık network
+ * bağımlılığı olmadan test edilebilir olmalı.
+ */
+export function checkTablePolicy(referenced: string[]): { ok: true } | { ok: false; reason: string; table: string } {
+  for (const ref of referenced) {
+    if (isDenylisted(ref)) {
+      return {
+        ok: false,
+        table: ref,
+        reason: `Bu tabloya erişim yok: ${ref}`,
+      };
+    }
+  }
+  for (const ref of referenced) {
+    if (!isAllowlisted(ref)) {
+      return {
+        ok: false,
+        table: ref,
+        reason: `Bu tabloya erişim yok: ${ref} (analitik allowlist dışında)`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
 export async function runAgent(userPrompt: string): Promise<AgentResult> {
   const contents: Content[] = [
     { role: "user", parts: [{ text: userPrompt }] },
@@ -411,12 +522,41 @@ export async function runAgent(userPrompt: string): Promise<AgentResult> {
           });
         } else if (name === "run_sql") {
           const sql = String(args.sql ?? "");
+          const referenced = extractTableRefs(sql);
+
+          // GUV-04 — sunucu-tarafı, koda gömülü tablo politikası. Bu kontrol
+          // retrieve_schema'nın bu oturumda ne döndürdüğünden TAMAMEN
+          // bağımsızdır: model prompt-injection ile ikna edilip TBLKULLANICI
+          // gibi bir tabloyu retrieve_schema ile görmüş ve `allowedUpper`'a
+          // eklenmiş olsa bile, burada denylist/allowlist yine de reddeder.
+          // Aşağıdaki `allowedUpper` kontrolü (retrieve-schema pre-validation)
+          // hâlâ ayrıca çalışır — bu sadece halüsinasyon tablolarını yakalar,
+          // güvenlik sınırı DEĞİLDİR.
+          const policy = checkTablePolicy(referenced);
+          if (!policy.ok) {
+            steps.push({
+              kind: "tool_result",
+              tool: name,
+              ok: false,
+              summary: `Policy: ${policy.reason}`,
+            });
+            responseParts.push({
+              functionResponse: {
+                name,
+                response: {
+                  error: policy.reason,
+                  hint:
+                    "Bu tablo güvenlik politikası gereği kapalı. Başka bir analitik tablo (satış/ürün/distribütör/müşteri) ile devam et.",
+                },
+              },
+            });
+            continue;
+          }
 
           // Pre-validate referenced tables against everything the agent has
           // retrieved so far. This catches hallucinated names without paying
           // a MSSQL round-trip (and prevents the model from trying random
           // table names like TBLSATIS / TBLSATISFATURADETAY on every loop).
-          const referenced = extractTableRefs(sql);
           const unknown = referenced.filter((t) => !allowedUpper.has(t.toUpperCase()));
           if (unknown.length > 0) {
             steps.push({
@@ -680,7 +820,7 @@ function formatVal(v: unknown): string {
  * with optional aliases. Nested parens (subqueries) are tolerated because
  * the regex matches occurrences anywhere in the string.
  */
-function extractTableRefs(sql: string): string[] {
+export function extractTableRefs(sql: string): string[] {
   const stripped = sql.replace(/--[^\n]*/g, "").replace(/\/\*[\s\S]*?\*\//g, "");
 
   // CTE names declared in WITH ... AS (...) — must not be flagged as tables.

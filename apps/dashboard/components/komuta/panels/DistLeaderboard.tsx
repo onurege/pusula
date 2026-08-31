@@ -17,12 +17,12 @@ export function DistLeaderboard({
           <span className="icon">🏢</span> Top Distribütörler
           <InfoHint
             title="Distribütör sıralaması"
-            source="TBLMSDFATURA × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
             window="Son 30 gün"
             base="SUM(DBLNETTUTAR) her distribütör için + COUNT fatura"
             notes={[
               "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0",
-              "Bölge etiketi (TBLDISTGRUP.TXTAD) liste satırında görünür",
+              "Bölge etiketi (TBLDISTEKGRUP.TXTAD) liste satırında görünür",
               "Top 10; sıralama ciro DESC",
             ]}
           />

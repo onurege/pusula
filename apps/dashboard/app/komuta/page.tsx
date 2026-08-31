@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import type {
   KomutaHeatmapRow,
   KomutaKpiCard,
@@ -15,45 +15,88 @@ import type {
   ProductTier,
   ValueUnit,
 } from "@/lib/api";
-import { getKomutaSnapshot } from "@/lib/api";
+import { getKomutaSnapshot, getKomutaFacets, type KomutaFacets } from "@/lib/api";
+import { KomutaFilterDropdowns } from "@/components/komuta/KomutaFilterDropdowns";
+import { KomutaPeriyotDropdown } from "@/components/komuta/KomutaPeriyotDropdown";
+import { getContentMap, t, panelTitle, panelHidden } from "@/lib/content";
 import { FinanceAgentLauncher } from "@/components/komuta/FinanceAgentLauncher";
 import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
 import { CalendarChart } from "@/components/komuta/CalendarChart";
 import { InfoHint } from "@/components/komuta/InfoHint";
 import { TurkeyMapPolygon } from "@/components/komuta/TurkeyMapPolygon";
 import { UnitToggle } from "@/components/komuta/UnitToggle";
+import { CustomerTypeBrandPanel } from "@/components/komuta/CustomerTypeBrandPanel";
 
-export const dynamic = "force-dynamic";
+// `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
+// böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
 export const metadata = {
-  title: "Komuta Köprüsü · UNIQUE AI Reports",
+  title: "Komuta · Insider",
 };
 
 type Props = {
   searchParams: Promise<{
     refresh?: string;
     reel?: string;
-    otv?: string;
     unit?: string;
+    bolge?: string;
+    kanal?: string;
+    urunGrup?: string;
+    periyot?: string;
   }>;
 };
+
+/** Global Periyot (?periyot) → Kanal Mix trend penceresi. p12 = varsayılan. */
+type PeriodMonths = 3 | 6 | 12 | "ytd";
+function periyotToMonths(p: string | null): PeriodMonths {
+  return p === "p3" ? 3 : p === "p6" ? 6 : p === "ytd" ? "ytd" : 12;
+}
 
 export default async function KomutaPage({ searchParams }: Props) {
   const sp = await searchParams;
   const forceRefresh = sp.refresh === "1";
   const reelTL = sp.reel === "1";
-  const otvNet = sp.otv === "1";
   const unit: ValueUnit = sp.unit === "9le" ? "9le" : "tl";
+  const bolge = sp.bolge?.trim() || null;
+  const kanal = sp.kanal?.trim() || null;
+  const urunGrup = sp.urunGrup?.trim() || null;
+  const periyot = sp.periyot?.trim() || "p12";
+  const periodMonths = periyotToMonths(periyot);
+  // md2 — filtre dropdown seçenekleri (hataya toleranslı; alınamazsa boş bar).
+  let facets: KomutaFacets = { bolgeler: [], kanallar: [], urunGruplari: [] };
+  try {
+    facets = await getKomutaFacets();
+  } catch {
+    facets = { bolgeler: [], kanallar: [], urunGruplari: [] };
+  }
   let snap: KomutaSnapshot;
   try {
     snap = await getKomutaSnapshot({
       refresh: forceRefresh,
       reelTL,
-      otvNet,
       unit,
+      bolge,
+      kanal,
+      urunGrup,
     });
-  } catch {
+  } catch (e) {
+    // Oturum düşmüşse API 401/403 döner → 404 değil, login'e yönlendir.
+    // (redirect() NEXT_REDIRECT fırlatır; catch dışına propagate eder.)
+    if (e instanceof Error && /API 40[13]/.test(e.message)) redirect("/login");
     notFound();
   }
+
+  // Header açıklaması — aktif filtreleri (KPI'ları GERÇEKTEN daraltan bölge /
+  // grup kırılımı / ürün grubu) gerçek facet etiketleriyle yansıtır. Hiç filtre
+  // yoksa "Tüm Distribütörler". Periyot yalnız Kanal Mix trendini sürdüğü için
+  // 30g KPI başlığına katılmaz (yanıltmasın).
+  const kanalAd = kanal ? (facets.kanallar.find((k) => k.kod === kanal)?.ad ?? kanal) : null;
+  const urunAd = urunGrup ? (facets.urunGruplari.find((u) => u.kod === urunGrup)?.ad ?? urunGrup) : null;
+  const activeFilters = [
+    bolge ? `Bölge: ${bolge}` : null,
+    kanalAd ? `Grup: ${kanalAd}` : null,
+    urunAd ? `Ürün: ${urunAd}` : null,
+  ].filter(Boolean) as string[];
+  const scopeLabel = activeFilters.length > 0 ? activeFilters.join(" · ") : "Tüm Distribütörler";
 
   return (
     <>
@@ -61,24 +104,52 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} otvNet={snap.otvNet} />
-        <FilterBar reelTL={snap.reelTL} otvNet={snap.otvNet} />
-        {snap.demoDate && <DemoBanner date={snap.demoDate} />}
+        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} demo={!!snap.demoDate} scopeLabel={scopeLabel} />
+        <FilterBar reelTL={snap.reelTL} facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} periyot={periyot} />
         {snap.reelTL && <ReelTlBanner />}
-        {snap.otvNet && <OtvNetBanner avgRate={snap.otvAvgRate} reelActive={snap.reelTL} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
             şeridi öncesi konumlandırılır ki sayfaya giren göz hemen
-            "bu sabahın hikâyesi" cümlesini yakalasın. */}
-        {snap.brief && <AiInsightBar brief={snap.brief} />}
+            "bu sabahın hikâyesi" cümlesini yakalasın. Brief üretilemezse
+            sessizce kaybolmasın → fallback mesaj. */}
+        {snap.brief && snap.brief.trim().length >= 50 ? (
+          <AiInsightBar brief={snap.brief} />
+        ) : (
+          <div className="ai-brief-empty">
+            <span className="ai-brief-empty-icon">🤖</span>
+            <div>
+              <strong>Günün AI yorumu üretilemedi.</strong>{" "}
+              <span className="ai-brief-empty-sub">
+                Gemini servisi yanıt vermedi (network / API key / timeout).
+                Sayfayı{" "}
+                <a href="/komuta?refresh=1" className="ai-brief-empty-link">
+                  ?refresh=1 ile yenile
+                </a>{" "}
+                veya API server log'larına bak.
+              </span>
+            </div>
+          </div>
+        )}
         <KpiStrip kpis={snap.kpis} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
 
         <div className="main-grid">
-          <TurkeyMapPolygon regions={snap.regions} />
-          <ChannelMixChart rows={snap.channelMonthly} unit={snap.unit} />
+          {!panelHidden("panel.cockpit.map") && (
+            <TurkeyMapPolygon regions={snap.regions} />
+          )}
+          {!panelHidden("panel.cockpit.channelmonthly") && (
+            <ChannelMixChart
+              rows={snap.channelMonthly}
+              unit={snap.unit}
+              title={panelTitle("panel.cockpit.channelmonthly", "Kanal Mix")}
+              periodMonths={periodMonths}
+              enablePieView
+            />
+          )}
         </div>
 
-        <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} />
+        {!panelHidden("panel.cockpit.calendar") && (
+          <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} />
+        )}
 
         <div className="battle-grid">
           {/* "Yaklaşan Pik" yerine Pernod Müşteri Tipi (ek-saha tabanlı)
@@ -86,18 +157,31 @@ export default async function KomutaPage({ searchParams }: Props) {
               TBLEKSAHATANIMLAMA "Müşteri Tipi" (LNGTAKIPKOD=8) sahasından
               türetilir — Pernod'un gerçek kanal tanımları (Perakende /
               On Trade / Otel / Tali Bayi / OPA ...). */}
-          <ChannelMixChart
-            rows={snap.channelByType}
-            unit={snap.unit}
-            title="Pernod Müşteri Tipi · Son 12 Ay"
-            icon="🍸"
-            category="müşteri tipi"
-            sourceNote="Pernod kanal segmentasyonu: TBLMUSTERIEKSAHA saha 8 (Müşteri Tipi) × TBLEKSAHASECENEK lookup. Perakende / On Trade / Otel / Tali Bayi / OPA — Pernod'un resmi kanal tanımları."
-          />
+          {!panelHidden("panel.cockpit.channeltype") && (
+            <ChannelMixChart
+              rows={snap.channelByType}
+              unit={snap.unit}
+              title={panelTitle("panel.cockpit.channeltype", "Müşteri Grup Kırılımı · Son 12 Ay")}
+              icon="🛒"
+              category="grup kırılımı"
+              sourceNote="Müşteri grup kırılımı: Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı (TXTGRUPKIRILIMKOD), son 12 ay."
+              enableTypeFilter
+              typeFilterLabel="Grup Kırılımı"
+            />
+          )}
           <MatrixPanel matrix={snap.matrix} unit={snap.unit} />
         </div>
 
         <HeatmapPanel heatmap={snap.heatmap} />
+
+        {/* md34 — Müşteri Grup Kırılımı × Marka: channeltype paneliyle aynı
+            kaynak (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM) × tenant.brandTable. */}
+        {!panelHidden("panel.cockpit.customertypebrand") && (
+          <CustomerTypeBrandPanel
+            data={snap.customerTypeBrand}
+            title={panelTitle("panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka")}
+          />
+        )}
 
         <div className="bottom-grid">
           <RepLeaderboard reps={snap.reps} unit={snap.unit} />
@@ -119,37 +203,36 @@ export default async function KomutaPage({ searchParams }: Props) {
 function Header({
   generatedAt,
   reelTL,
-  otvNet,
+  demo,
+  scopeLabel,
 }: {
   generatedAt: string;
   reelTL: boolean;
-  otvNet: boolean;
+  demo?: boolean;
+  scopeLabel: string;
 }) {
   const rel = formatRelative(generatedAt);
-  const modeLabel = [
-    reelTL ? "Reel TL" : null,
-    otvNet ? "ÖTV-net" : null,
-  ].filter(Boolean).join(" + ") || "Nominal TL · Brüt";
+  const modeLabel = reelTL ? "Reel TL" : "Nominal TL";
   const refreshHref = "/komuta?" + new URLSearchParams({
     refresh: "1",
     ...(reelTL ? { reel: "1" } : {}),
-    ...(otvNet ? { otv: "1" } : {}),
   }).toString();
   return (
     <header className="komuta-page-header">
       <div className="komuta-page-header-main">
         <div className="komuta-eyebrow">
           <span className="komuta-eyebrow-dot" />
-          Komuta Köprüsü
+          Komuta
         </div>
-        <h1 className="komuta-page-title">Operasyon Genel Görünümü</h1>
+        <h1 className="komuta-page-title">{t(getContentMap(), "page.cockpit.title", "Operasyon Genel Görünümü")}</h1>
         <p className="komuta-page-desc">
           Univera Distribütör Operasyonu · CEO / Satış Direktörü görünümü ·{" "}
-          <strong>Tüm Distribütörler</strong> · Son 30 Gün ·{" "}
+          <strong>{scopeLabel}</strong> · Son 30 Gün ·{" "}
           <span style={{ color: "#6366f1" }}>{modeLabel}</span>
         </p>
       </div>
       <div className="komuta-page-header-actions">
+        {demo && <DemoBanner />}
         <span className="live-indicator">
           <span className="live-dot" />
           {rel}
@@ -162,48 +245,37 @@ function Header({
   );
 }
 
-function FilterBar({ reelTL, otvNet }: { reelTL: boolean; otvNet: boolean }) {
-  // Toggle'lar birbirine kombine olabilir — URL'i mevcut state üstüne ekle/çıkar
-  const reelHref = "/komuta?" + new URLSearchParams({
-    ...(reelTL ? {} : { reel: "1" }), // kapalıysa aç
-    ...(otvNet ? { otv: "1" } : {}),
-  }).toString().replace(/^$/, "");
-  const otvHref = "/komuta?" + new URLSearchParams({
-    ...(reelTL ? { reel: "1" } : {}),
-    ...(otvNet ? {} : { otv: "1" }), // kapalıysa aç
-  }).toString().replace(/^$/, "");
+function FilterBar({
+  reelTL,
+  facets,
+  bolge,
+  kanal,
+  urunGrup,
+  periyot,
+}: {
+  reelTL: boolean;
+  facets: KomutaFacets;
+  bolge: string | null;
+  kanal: string | null;
+  urunGrup: string | null;
+  periyot: string;
+}) {
+  const reelHref = reelTL ? "/komuta" : "/komuta?reel=1";
 
   return (
     <div className="filter-bar">
-      <span className="filter-chip active">Bölge: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Kanal: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Ürün Grubu: Tümü <span className="caret">▼</span></span>
-      <span className="filter-chip">Periyot: Son 30 gün <span className="caret">▼</span></span>
-      <span className="filter-chip">Karşılaştır: Geçen Yıl Aynı Dönem <span className="caret">▼</span></span>
+      <KomutaFilterDropdowns facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} />
+      <KomutaPeriyotDropdown periyot={periyot} />
       <span className="filter-spacer" />
       <div className="toggle-group">
         <Link
-          href={reelHref === "/komuta?" ? "/komuta" : reelHref}
+          href={reelHref}
           className={`toggle toggle-link${reelTL ? " on" : ""}`}
           title="Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir"
           prefetch={false}
         >
           <span className="switch" /> Reel TL (TÜFE)
         </Link>
-        <Link
-          href={otvHref === "/komuta?" ? "/komuta" : otvHref}
-          className={`toggle toggle-link${otvNet ? " on" : ""}`}
-          title="Tüm ciro değerlerinden ÖTV (Özel Tüketim Vergisi) düşülmüş net görünüm"
-          prefetch={false}
-        >
-          <span className="switch" /> ÖTV-net görünüm
-        </Link>
-        <span
-          className="toggle on"
-          title="Takvim hizalı kıyas — calendar/tr-2026.json üzerinden"
-        >
-          <span className="switch" /> Takvim hizalı
-        </span>
         <UnitToggle />
       </div>
     </div>
@@ -213,6 +285,7 @@ function FilterBar({ reelTL, otvNet }: { reelTL: boolean; otvNet: boolean }) {
 // -- KPI STRIP ---------------------------------------------------------------
 
 function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
+  if (panelHidden("panel.cockpit.kpistrip")) return null;
   if (!kpis || kpis.length === 0) {
     return <div className="empty-note">KPI verisi alınamadı.</div>;
   }
@@ -221,7 +294,7 @@ function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
   return (
     <div className="kpi-strip-wrap">
       <div className="kpi-strip-head">
-        <span className="kpi-strip-label">Son 30 gün özet</span>
+        <span className="kpi-strip-label">{panelTitle("panel.cockpit.kpistrip", "Son 30 gün özet")}</span>
         <InfoHint
           title="KPI hesaplaması"
           source="TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (9L için)"
@@ -236,13 +309,14 @@ function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
         />
       </div>
       <div className="kpi-strip">
-        {kpis.map((k, i) => (
+        {kpis.map((k, i) =>
+          panelHidden(`kpi.cockpit.${k.id}`) ? null : (
           <div
             key={k.id}
             className="kpi-card"
             style={{ ["--accent" as string]: accents[i] ?? "#6366f1" }}
           >
-            <div className="kpi-label">{k.label}</div>
+            <div className="kpi-label">{panelTitle(`kpi.cockpit.${k.id}`, k.label)}</div>
             <div className="kpi-value"><KpiValue k={k} /></div>
             <div className="kpi-meta">
               {k.delta != null && (
@@ -292,25 +366,12 @@ function KpiValue({ k }: { k: KomutaKpiCard }) {
 
 // -- DEMO MODE BANNER --------------------------------------------------------
 
-function DemoBanner({ date }: { date: string }) {
-  // YYYY-MM-DD → "17 Nis 2026" gibi okunaklı
-  const monthsTR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
-  const [y, m, d] = date.split("-");
-  const pretty = `${Number(d)} ${monthsTR[Number(m) - 1] ?? m} ${y}`;
+function DemoBanner() {
   return (
-    <div className="demo-banner">
-      <div className="demo-banner-icon">🧪</div>
-      <div className="demo-banner-text">
-        <strong>Demo modu</strong> · Tüm hesaplamalar <strong>{pretty}</strong>{" "}
-        tarihini bugün kabul ediyor.{" "}
-        <span style={{ color: "#78716c" }}>
-          Pilot DB'de veri akışı bu tarihte kesildiği için sabit tutuldu — canlıya
-          geçince <code>.env</code> içindeki <code>DEMO_DATE</code> satırı
-          kaldırılır, tüm proje (komuta, radar, foresight, harita, agent) gerçek
-          tarihe döner.
-        </span>
-      </div>
-    </div>
+    <span className="demo-badge" title="Demo modu — örnek veri">
+      <span className="demo-badge-dot" />
+      Demo modu
+    </span>
   );
 }
 
@@ -330,36 +391,6 @@ function ReelTlBanner() {
       </div>
       <Link href="/komuta" className="reel-banner-cta" prefetch={false}>
         Nominal TL'ye dön →
-      </Link>
-    </div>
-  );
-}
-
-function OtvNetBanner({
-  avgRate,
-  reelActive,
-}: {
-  avgRate: number | null;
-  reelActive: boolean;
-}) {
-  const ratePct = avgRate != null ? (avgRate * 100).toFixed(0) : "?";
-  return (
-    <div className="otv-banner">
-      <div className="otv-banner-icon">🧾</div>
-      <div className="otv-banner-text">
-        <strong>ÖTV-net görünümü aktif</strong> · Tüm ciro değerlerinden ÖTV
-        (Özel Tüketim Vergisi) düşüldü.{" "}
-        <span style={{ color: "#78716c" }}>
-          Ürün grubu bazında oran uygulandı; KPI ve özet metrikler için ağırlıklı
-          ortalama <strong style={{ color: "#16a34a" }}>%{ratePct}</strong>.
-        </span>
-      </div>
-      <Link
-        href={reelActive ? "/komuta?reel=1" : "/komuta"}
-        className="otv-banner-cta"
-        prefetch={false}
-      >
-        Brüt görünüme dön →
       </Link>
     </div>
   );
@@ -506,11 +537,11 @@ function TurkeyMap({ regions }: { regions: KomutaRegionRow[] }) {
           <span className="icon">🗺️</span> Türkiye + KKTC · Bölge × YoY
           <InfoHint
             title="Bölge YoY hesaplaması"
-            source="TBLMSDFATURA × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
             window="Son 30 gün (TRHISLEMTARIHI ≥ DATEADD(day,-30,GETDATE())) vs -395..-365g (geçen yıl aynı 30g)"
             base="SUM(DBLNETTUTAR) bölge başına"
             notes={[
-              "Bölge = TBLDISTGRUP.TXTAD; JOIN dg.TXTKOD = d.TXTGRUP üzerinden bağlanır",
+              "Bölge = TBLDISTEKGRUP.TXTAD; JOIN dg.TXTKOD = d.TXTEKGRUP üzerinden bağlanır",
               "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0 (aktif satış + aktif dist)",
               "deltaPct = (son − önceki) / önceki × 100; önceki 0 ise null",
             ]}
@@ -1096,11 +1127,12 @@ function MatrixPanel({
   matrix: KomutaMatrixRow[];
   unit: ValueUnit;
 }) {
+  if (panelHidden("panel.cockpit.matrix")) return null;
   return (
     <div className="panel matrix-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">📋</span> Ürün Grubu × Dönem · Net Ciro Karşılaştırma
+          <span className="icon">📋</span> {panelTitle("panel.cockpit.matrix", "Ürün Grubu × Dönem")}
           <InfoHint
             title="Matrix hesaplaması"
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP"
@@ -1110,10 +1142,11 @@ function MatrixPanel({
               "Detay ciro fatura toplamından ~%5-15 farklı; her dönem için fatura/detay oranı (PeriodScales) hesaplanıp çarpılır",
               "TBLURUNGRUP join'inde LNGDISTKOD=u.LNGDISTKOD ekleme yapma (her ikisi NULL→JOIN boşalır)",
               "Reel TL modunda her dönem TÜFE multiplier'ı uygulanır",
+              "Top 8 grup + \"Diğer\" (kalanların toplamı) + dip \"Toplam\" satırı",
             ]}
           />
         </div>
-        <div className="panel-meta">Top 8 grup</div>
+        <div className="panel-meta">Top 8 + Diğer + Toplam</div>
       </div>
       {matrix.length === 0 ? (
         <div className="empty-note">Ürün grubu verisi yok.</div>
@@ -1132,10 +1165,13 @@ function MatrixPanel({
           </thead>
           <tbody>
             {matrix.map((row) => (
-              <tr key={row.grup}>
+              <tr
+                key={row.grup}
+                className={row.isTotal ? "matrix-row-total" : row.isOther ? "matrix-row-other" : undefined}
+              >
                 <td title={row.grup}>
                   {truncate(row.grup, 28)}
-                  <TierBadge tier={row.tier} />
+                  {!row.isOther && !row.isTotal && <TierBadge tier={row.tier} />}
                 </td>
                 <td className="matrix-cell-current"><Val n={row.buAy} unit={unit} /></td>
                 <td><Val n={row.gecenAy} unit={unit} /></td>
@@ -1149,7 +1185,7 @@ function MatrixPanel({
                   )}
                 </td>
                 <td><Val n={row.ikiYilOnce} unit={unit} /></td>
-                <td>{trendEmoji(row.trend)}</td>
+                <td>{row.isTotal ? "Σ" : trendEmoji(row.trend)}</td>
               </tr>
             ))}
           </tbody>
@@ -1162,20 +1198,21 @@ function MatrixPanel({
 // -- HEATMAP -----------------------------------------------------------------
 
 function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
+  if (panelHidden("panel.cockpit.heatmap")) return null;
   if (heatmap.length === 0) return null;
   const grupHeaders = heatmap[0]?.cells.map((c) => c.grup) ?? [];
   return (
     <div className="panel heatmap-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🔥</span> Bölge × Ürün Grubu · YoY Değişim Heatmap
+          <span className="icon">🔥</span> {panelTitle("panel.cockpit.heatmap", "Bölge × Ürün Grubu · YoY Değişim Heatmap")}
           <InfoHint
             title="Heatmap YoY hesaplaması"
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP × TBLDIST × TBLDISTGRUP"
             window="Son 30g vs -395..-365g (geçen yıl aynı pencere)"
             base="SUM(DBLNETFIYAT × DBLMIKTAR) her bölge × her grup hücresi"
             notes={[
-              "Top 8 bölge × Top 6 ürün grubu (detay ciro toplamına göre)",
+              "Top 8 bölge × Top 8 grup + Diğer (detay ciro toplamına göre)",
               "yoyPct = (son − önceki)/önceki × 100; bucket sınıfı (fire/hot/warm/flat/cool/cold) Komuta CSS palette'i",
               "Sadece kırmızı (cool/cold) hücreler tıklanabilir → Finans Agentı modal",
             ]}
@@ -1245,12 +1282,15 @@ function RepLeaderboard({
   reps: KomutaRep[];
   unit: ValueUnit;
 }) {
-  const max = Math.max(1, ...reps.map((r) => r.ciro));
+  if (panelHidden("panel.cockpit.reps")) return null;
+  // Panel sözleşmesi "Top 10" — kaynak fazla satır dönse de ilk 10 gösterilir.
+  const topReps = reps.slice(0, 10);
+  const max = Math.max(1, ...topReps.map((r) => r.ciro));
   return (
     <div className="panel leaderboard">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🏆</span> Top Satış Temsilcileri
+          <span className="icon">🏆</span> {panelTitle("panel.cockpit.reps", "Top Satış Temsilcileri")}
           <InfoHint
             title="Satış temsilcisi sıralaması"
             source="TBLMSDFATURA × TBLSATISTEMSILCISI × TBLDIST"
@@ -1264,10 +1304,10 @@ function RepLeaderboard({
         </div>
         <div className="panel-meta">Son 30g · ciro sırası</div>
       </div>
-      {reps.length === 0 ? (
+      {topReps.length === 0 ? (
         <div className="empty-note">Temsilci verisi yok.</div>
       ) : (
-        reps.map((r) => {
+        topReps.map((r) => {
           const pct = (r.ciro / max) * 100;
           const tone = pct >= 70 ? "" : pct >= 40 ? " warn" : " bad";
           const pctTone = pct >= 70 ? "" : pct >= 40 ? "warn" : "bad";
@@ -1302,20 +1342,21 @@ function DistLeaderboard({
   dists: KomutaTopDist[];
   unit: ValueUnit;
 }) {
+  if (panelHidden("panel.cockpit.dists")) return null;
   const max = Math.max(1, ...dists.map((d) => d.ciro));
   return (
     <div className="panel leaderboard">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🏢</span> Top Distribütörler
+          <span className="icon">🏢</span> {panelTitle("panel.cockpit.dists", "Top Distribütörler")}
           <InfoHint
             title="Distribütör sıralaması"
-            source="TBLMSDFATURA × TBLDIST × TBLDISTGRUP"
+            source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
             window="Son 30 gün"
             base="SUM(DBLNETTUTAR) her distribütör için + COUNT fatura"
             notes={[
               "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0",
-              "Bölge etiketi (TBLDISTGRUP.TXTAD) liste satırında görünür",
+              "Bölge etiketi (TBLDISTEKGRUP.TXTAD) liste satırında görünür",
               "Top 10; sıralama ciro DESC",
             ]}
           />
@@ -1359,11 +1400,12 @@ function PortfolioPanel({
   portfolio: KomutaPortfolioRow[];
   unit: ValueUnit;
 }) {
+  if (panelHidden("panel.cockpit.portfolio")) return null;
   return (
     <div className="panel brand-portfolio">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🥃</span> Ürün Grubu Portföyü · 2 Yıllık Yörünge
+          <span className="icon">🥃</span> {panelTitle("panel.cockpit.portfolio", "Ürün Grubu Portföyü · 2 Yıllık Yörünge")}
           <InfoHint
             title="Portföy hesaplaması"
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP"
@@ -1373,11 +1415,11 @@ function PortfolioPanel({
               "Tier sınıflandırma (luxury/premium/core/value) ürün grubu adına göre keyword eşleşmesi",
               "yoyPct = (bu − geçenYıl)/geçenYıl × 100",
               "twoYrPct = (bu − ikiYılÖnce)/ikiYılÖnce × 100",
-              "Reel TL/ÖTV modunda baz değerler multiplier ile bugünün TL'sine çevrilir",
+              "Reel TL modunda baz değerler TÜFE multiplier ile bugünün TL'sine çevrilir",
             ]}
           />
         </div>
-        <div className="panel-meta">Top 10 grup</div>
+        <div className="panel-meta">Top 8 grup + Diğer</div>
       </div>
       {portfolio.length === 0 ? (
         <div className="empty-note">Portföy verisi yok.</div>
@@ -1451,11 +1493,12 @@ function PortfolioPanel({
 // -- AI INSIGHT BAR ----------------------------------------------------------
 
 function AiInsightBar({ brief }: { brief: string }) {
+  if (panelHidden("panel.cockpit.brief")) return null;
   return (
     <div className="ai-insight">
       <div className="ai-icon">✨</div>
       <div className="ai-text">
-        <div className="ai-title">UNIQUE AI · Bu Sabahın Yorumu</div>
+        <div className="ai-title">{panelTitle("panel.cockpit.brief", "UNIQUE AI · Bu Sabahın Yorumu")}</div>
         <div className="ai-body" dangerouslySetInnerHTML={{ __html: brief }} />
       </div>
     </div>
@@ -1673,24 +1716,18 @@ const KOMUTA_CSS = `
 }
 
 /* REEL TL banner (toggle aktif olduğunda) */
-.komuta-root .demo-banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px; margin-bottom: 14px;
-  background: rgba(217, 119, 6, 0.08);
-  border: 1px solid rgba(217, 119, 6, 0.3);
-  border-left: 3px solid #d97706;
-  border-radius: 6px;
-  font-size: 12px;
+.komuta-root .demo-badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px;
+  background: rgba(217, 119, 6, 0.10);
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 999px;
+  font-size: 11px; font-weight: 600; color: #b45309;
+  letter-spacing: 0.2px; white-space: nowrap;
 }
-.komuta-root .demo-banner-icon { font-size: 16px; flex-shrink: 0; }
-.komuta-root .demo-banner-text { flex: 1; color: #44403c; line-height: 1.5; }
-.komuta-root .demo-banner-text strong { color: #1c1917; font-weight: 600; }
-.komuta-root .demo-banner-text code {
-  font-family: var(--font-mono, monospace);
-  background: rgba(217, 119, 6, 0.12);
-  border: 1px solid rgba(217, 119, 6, 0.25);
-  padding: 1px 4px; border-radius: 3px; font-size: 11px;
-  color: #b45309;
+.komuta-root .demo-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #d97706; flex-shrink: 0;
 }
 
 .komuta-root .reel-banner {
@@ -1712,27 +1749,6 @@ const KOMUTA_CSS = `
   text-decoration: none;
 }
 .komuta-root .reel-banner-cta:hover { background: rgba(147, 51, 234, 0.28); }
-
-/* ÖTV-net banner (toggle aktif olduğunda) */
-.komuta-root .otv-banner {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px; margin-bottom: 14px;
-  background: linear-gradient(90deg, rgba(22, 163, 74, 0.12) 0%, rgba(22, 163, 74, 0.04) 100%);
-  border: 1px solid rgba(22, 163, 74, 0.3);
-  border-left: 3px solid #16a34a;
-  border-radius: 6px;
-  font-size: 12px;
-}
-.komuta-root .otv-banner-icon { font-size: 16px; flex-shrink: 0; }
-.komuta-root .otv-banner-text { flex: 1; color: #44403c; line-height: 1.5; }
-.komuta-root .otv-banner-text strong { color: #1c1917; font-weight: 600; }
-.komuta-root .otv-banner-cta {
-  flex-shrink: 0; padding: 5px 12px;
-  background: rgba(22, 163, 74, 0.18); border: 1px solid rgba(22, 163, 74, 0.4);
-  border-radius: 5px; font-size: 11px; color: #16a34a; font-weight: 500;
-  text-decoration: none;
-}
-.komuta-root .otv-banner-cta:hover { background: rgba(22, 163, 74, 0.28); }
 
 /* KPI STRIP */
 .komuta-root .kpi-strip-wrap { margin-bottom: 14px; }
@@ -2045,6 +2061,10 @@ const KOMUTA_CSS = `
 .komuta-root .matrix-table tr:last-child td { border-bottom: none; }
 .komuta-root .matrix-table tr:hover td { background: rgba(99, 102, 241, 0.04); }
 .komuta-root .matrix-cell-current { background: rgba(99, 102, 241, 0.06); color: #6366f1 !important; font-weight: 600; }
+.komuta-root .matrix-row-other td { color: #78716c; font-style: italic; }
+.komuta-root .matrix-row-other td:first-child { color: #78716c; font-weight: 500; }
+.komuta-root .matrix-row-total td { border-top: 1.5px solid #d6d3d1; background: #fafaf9; font-weight: 700; }
+.komuta-root .matrix-row-total td:first-child { color: #1c1917; font-weight: 700; }
 .komuta-root .delta-pill { display: inline-block; font-size: 10px; padding: 1px 5px; border-radius: 3px; margin-left: 4px; font-weight: 600; }
 .komuta-root .delta-pill.up { background: rgba(22, 163, 74, 0.15); color: #16a34a; }
 .komuta-root .delta-pill.down { background: rgba(220, 38, 38, 0.15); color: #dc2626; }
@@ -2167,8 +2187,7 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-v2,
 :root[data-theme="dark"] .komuta-root .filter-bar,
 :root[data-theme="dark"] .komuta-root .demo-banner,
-:root[data-theme="dark"] .komuta-root .reel-banner,
-:root[data-theme="dark"] .komuta-root .otv-banner {
+:root[data-theme="dark"] .komuta-root .reel-banner {
   background: var(--color-surface) !important;
   border-color: var(--color-border) !important;
   color: var(--color-fg) !important;
@@ -2274,7 +2293,6 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-banner-text strong,
 :root[data-theme="dark"] .komuta-root .demo-banner-text strong,
 :root[data-theme="dark"] .komuta-root .reel-banner-text strong,
-:root[data-theme="dark"] .komuta-root .otv-banner-text strong,
 :root[data-theme="dark"] .komuta-root .kpi-value,
 :root[data-theme="dark"] .komuta-root .panel-title,
 :root[data-theme="dark"] .komuta-root .upcoming-title,
@@ -2290,7 +2308,6 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .cal-banner-text,
 :root[data-theme="dark"] .komuta-root .demo-banner-text,
 :root[data-theme="dark"] .komuta-root .reel-banner-text,
-:root[data-theme="dark"] .komuta-root .otv-banner-text,
 :root[data-theme="dark"] .komuta-root .map-panel .legend-item,
 :root[data-theme="dark"] .komuta-root .matrix-table td,
 :root[data-theme="dark"] .komuta-root .upcoming-action-row,
@@ -2328,5 +2345,17 @@ const KOMUTA_CSS = `
 :root[data-theme="dark"] .komuta-root .matrix-table th,
 :root[data-theme="dark"] .komuta-root .bp-table th {
   border-bottom-color: var(--color-border) !important;
+}
+
+/* md16 — "Diğer" (katlanmış) ve "Toplam" (dip toplam) satırları */
+:root[data-theme="dark"] .komuta-root .matrix-row-other td {
+  color: var(--color-muted) !important;
+}
+:root[data-theme="dark"] .komuta-root .matrix-row-total td {
+  background: var(--color-surface-2) !important;
+  border-top-color: var(--color-border-strong, var(--color-border)) !important;
+}
+:root[data-theme="dark"] .komuta-root .matrix-row-total td:first-child {
+  color: var(--color-fg) !important;
 }
 `;

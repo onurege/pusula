@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { RefreshCw } from "lucide-react";
-import { runRadarApi } from "@/lib/api";
+import { runRadarApi } from "@/lib/api-actions";
 
 type Props = {
   radarId: string;

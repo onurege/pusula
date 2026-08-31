@@ -56,14 +56,75 @@ export type GenerateReportResponse = {
   savedId?: string;
 };
 
+/**
+ * API domain'lerini path'ten çıkar — her domain için ayrı `revalidateTag`
+ * çağrısı yapılabilir. Saha DB mirror'ı (SQLite) gece cron'da tazelendiği
+ * için RAM Data Cache 5 dk boyunca tutulur; bu sayede sayfa-to-sayfa geçiş
+ * 60sn yerine <1sn'ye düşer.
+ *
+ * Bilinçli olarak coarse-grained: `/api/map/*` hepsi tek "map" tag'i;
+ * GlobalRefreshButton tek `revalidateTag("map")` ile her şeyi tazeler.
+ */
+function inferCacheTag(path: string): string {
+  if (path.startsWith("/api/map")) return "map";
+  if (path.startsWith("/api/komuta")) return "komuta";
+  if (path.startsWith("/api/wietnauer")) return "wietnauer";
+  if (path.startsWith("/api/reports")) return "reports";
+  if (path.startsWith("/api/radars")) return "radar";
+  if (path.startsWith("/api/retrieve")) return "schema";
+  return "default";
+}
+
+const AUTH_COOKIE = "enroute_auth";
+
+/**
+ * Server component bağlamında gelen isteğin auth cookie'sini oku. Hono API'ye
+ * `Authorization: Bearer` olarak iletilir → sunucu-otoriter dist filtresi.
+ * Client bağlamında next/headers yoktur; sessizce null döner.
+ */
+async function readAuthToken(): Promise<string | null> {
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    return store.get(AUTH_COOKIE)?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const isReadOp = method === "GET" || method === "HEAD";
+  // refresh=1 query param → SQLite cache'i bypass eden istek; Next.js Data
+  // Cache'i de bypass etmeli ki taze sonuç dönsün.
+  const isForceRefresh = path.includes("refresh=1");
+
+  // Auth token varsa Bearer olarak ilet. Token'lı istekler kullanıcıya-özel
+  // (dist kullanıcı alt küme görür); Next Data Cache URL bazlı olduğundan
+  // token'lı okumalar CACHE'LENMEMELİ — aksi halde bir kullanıcının cevabı
+  // başkasına sızar. Bu yüzden token varken no-store zorlanır.
+  const token = await readAuthToken();
+
+  // Cache stratejisi:
+  //   - Yazma / refresh=1 / token'lı istek → no-store
+  //   - Diğer (anonim) okumalar → 5 dk revalidate + domain tag
+  const cacheConfig: RequestInit = isReadOp && !isForceRefresh && !token
+    ? {
+        next: {
+          revalidate: 300,
+          tags: [inferCacheTag(path)],
+        },
+      }
+    : { cache: "no-store" };
+
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
-    cache: "no-store",
+    ...cacheConfig,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -211,6 +272,11 @@ export type MapCustomer = {
   distKod: number | null;
   unvan: string;
   kisaAd: string | null;
+  /** Müşteri kodu (TXTKOD) — md9 harita aramasında ünvan yanında bununla da
+   *  eşleşme yapılır. */
+  musteriKodu: string | null;
+  /** Takip kodu (TXTERPKOD) — distribütör ERP eşleştirme kodu. */
+  takipKodu: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;
@@ -223,6 +289,10 @@ export type MapCustomer = {
   daysSinceLastVisit: number | null;
   ciro30: number;
   ciroPrev30: number;
+  /** md11 — üstteki dönem filtresiyle seçilen pencere (30/60/90 gün, varsayılan 30). */
+  activityDays: number;
+  /** md11 — `activityDays` penceresine göre hesaplanan ciro (haritada gösterilen birincil metrik). */
+  activityCiro: number;
   /** @deprecated Eski 4-tier alan. Yeni UI `riskScore.tier` kullanır. */
   riskTier: RiskTier;
   /** Composite Risk Score — 0..100 + bileşenler + sebepler. */
@@ -240,6 +310,8 @@ export async function listMapCustomers(params: {
   /** Composite Risk Score tier filter. */
   tier?: RiskTierV2;
   minDaysSinceVisit?: number;
+  /** md11 — üstteki dönem filtresi (30/60/90 gün). Verilmezse 30 (mevcut davranış). */
+  activityDays?: 30 | 60 | 90;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
@@ -251,6 +323,7 @@ export async function listMapCustomers(params: {
   if (params.riskTier) qp.set("riskTier", params.riskTier);
   if (params.tier) qp.set("tier", params.tier);
   if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
+  if (typeof params.activityDays === "number") qp.set("activityDays", String(params.activityDays));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
 }
@@ -277,6 +350,24 @@ export type MapRegion = {
   color: string;
   provinces: string[];
 };
+
+// Şehir bazlı YoY (son 30g vs geçen yıl aynı 30g) — /map view=city için.
+export type MapCityYoY = {
+  sehir: string;
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
+export async function listMapCityYoY(params: {
+  region?: string;
+} = {}): Promise<{ count: number; cities: MapCityYoY[] }> {
+  const qp = new URLSearchParams();
+  if (params.region) qp.set("region", params.region);
+  const qs = qp.toString();
+  return request(`/api/map/cities${qs ? `?${qs}` : ""}`);
+}
 
 export async function listMapRegions(params: {
   sehir?: string;
@@ -392,6 +483,16 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
+export type KomutaCityBreakdown = {
+  sehir: string;
+  /** Diacritic-strip normalize edilmiş il adı (örn. "İSTANBUL" → "ISTANBUL")
+   *  — geojson feature `properties.name`/`properties.shapeName` ile eşleşmek için. */
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
 export type KomutaRegionRow = {
   /** Klasik 7 bölge + Kıbrıs (Marmara/Ege/Akdeniz/İç Anadolu/Karadeniz/
    *  Doğu Anadolu/Güneydoğu Anadolu/Kıbrıs) — backend müşteri şehri →
@@ -404,6 +505,9 @@ export type KomutaRegionRow = {
   color: string;
   /** Bu bölgeye agrege edilen Pernod şehirlerinin listesi (debug/tooltip). */
   sehirler: string[];
+  /** Bölge içindeki her şehrin YoY kırılımı — Komuta haritası drill-down
+   *  modunda şehirler bu kırılımdan boyanır. */
+  cities: KomutaCityBreakdown[];
 };
 
 export type KomutaChannelSlice = {
@@ -442,6 +546,10 @@ export type KomutaMatrixRow = {
   ikiYilOnce: number;
   yoyPct: number | null;
   trend: "rocket" | "up" | "flat" | "down";
+  /** "Diğer" katlanmış satır (Top-8 dışı kalan ürün gruplarının toplamı). */
+  isOther?: boolean;
+  /** Dip toplam satırı (Top-8 + Diğer toplamı). */
+  isTotal?: boolean;
 };
 
 export type KomutaHeatmapCell = {
@@ -492,6 +600,27 @@ export type KomutaUpcomingEvent = {
   yoyImpact?: number;
 };
 
+/** md34 — Müşteri Tipi (Ek Saha 8) × Marka kırılımı, son 30g. Satırlar
+ *  müşteri tipi, sütunlar Top 8 marka + "Diğer"; her hücrede ciro + hacim. */
+export type KomutaCustomerTypeBrandCell = {
+  marka: string;
+  ciro: number;
+  miktar: number;
+};
+
+export type KomutaCustomerTypeBrandRow = {
+  musteriTipi: string;
+  cells: KomutaCustomerTypeBrandCell[];
+  /** Dip toplam satırı (tüm müşteri tiplerinin toplamı). */
+  isTotal?: boolean;
+};
+
+export type KomutaCustomerTypeBrandSnapshot = {
+  /** Sütun başlıkları: Top 8 marka (toplam ciroya göre) + "Diğer". */
+  markalar: string[];
+  rows: KomutaCustomerTypeBrandRow[];
+};
+
 /** TL (currency, ₺) ya da 9LE (9-Liter-Equivalent volume). Tüm value alanları
  *  bu birimde gelir; snapshot.unit alanı UI'da suffix formatlamasını sürer. */
 export type ValueUnit = "tl" | "9le";
@@ -499,8 +628,6 @@ export type ValueUnit = "tl" | "9le";
 export type KomutaSnapshot = {
   generatedAt: string;
   reelTL: boolean;
-  otvNet: boolean;
-  otvAvgRate: number | null;
   demoDate: string | null;
   /** Snapshot'taki tüm value'ların birimi — UI suffix'i bundan beslenir. */
   unit: ValueUnit;
@@ -517,6 +644,8 @@ export type KomutaSnapshot = {
   reps: KomutaRep[];
   topDists: KomutaTopDist[];
   portfolio: KomutaPortfolioRow[];
+  /** md34 — Müşteri Tipi × Marka kırılımı (ciro + hacim), son 30g. */
+  customerTypeBrand: KomutaCustomerTypeBrandSnapshot;
   brief?: string;
 };
 
@@ -524,17 +653,31 @@ export async function getKomutaSnapshot(
   options: {
     refresh?: boolean;
     reelTL?: boolean;
-    otvNet?: boolean;
     unit?: ValueUnit;
+    bolge?: string | null;
+    kanal?: string | null;
+    urunGrup?: string | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const qp = new URLSearchParams();
   if (options.refresh) qp.set("refresh", "1");
   if (options.reelTL) qp.set("reel", "1");
-  if (options.otvNet) qp.set("otv", "1");
   if (options.unit === "9le") qp.set("unit", "9le");
+  if (options.bolge) qp.set("bolge", options.bolge);
+  if (options.kanal) qp.set("kanal", options.kanal);
+  if (options.urunGrup) qp.set("urunGrup", options.urunGrup);
   const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
+}
+
+// md2 — Cockpit filtre dropdown seçenekleri (Bölge / Kanal / Ürün Grubu).
+export type KomutaFacets = {
+  bolgeler: { kod: string; ad: string }[];
+  kanallar: { kod: string; ad: string }[];
+  urunGruplari: { kod: string; ad: string }[];
+};
+export async function getKomutaFacets(): Promise<KomutaFacets> {
+  return request<KomutaFacets>("/api/komuta/facets");
 }
 
 // -- FINANS AGENTı ---------------------------------------------------------
@@ -550,6 +693,8 @@ export type FinanceFactor = {
 
 export type FinanceFacts = {
   region: string;
+  /** Eğer analiz tek bir ürün grubuna fokuslandıysa onun adı. */
+  productGroup?: string;
   buDonem: number;
   gecenYil: number;
   delta: number;
@@ -569,9 +714,12 @@ export type FinanceAnalysis = {
 
 export async function getFinanceAnalysis(
   region: string,
-  options: { refresh?: boolean } = {},
+  options: { refresh?: boolean; productGroup?: string } = {},
 ): Promise<FinanceAnalysis> {
-  const qs = options.refresh ? "?refresh=1" : "";
+  const qp = new URLSearchParams();
+  if (options.refresh) qp.set("refresh", "1");
+  if (options.productGroup) qp.set("productGroup", options.productGroup);
+  const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<FinanceAnalysis>(
     `/api/komuta/finance/${encodeURIComponent(region)}${qs}`,
   );
@@ -597,6 +745,18 @@ export type MapFacets = {
 
 export async function getMapFacets(): Promise<MapFacets> {
   return request("/api/map/facets");
+}
+
+// md43: dist dropdown'u için izinli distribütör listesi — mevcut
+// `/api/auth/distributors`'ı sarar (yeni endpoint eklenmedi). Birden fazla
+// V3 sayfası (aktivasyon-risk, stok-tükenme, ticari-yatırım) aynı export'u
+// paylaşır; burada TEK yerde tanımlı.
+export type AllowedDistributor = { id: number; ad: string };
+export async function getAllowedDistributors(): Promise<AllowedDistributor[]> {
+  const res = await request<{ distributors: AllowedDistributor[] }>(
+    "/api/auth/distributors",
+  );
+  return res.distributors ?? [];
 }
 
 export type MapSyncStatus = {
@@ -640,4 +800,437 @@ export async function runRadarApi(
     method: "POST",
     body: JSON.stringify(params),
   });
+}
+
+// -- WIETNAUER / V3 -----------------------------------------------------------
+// V3 IA: her dashboard kendi sayfası. Wietnauer'ın 7-madde dashboard listesine
+// karşılık gelen endpoint'ler. Tenant config'ten brandTable + strategicBrands
+// okur, tenant başına farklı SQL çalışır.
+
+export type WietnauerTopDistributor = {
+  id: number;
+  ad: string;
+  bolge: string | null;
+  ciro: number;
+  faturaSayisi: number;
+  /** md23: portföydeki aktif müşteri sayısı (BYTDURUM=0) */
+  aktifMusteriSayi: number;
+  /** md23: FKMS — son 30g fatura kesilen distinct müşteri */
+  fkms: number;
+  /** md23: FKMS / aktif müşteri (%) — 30g portföy kapsaması */
+  kapsamPct: number;
+  payPct: number;
+  rank: number;
+};
+
+export type WietnauerBrandContribution = {
+  marka: string;
+  markaKod: string;
+  ciro: number;
+  musteriSayi: number;
+  payPct: number;
+  rank: number;
+  isStratejik: boolean;
+};
+
+export type WietnauerDiscountKpi = {
+  brut: number;
+  iskonto: number;
+  net: number;
+  iskontoOraniPct: number;
+  faturaCount: number;
+  aktifMusteriCount: number;
+};
+
+export type WietnauerYonetimSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  topDistributors: WietnauerTopDistributor[];
+  brands: WietnauerBrandContribution[];
+  discount: WietnauerDiscountKpi;
+};
+
+// md2 — ortak dönem query (refresh + serbest aralık VEYA preset). Serbest
+// aralık öncelikli; yoksa preset (donem) sunucuya iletilir (anchor'a göre çözer).
+type DonemOpts = { refresh?: boolean; donem?: string | null; dateFrom?: string | null; dateTo?: string | null };
+function donemQuery(o: DonemOpts): string {
+  const p = new URLSearchParams();
+  if (o.refresh) p.set("refresh", "1");
+  if (o.dateFrom && o.dateTo) {
+    p.set("from", o.dateFrom);
+    p.set("to", o.dateTo);
+  } else if (o.donem && o.donem !== "son30g") {
+    p.set("donem", o.donem);
+  }
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
+export async function getWietnauerYonetim(
+  options: DonemOpts = {},
+): Promise<WietnauerYonetimSnapshot> {
+  return request<WietnauerYonetimSnapshot>(`/api/wietnauer/yonetim${donemQuery(options)}`);
+}
+
+// V3 Dashboards — paralel agent'lar dolduruyor.
+// Tip her sayfa kendi türünü declare etsin diye `unknown` döner;
+// agent'lar page.tsx içinde kendi type guard'larını yazar.
+async function fetchV3<T = unknown>(name: string, o: DonemOpts = {}): Promise<T> {
+  return request<T>(`/api/wietnauer/${name}${donemQuery(o)}`);
+}
+export const getWietnauerMarka = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("marka", o);
+// md43: aktivasyon endpoint'i de stok gibi distId query param'ı destekler
+// (backend makeV3Handler zaten geneldi — foundation). Belirtilmezse portföy
+// toplamı, verilirse o distribütörün aktivasyon/risk kırılımı döner.
+export const getWietnauerAktivasyon = <T = unknown>(
+  o: { refresh?: boolean; distId?: number | null } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/aktivasyon${qs ? `?${qs}` : ""}`);
+};
+// md43: dist dropdown'u için izinli distribütör listesi — mevcut
+// `getAllowedDistributors()` (yukarıda, /api/map/facets'in yanında tanımlı,
+// /api/auth/distributors'ı sarar) kullanılır; yeni endpoint eklenmedi.
+// İskonto endpoint'i distId (drill-down) + from/to (tarih aralığı) query
+// param'ları destekler — UI'daki distribütör dropdown'u ve tarih aralığı
+// seçicisinden gelir. Hiçbiri verilmezse portföy toplamı + son 30g/son 12 ay
+// varsayılan pencereleri döner.
+export const getWietnauerIskonto = <T = unknown>(
+  o: { refresh?: boolean; distId?: number | null; dateFrom?: string | null; dateTo?: string | null; donem?: string | null } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  if (o.dateFrom) params.set("from", o.dateFrom);
+  if (o.dateTo) params.set("to", o.dateTo);
+  // Serbest aralık yoksa preset'i ilet — sunucu anchor'a göre çözer.
+  else if (o.donem && o.donem !== "son30g") params.set("donem", o.donem);
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/iskonto${qs ? `?${qs}` : ""}`);
+};
+export const getWietnauerSegment = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("segment", o);
+// `getWietnauerSaha` typed signature aşağıda; jenerik kalmasın diye burada
+// kaldırılmıştır.
+export const getWietnauerSatis = <T = unknown>(o: DonemOpts = {}) =>
+  fetchV3<T>("satis", o);
+// Stok endpoint'i distId query param'ı destekler — UI dropdown'undan gelir.
+// distId verilmezse portföy toplamı, verilirse o distribütörün kırılımı döner.
+// md42: `dateFrom`/`dateTo` (?from&to) — talep/satış hızı penceresi; ikisi de
+// verilmezse API varsayılan pencereyi kullanır.
+export const getWietnauerStok = <T = unknown>(
+  o: {
+    refresh?: boolean;
+    distId?: number | null;
+    dateFrom?: string | null;
+    dateTo?: string | null;
+    donem?: string | null;
+  } = {},
+) => {
+  const params = new URLSearchParams();
+  if (o.refresh) params.set("refresh", "1");
+  if (o.distId != null) params.set("distId", String(o.distId));
+  if (o.dateFrom) params.set("from", o.dateFrom);
+  if (o.dateTo) params.set("to", o.dateTo);
+  // Serbest aralık yoksa preset'i ilet — sunucu anchor'a göre çözer.
+  else if (o.donem && o.donem !== "son30g") params.set("donem", o.donem);
+  const qs = params.toString();
+  return request<T>(`/api/wietnauer/stok${qs ? `?${qs}` : ""}`);
+};
+
+// -- WIETNAUER / V3 / Dashboard #2 — Satış Performansı -----------------------
+// Tipler `packages/core/src/wietnauer-satis.ts` ile aynaya yansıtılır. Snapshot
+// JSON üzerinden geldiği için Date alanı yok; tüm tarihler string.
+
+export type SatisDistRow = {
+  id: number;
+  ad: string;
+  region: string | null;
+  ciro: number;
+  /** md26: son 30g hacim (70cl eşdeğer) */
+  hacim: number;
+  musteriSayi: number;
+  faturaSayi: number;
+  ortSepet: number;
+  prevCiro: number;
+  deltaPct: number;
+  rank: number;
+};
+
+export type SatisRepRow = {
+  id: number;
+  ad: string;
+  distAd: string | null;
+  region: string | null;
+  ciro: number;
+  musteriSayi: number;
+  faturaSayi: number;
+  ortSepet: number;
+  prevCiro: number;
+  deltaPct: number;
+  rank: number;
+};
+
+export type DropSizeRow = {
+  id: number;
+  ad: string;
+  region: string | null;
+  ciro: number;
+  musteriSayi: number;
+  dropSize: number;
+  rank: number;
+};
+
+export type NewCustomerRow = {
+  distId: number;
+  distAd: string;
+  region: string | null;
+  yeniMusteriSayi: number;
+  yeniMusteriCiro: number;
+};
+
+export type AvgOrderTrendPoint = {
+  ay: string;
+  ayBaslangic: string;
+  ortSepet: number;
+  faturaSayi: number;
+  toplamCiro: number;
+};
+
+export type WietnauerSatisSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  distLeaderboard: SatisDistRow[];
+  repLeaderboard: SatisRepRow[];
+  dropSize: DropSizeRow[];
+  newCustomers: {
+    items: NewCustomerRow[];
+    totalYeniMusteri: number;
+    totalYeniCiro: number;
+  };
+  avgOrderTrend: AvgOrderTrendPoint[];
+};
+
+// -- WIETNAUER / V3 / Dashboard #8 — Stok Tükenme ---------------------------
+
+export type StockRiskTier = "critical" | "risk" | "watch" | "healthy" | "unknown";
+
+export type DemandPattern = "smooth" | "intermittent" | "erratic" | "lumpy" | "unknown";
+
+export type StockConfidence = "high" | "medium" | "low";
+
+export type LeadTimeSource = "dist-table" | "default";
+
+export type StockDataQuality =
+  | "ok"
+  | "no-demand"
+  | "no-stock-signal"
+  | "negative-stock"
+  | "turnover-unreliable";
+
+export type WietnauerStockSkuRow = {
+  skuId: number;
+  skuCode: string;
+  skuName: string;
+  brand: string | null;
+  category: string | null;
+  distId: number;
+  distName: string;
+  region: string | null;
+  onHandQty: number;
+  soldQty90d: number;
+  avgDailyQty: number;
+  soldQty180d: number;
+  demandDays180: number;
+  avgDemandInterval: number | null;
+  demandCv2: number | null;
+  demandPattern: DemandPattern;
+  crostonDailyQty: number;
+  trendFactor: number;
+  seasonalityFactor: number;
+  seasonalityReason: string | null;
+  forecastDailyQty: number;
+  daysLeft: number | null;
+  estimatedStockoutDate: string | null;
+  turnover90d: number | null;
+  stockStartQty: number;
+  stockEndQty: number;
+  avgStockQty: number;
+  openOrderQty: number;
+  inventoryPositionQty: number;
+  projectedDaysLeft: number | null;
+  projectedStockoutDate: string | null;
+  lastInboundDate: string | null;
+  lastInboundDays: number | null;
+  leadTimeDays: number;
+  leadTimeSource: LeadTimeSource;
+  safetyStockQty: number;
+  reorderPointQty: number;
+  reorderGapQty: number;
+  stockConfidence: StockConfidence;
+  stockConfidenceScore: number;
+  netSignalPct: number | null;
+  lowConfidence: boolean;
+  riskTier: StockRiskTier;
+  dataQuality: StockDataQuality;
+};
+
+export type WietnauerStockBrandSummary = {
+  brand: string;
+  skuCount: number;
+  criticalCount: number;
+  riskCount: number;
+  watchCount: number;
+  healthyCount: number;
+  unknownCount: number;
+  totalOnHandQty: number;
+  totalSoldQty90d: number;
+  avgDaysLeft: number | null;
+};
+
+export type WietnauerStockDistributorSummary = {
+  distId: number;
+  distName: string;
+  region: string | null;
+  skuCount: number;
+  criticalCount: number;
+  riskCount: number;
+  watchCount: number;
+  healthyCount: number;
+  unknownCount: number;
+  totalOnHandQty: number;
+  totalSoldQty90d: number;
+};
+
+export type WietnauerStockSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  windowDays: 90;
+  /** md42 — uygulanan talep/satış hızı penceresi (`?from&to` verilirse custom). */
+  demandRange: {
+    custom: boolean;
+    from: string | null;
+    to: string | null;
+    days: number;
+  };
+  distFilter: {
+    distId: number;
+    distName: string;
+    region: string | null;
+  } | null;
+  distributors: WietnauerStockDistributorSummary[];
+  totals: {
+    activeSkuCount: number;
+    soldSkuCount90d: number;
+    positiveStockSkuCount: number;
+    criticalSkuCount: number;
+    riskSkuCount: number;
+    watchSkuCount: number;
+    healthySkuCount: number;
+    unknownSkuCount: number;
+    negativeStockSkuCount: number;
+    noDemandSkuCount: number;
+    turnoverComputableSkuCount: number;
+    lowConfidenceSkuCount: number;
+    lowConfidenceRatePct: number;
+    incomingOrderSkuCount: number;
+    totalIncomingQty: number;
+    leadTimeConfiguredSkuCount: number;
+  };
+  critical: WietnauerStockSkuRow[];
+  items: WietnauerStockSkuRow[];
+  brandSummary: WietnauerStockBrandSummary[];
+  quality: {
+    stockSignalSkuCount: number;
+    zeroStockSkuCount: number;
+    negativeStockSkuCount: number;
+    turnoverUnreliableSkuCount: number;
+    incomingOrderSkuCount: number;
+    leadTimeConfiguredSkuCount: number;
+    snapshotTablesEmpty: boolean;
+  };
+};
+
+// -- WIETNAUER / V3 / Dashboard #5 — Distribütör & Saha Operasyon -----------
+// Tipler `packages/core/src/wietnauer-saha.ts` ile aynaya yansıtılır.
+
+export type SahaVisitDailyRow = {
+  gun: string;
+  toplam: number;
+  rutIci: number;
+  rutDisi: number;
+};
+
+export type SahaCoverageSegment = {
+  segment: string;
+  ziyaretEdilen: number;
+  aktif: number;
+  kapsamaPct: number;
+};
+
+export type SahaRepRow = {
+  repId: number;
+  ad: string;
+  distributor: string | null;
+  ziyaret: number;
+  uniqueMusteri: number;
+  /** md41: son 30g fatura kesilen distinct müşteri (aktif müşteri) */
+  aktifMusteri: number;
+  siparisliZiyaret: number;
+  donusumPct: number;
+  rutDisiPct: number;
+  rank: number;
+};
+
+export type SahaConversionRow = {
+  tip: "Rut İçi" | "Rut Dışı";
+  ziyaret: number;
+  siparisli: number;
+  faturali: number;
+  irsaliyeli: number;
+  donusumPct: number;
+};
+
+export type SahaDistributorRow = {
+  distKod: number;
+  distributor: string;
+  bolge: string | null;
+  aktifTemsilci: number;
+  ziyaret: number;
+  kapsananMusteri: number;
+  donusumPct: number;
+  rank: number;
+};
+
+export type SahaVisitKpi = {
+  son7gZiyaret: number;
+  son7gUniqueMusteri: number;
+  son7gAktifTemsilci: number;
+  son7gDonusumPct: number;
+};
+
+export type WietnauerSahaSnapshot = {
+  generatedAt: string;
+  demoDate: string | null;
+  visitDaily: SahaVisitDailyRow[];
+  kpi: SahaVisitKpi;
+  coverage: {
+    totalZiyaretEdilen: number;
+    totalAktif: number;
+    kapsamaPct: number;
+    segments: SahaCoverageSegment[];
+  };
+  reps: SahaRepRow[];
+  conversion: SahaConversionRow[];
+  distributors: SahaDistributorRow[];
+};
+
+export async function getWietnauerSaha(
+  options: DonemOpts = {},
+): Promise<WietnauerSahaSnapshot> {
+  return request<WietnauerSahaSnapshot>(`/api/wietnauer/saha${donemQuery(options)}`);
 }

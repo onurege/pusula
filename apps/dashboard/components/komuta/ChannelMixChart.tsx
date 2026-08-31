@@ -5,7 +5,10 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   Legend,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -13,11 +16,15 @@ import {
 } from "recharts";
 import type { KomutaChannelMonthlyRow, ValueUnit } from "@/lib/api";
 
+type ViewMode = "bar" | "pie";
+/** Global Periyot değeri: kaç ay trend gösterileceği, ya da "ytd" (bu yıl). */
+type PeriodMonths = 3 | 6 | 12 | "ytd";
+
 type Props = {
   rows: KomutaChannelMonthlyRow[];
   /** Birim — değerler TL veya 9LE bazında olur. Default: tl. */
   unit?: ValueUnit;
-  /** Default: "Kanal Mix · Son 12 Ay" */
+  /** Default: "Kanal Mix" */
   title?: string;
   /** Default: "📊" */
   icon?: string;
@@ -25,6 +32,17 @@ type Props = {
   category?: string;
   /** Hint footer'da gösterilen kaynak açıklaması */
   sourceNote?: string;
+  /** md2 (Birleşik): trend penceresi — global Periyot kontrolünden gelir
+   *  (Son 3/6/12 Ay · Bu Yıl). Undefined → tüm 12 ay. Yerel seçici KALDIRILDI;
+   *  bu değer sayfa üstündeki global Periyot dropdown'u tarafından sürülür. */
+  periodMonths?: PeriodMonths;
+  /** md14: Bar ↔ Pasta görünüm toggle'ı göster. Default: false. */
+  enablePieView?: boolean;
+  /** md15: müşteri tipi (kanal) filtre dropdown'u göster — ek gruptan gelen
+   *  kırılımı tek bir kanala daraltmak için. Default: false. */
+  enableTypeFilter?: boolean;
+  /** md15: dropdown etiketi. Default: "Müşteri Tipi" */
+  typeFilterLabel?: string;
 };
 
 // Tutarlı kanal renkleri — Komuta'nın geri kalanıyla aynı palette.
@@ -67,31 +85,67 @@ function readChartColors() {
 }
 
 /**
- * Son 12 ay × kanal stacked bar chart. Recharts ResponsiveContainer ile
- * ebeveyninin tüm genişliğini kullanır. Backend `KomutaChannelMonthlyRow[]`
- * formatında flat satırlar gönderir; burada {ay, [kanal]: ciro} pivot edilir.
+ * Ay × kanal stacked bar chart (+ isteğe bağlı pasta görünümü). Recharts
+ * ResponsiveContainer ile ebeveyninin tüm genişliğini kullanır. Backend
+ * `KomutaChannelMonthlyRow[]` formatında flat satırlar gönderir (son 12 ay,
+ * sabit pencere — yeni SQL/param yok); dönem/tip filtreleri VE bar↔pasta
+ * görünüm geçişi tamamen client-side, zaten çekilmiş veri üzerinde çalışır.
  */
 export function ChannelMixChart({
   rows,
   unit = "tl",
-  title = "Kanal Mix · Son 12 Ay",
+  title = "Kanal Mix",
   icon = "📊",
   category = "kanal mix",
   sourceNote = "Müşteri grubu (TBLMUSTERIGRUP.TXTAD) × ay kırılımı, son 12 ay. Top 5 kanal görünür; geri kalan \"Diğer\" altında toplandı.",
+  periodMonths,
+  enablePieView = false,
+  enableTypeFilter = false,
+  typeFilterLabel = "Müşteri Tipi",
 }: Props) {
   const unitSuffix = unit === "9le" ? "9L" : "₺";
   const [colors, setColors] = useState(readChartColors);
+  const [view, setView] = useState<ViewMode>("bar");
+  const [selectedType, setSelectedType] = useState<string>("all");
   useEffect(() => {
     const onChange = () => setColors(readChartColors());
     window.addEventListener("enroute:theme:changed", onChange);
     return () => window.removeEventListener("enroute:theme:changed", onChange);
   }, []);
-  const { data, channels, totals } = useMemo(() => {
-    // Defensive: eski cache'lenmiş snapshot'lar `channelMonthly` alanı
-    // olmadan dönüyor olabilir. Array değilse boş kabul et — UI bozulmasın,
-    // "Verileri yenile" sonrası dolu gelecek.
-    const safeRows = Array.isArray(rows) ? rows : [];
 
+  const safeRows = useMemo(() => (Array.isArray(rows) ? rows : []), [rows]);
+
+  // md15: dropdown seçenekleri — TÜM (filtresiz) satırlardaki distinct kanal
+  // adları, katkıya göre büyükten küçüğe (ek gruptan gelen müşteri tipi listesi).
+  const typeOptions = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const r of safeRows) totals.set(r.kanal, (totals.get(r.kanal) ?? 0) + r.ciro);
+    return [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([kanal]) => kanal);
+  }, [safeRows]);
+
+  // md2/md15: periyot (global) + tip filtresi — ikisi de zaten çekilmiş `rows`
+  // üzerinde, client-side. Yeni fetch/SQL yok. periodMonths global Periyot
+  // dropdown'undan gelir; undefined → tüm 12 ay.
+  const filteredRows = useMemo(() => {
+    let r = safeRows;
+    if (enableTypeFilter && selectedType !== "all") {
+      r = r.filter((row) => row.kanal === selectedType);
+    }
+    if (periodMonths != null) {
+      const months = [...new Set(r.map((row) => row.yyyymm))].sort();
+      if (periodMonths === "ytd") {
+        // Bu Yıl — en güncel ayın yılıyla eşleşen aylar (ör. 2026-*)
+        const year = months.length ? months[months.length - 1].slice(0, 4) : "";
+        if (year) r = r.filter((row) => row.yyyymm.startsWith(year));
+      } else if (periodMonths < 12) {
+        const lastN = new Set(months.slice(-periodMonths));
+        r = r.filter((row) => lastN.has(row.yyyymm));
+      }
+    }
+    return r;
+  }, [safeRows, enableTypeFilter, selectedType, periodMonths]);
+
+  const { data, channels, totals, pieData } = useMemo(() => {
     // Ay sırasını koru — backend `ORDER BY yil, ay` yapar; biz set kullanarak
     // ilk-görüş sırasını yakalıyoruz.
     const monthOrder: string[] = [];
@@ -100,7 +154,7 @@ export function ChannelMixChart({
     const channelSet = new Set<string>();
     let grandTotal = 0;
 
-    for (const row of safeRows) {
+    for (const row of filteredRows) {
       if (!monthOrder.includes(row.yyyymm)) {
         monthOrder.push(row.yyyymm);
         monthLabel.set(row.yyyymm, row.ay);
@@ -136,8 +190,11 @@ export function ChannelMixChart({
       return row;
     });
 
-    return { data, channels, totals: { grandTotal } };
-  }, [rows]);
+    // md14: pasta görünümü — seçili dönem için kanal başına toplam pay.
+    const pieData = channels.map((ch) => ({ name: ch, value: channelTotals.get(ch) ?? 0 }));
+
+    return { data, channels, totals: { grandTotal }, pieData };
+  }, [filteredRows]);
 
   if (data.length === 0) {
     return (
@@ -169,6 +226,8 @@ export function ChannelMixChart({
     );
   }
 
+  const showToolbar = enablePieView || enableTypeFilter;
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -178,60 +237,135 @@ export function ChannelMixChart({
         <div className="panel-meta">{formatCompact(totals.grandTotal)} {unitSuffix} toplam</div>
       </div>
 
+      {showToolbar && (
+        <div className="cmc-toolbar">
+          {enableTypeFilter && (
+            <label className="cmc-select-wrap">
+              <span className="cmc-select-label">{typeFilterLabel}</span>
+              <select
+                value={selectedType}
+                onChange={(e) => setSelectedType(e.target.value)}
+                aria-label={typeFilterLabel}
+              >
+                <option value="all">Tümü</option>
+                {typeOptions.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </label>
+          )}
+          {enablePieView && (
+            <div className="cmc-seg" role="tablist" aria-label="Görünüm">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "bar"}
+                className={view === "bar" ? "on" : ""}
+                onClick={() => setView("bar")}
+              >
+                Bar
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === "pie"}
+                className={view === "pie" ? "on" : ""}
+                onClick={() => setView("pie")}
+              >
+                Pasta
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="cmc-chart-wrap">
         <ResponsiveContainer width="100%" height="100%">
-          <BarChart
-            data={data}
-            margin={{ top: 10, right: 16, left: 4, bottom: 0 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
-            <XAxis
-              dataKey="ay"
-              tick={{ fill: colors.axisTick, fontSize: 11 }}
-              tickLine={false}
-              axisLine={{ stroke: colors.axis }}
-            />
-            <YAxis
-              tickFormatter={formatCompact}
-              tick={{ fill: colors.axisTick, fontSize: 10 }}
-              tickLine={false}
-              axisLine={false}
-              width={60}
-            />
-            <Tooltip
-              cursor={{ fill: colors.cursor }}
-              formatter={(v, name) => {
-                const num = typeof v === "number" ? v : Number(v ?? 0);
-                return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
-              }}
-              contentStyle={{
-                background: colors.tooltipBg,
-                border: `1px solid ${colors.tooltipBorder}`,
-                borderRadius: 6,
-                fontSize: 12,
-                fontFamily: "Inter, system-ui",
-              }}
-              labelStyle={{ color: colors.tooltipLabel, fontWeight: 600 }}
-              itemStyle={{ padding: "1px 0" }}
-              labelFormatter={(label) => `${String(label ?? "")} · Aylık Toplam`}
-            />
-            <Legend
-              wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
-              iconType="circle"
-              iconSize={8}
-            />
-            {channels.map((ch, i) => (
-              <Bar
-                key={ch}
-                dataKey={ch}
-                stackId="cmix"
-                fill={colors.channels[i % colors.channels.length]}
-                // En üstteki bar'a hafif radius (ay'ın en üstündeki segment)
-                radius={i === channels.length - 1 ? [4, 4, 0, 0] : 0}
-                maxBarSize={42}
+          {view === "pie" ? (
+            <PieChart margin={{ top: 8, right: 8, left: 8, bottom: 8 }}>
+              <Tooltip
+                formatter={(v, name) => {
+                  const num = typeof v === "number" ? v : Number(v ?? 0);
+                  return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
+                }}
+                contentStyle={{
+                  background: colors.tooltipBg,
+                  border: `1px solid ${colors.tooltipBorder}`,
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontFamily: "Inter, system-ui",
+                }}
+                labelStyle={{ color: colors.tooltipLabel, fontWeight: 600 }}
               />
-            ))}
-          </BarChart>
+              <Legend wrapperStyle={{ fontSize: 11, paddingTop: 4 }} iconType="circle" iconSize={8} />
+              <Pie
+                data={pieData}
+                dataKey="value"
+                nameKey="name"
+                innerRadius="45%"
+                outerRadius="80%"
+                paddingAngle={1.5}
+                strokeWidth={1}
+              >
+                {pieData.map((entry, i) => (
+                  <Cell key={entry.name} fill={colors.channels[i % colors.channels.length]} />
+                ))}
+              </Pie>
+            </PieChart>
+          ) : (
+            <BarChart
+              data={data}
+              margin={{ top: 10, right: 16, left: 4, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
+              <XAxis
+                dataKey="ay"
+                tick={{ fill: colors.axisTick, fontSize: 11 }}
+                tickLine={false}
+                axisLine={{ stroke: colors.axis }}
+              />
+              <YAxis
+                tickFormatter={formatCompact}
+                tick={{ fill: colors.axisTick, fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                width={60}
+              />
+              <Tooltip
+                cursor={{ fill: colors.cursor }}
+                formatter={(v, name) => {
+                  const num = typeof v === "number" ? v : Number(v ?? 0);
+                  return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
+                }}
+                contentStyle={{
+                  background: colors.tooltipBg,
+                  border: `1px solid ${colors.tooltipBorder}`,
+                  borderRadius: 6,
+                  fontSize: 12,
+                  fontFamily: "Inter, system-ui",
+                }}
+                labelStyle={{ color: colors.tooltipLabel, fontWeight: 600 }}
+                itemStyle={{ padding: "1px 0" }}
+                labelFormatter={(label) => `${String(label ?? "")} · Aylık Toplam`}
+              />
+              <Legend
+                wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
+                iconType="circle"
+                iconSize={8}
+              />
+              {channels.map((ch, i) => (
+                <Bar
+                  key={ch}
+                  dataKey={ch}
+                  stackId="cmix"
+                  fill={colors.channels[i % colors.channels.length]}
+                  // En üstteki bar'a hafif radius (ay'ın en üstündeki segment)
+                  radius={i === channels.length - 1 ? [4, 4, 0, 0] : 0}
+                  maxBarSize={42}
+                />
+              ))}
+            </BarChart>
+          )}
         </ResponsiveContainer>
       </div>
 
@@ -247,6 +381,58 @@ export function ChannelMixChart({
           font-size: 10.5px;
           color: var(--color-muted-2);
           line-height: 1.4;
+        }
+        .cmc-toolbar {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          margin-top: 4px;
+        }
+        .cmc-select-wrap {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 11px;
+          color: var(--color-muted);
+        }
+        .cmc-select-wrap select {
+          font-size: 11.5px;
+          padding: 4px 8px;
+          border-radius: 6px;
+          border: 1px solid var(--color-border);
+          background: var(--color-surface-2);
+          color: var(--color-fg);
+        }
+        .cmc-seg {
+          display: inline-flex;
+          align-items: center;
+          gap: 2px;
+          padding: 2px;
+          border-radius: 8px;
+          background: var(--color-surface-2);
+          border: 1px solid var(--color-border);
+        }
+        .cmc-seg button {
+          appearance: none;
+          border: none;
+          background: transparent;
+          color: var(--color-muted);
+          font-size: 11px;
+          font-weight: 600;
+          padding: 4px 10px;
+          border-radius: 6px;
+          cursor: pointer;
+          transition: background-color 200ms cubic-bezier(0.2, 0.8, 0.2, 1),
+            color 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        .cmc-seg button.on {
+          background: var(--color-surface);
+          color: var(--color-fg);
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+        }
+        .cmc-seg button:hover:not(.on) {
+          color: var(--color-fg);
         }
       `}</style>
     </div>

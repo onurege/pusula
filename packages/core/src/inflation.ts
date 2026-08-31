@@ -51,6 +51,27 @@ export function currentYyyymm(today: Date = currentDate()): string {
   return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Veride mevcut EN SON endeks ayı (YYYY-MM). Endeks boşsa null. */
+export function latestIndexMonth(data: InflationData): string | null {
+  const keys = Object.keys(data.monthlyIndex);
+  if (keys.length === 0) return null;
+  return keys.sort()[keys.length - 1] ?? null;
+}
+
+/**
+ * Reel TL için "şimdi/current" referans ayı. Anchor ayı (varsayılan: currentYyyymm)
+ * endekste YOKSA — ör. TÜİK o ayı henüz yayınlamadı (Ağustos verisi ~3 Eylül'de
+ * gelir) — en son mevcut GERÇEK aya düşer. Böylece anchor gerçek verinin önünde
+ * olsa bile multiplier=1'e (Reel TL no-op) düşmez; ~1-2 ay eski baz kullanılır.
+ */
+export function reelReferenceMonth(
+  data: InflationData,
+  anchor: string = currentYyyymm(),
+): string {
+  if (data.monthlyIndex[anchor] != null) return anchor;
+  return latestIndexMonth(data) ?? anchor;
+}
+
 /** Bir tarihten önce N gün geriye giderek YYYY-MM döndürür. */
 export function yyyymmDaysAgo(days: number, today: Date = currentDate()): string {
   const d = new Date(today.getTime() - days * 86_400_000);

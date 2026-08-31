@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, useTransition } from "react";
 import { RefreshCw, X } from "lucide-react";
 import type { MapSyncStatus } from "@/lib/api";
-import { triggerMapSync } from "@/lib/api";
+import { triggerMapSync } from "@/lib/api-actions";
 import { Button } from "@/components/ui/button";
 
 type Props = {

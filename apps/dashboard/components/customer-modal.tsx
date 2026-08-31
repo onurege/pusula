@@ -17,10 +17,11 @@ import {
   X,
 } from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
-import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api";
+import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api-actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
+import { InfoHint } from "@/components/komuta/InfoHint";
 import { addAction as addWeeklyAction } from "@/components/weekly-actions/store";
 
 type SalesState =
@@ -28,6 +29,145 @@ type SalesState =
   | { kind: "loading" }
   | { kind: "ok"; data: CustomerSales }
   | { kind: "err"; message: string };
+
+/**
+ * Ödeme skoru — son 30g tahsilat / ciro coverage'a dayalı.
+ * Core'da `payment: null` hardcoded; detail data'sındaki tahsilat ham
+ * rakamlarından display-time hesaplıyoruz.
+ *
+ * NOT: Daha güçlü sinyal olan kümülatif "cari bakiye" (TBLTCPMUSTERIBAKIYE)
+ * Univera kurulumları arasında tutarsız bulundu — kaldırıldı. Bu basit
+ * coverage modeli en azından son 30g penceresindeki ödeme davranışını
+ * yansıtır.
+ *
+ * Skor (0=mükemmel, 100=kritik):
+ *   coverage = toplam tahsilat / ciro30
+ *   coverage >= 1.0   → 10
+ *   coverage 0.8-1.0  → 25
+ *   coverage 0.5-0.8  → 50
+ *   coverage 0.2-0.5  → 75
+ *   coverage < 0.2    → 90
+ *   ciro > 0 & tahsilat = 0 → 80
+ *   ciro = 0 & tahsilat = 0 → null
+ *
+ * Method risk (çek+senet payı): +10/+20 penalty.
+ */
+function computePaymentScore(sales: CustomerSales): number | null {
+  const ciro = sales.ciro30 ?? 0;
+  const tahsilatNakit = sales.tahsilatNakit ?? 0;
+  const tahsilatCek = sales.tahsilatCek ?? 0;
+  const tahsilatSenet = sales.tahsilatSenet ?? 0;
+  const tahsilatKK = sales.tahsilatKK ?? 0;
+  const toplam = tahsilatNakit + tahsilatCek + tahsilatSenet + tahsilatKK;
+  if (ciro === 0 && toplam === 0) return null;
+  if (ciro > 0 && toplam === 0) return 80;
+
+  const coverage = ciro > 0 ? toplam / ciro : 1;
+  let baseScore: number;
+  if (coverage >= 1.0) baseScore = 10;
+  else if (coverage >= 0.8) baseScore = 25;
+  else if (coverage >= 0.5) baseScore = 50;
+  else if (coverage >= 0.2) baseScore = 75;
+  else baseScore = 90;
+
+  const vade = tahsilatCek + tahsilatSenet;
+  const vadeShare = toplam > 0 ? vade / toplam : 0;
+  let methodPenalty = 0;
+  if (vadeShare > 0.8) methodPenalty = 20;
+  else if (vadeShare > 0.5) methodPenalty = 10;
+
+  return Math.min(100, baseScore + methodPenalty);
+}
+
+/**
+ * Risk skoru bileşenlerini sales detail ile zenginleştirir — özellikle
+ * payment'i hesaplayıp overall skoru da yeniden ağırlıklandırır.
+ *
+ * RISK_WEIGHTS (core ile aynı): momentum 0.40, behavioral 0.30, payment 0.20,
+ * engagement 0.10.
+ */
+function enhanceRiskScoreWithPayment(
+  riskScore: MapCustomer["riskScore"],
+  sales: CustomerSales,
+): MapCustomer["riskScore"] {
+  // unknown tier'a dokunma (zaten yeterli veri yok)
+  if (riskScore.tier === "unknown") return riskScore;
+  const paymentValue = computePaymentScore(sales);
+  if (paymentValue === null) return riskScore; // payment hesaplanamadı, no-op
+
+  const enhancedComponents = {
+    ...riskScore.components,
+    payment: paymentValue,
+  };
+
+  // Overall skoru yeniden hesapla (payment dahil, 4 bileşen weighted avg)
+  const WEIGHTS = {
+    momentum: 0.40,
+    behavioral: 0.30,
+    payment: 0.20,
+    engagement: 0.10,
+  };
+  let wSum = 0;
+  let weighted = 0;
+  for (const [k, w] of Object.entries(WEIGHTS) as [
+    keyof typeof WEIGHTS,
+    number,
+  ][]) {
+    const v = enhancedComponents[k];
+    if (v != null) {
+      wSum += w;
+      weighted += w * v;
+    }
+  }
+  const newScore = wSum > 0 ? Math.round(weighted / wSum) : riskScore.score;
+  const newTier =
+    newScore == null
+      ? "unknown"
+      : newScore < 30
+        ? "healthy"
+        : newScore < 55
+          ? "watch"
+          : newScore < 75
+            ? "risk"
+            : "critical";
+
+  // Eski "ödeme verisi yok" reason'u filtrele + payment context'i ekle
+  const filteredReasons = riskScore.reasons.filter(
+    (r) =>
+      !r.startsWith("Ödeme/vade verisi mevcut değil") &&
+      !r.startsWith("Ödeme verisi mevcut değil"),
+  );
+  const ciro = sales.ciro30 ?? 0;
+  const toplam =
+    (sales.tahsilatNakit ?? 0) +
+    (sales.tahsilatCek ?? 0) +
+    (sales.tahsilatSenet ?? 0) +
+    (sales.tahsilatKK ?? 0);
+  let paymentReason = "";
+  if (ciro > 0 || toplam > 0) {
+    const coverage = ciro > 0 ? toplam / ciro : null;
+    const vadeShare = toplam > 0
+      ? ((sales.tahsilatCek ?? 0) + (sales.tahsilatSenet ?? 0)) / toplam
+      : 0;
+    const covStr = coverage != null
+      ? `tahsilat/ciro = %${(coverage * 100).toFixed(0)}`
+      : `tahsilat var, fatura yok`;
+    const methodStr = vadeShare > 0.5
+      ? ` · çek/senet payı %${(vadeShare * 100).toFixed(0)} (vade riski)`
+      : "";
+    paymentReason = `Ödeme skoru tahsilat verisinden: ${covStr}${methodStr}.`;
+  }
+
+  return {
+    ...riskScore,
+    score: newScore,
+    tier: newTier,
+    components: enhancedComponents,
+    reasons: paymentReason
+      ? [...filteredReasons, paymentReason]
+      : filteredReasons,
+  };
+}
 
 type ExplainState =
   | { kind: "idle" }
@@ -173,6 +313,11 @@ export function CustomerModal({ customer, onClose }: Props) {
                 <Hash size={11} />
                 {customer.id}
               </span>
+              {customer.musteriKodu && (
+                <span className="text-muted-2 font-mono">
+                  Kod: {customer.musteriKodu}
+                </span>
+              )}
             </div>
             {(customer.daysSinceLastSale !== null || customer.daysSinceLastVisit !== null) && (
               <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted">
@@ -228,8 +373,14 @@ export function CustomerModal({ customer, onClose }: Props) {
 
           {sales.kind === "ok" && (
             <>
-              {/* Composite Risk Score — başlığın hemen altında öne çıkar */}
-              <RiskScoreCard riskScore={customer.riskScore} />
+              {/* Composite Risk Score — başlığın hemen altında öne çıkar.
+                  Ödeme bileşeni sync sırasında null geliyor (Univera mirror'da
+                  tahsilat snapshot'ı yok); detail fetch ile gelen tahsilat
+                  verisinden display-time hesaplıyoruz ve overall score'u
+                  yeniden ağırlıklandırıyoruz. */}
+              <RiskScoreCard
+                riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data)}
+              />
 
               {/* Top KPI grid */}
               <section>
@@ -337,7 +488,14 @@ export function CustomerModal({ customer, onClose }: Props) {
                     loading={explain.kind === "loading"}
                     iconLeft={explain.kind !== "loading" ? <Sparkles size={15} /> : undefined}
                   >
-                    {explain.kind === "loading" ? "Analiz ediliyor…" : "AI Analizi al"}
+                    {explain.kind === "loading" ? (
+                      "Analiz ediliyor…"
+                    ) : (
+                      <>
+                        AI Analizi al
+                        <span title="Ücretli içerik" className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                      </>
+                    )}
                   </Button>
                   <Button
                     variant="outline"
@@ -347,7 +505,14 @@ export function CustomerModal({ customer, onClose }: Props) {
                     iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
                     className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
                   >
-                    {foresight.kind === "loading" ? "Öngörü çıkarılıyor…" : "Öngörü al (14 gün)"}
+                    {foresight.kind === "loading" ? (
+                      "Öngörü çıkarılıyor…"
+                    ) : (
+                      <>
+                        Öngörü al (14 gün)
+                        <span title="Ücretli içerik" className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                      </>
+                    )}
                   </Button>
                 </div>
 
@@ -547,8 +712,22 @@ function RiskScoreCard({
     >
       <div className="flex items-baseline justify-between gap-3">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold">
+          <div className="text-[10px] uppercase tracking-wider text-muted font-semibold flex items-center">
             Risk Skoru
+            <InfoHint
+              title="Risk skoru nasıl hesaplanıyor?"
+              source="Bileşik risk skoru — sync anında hesaplanır (0–100, yüksek = yüksek risk)"
+              window="Son 30 / 90 gün + geçen yıl aynı 30 gün (YoY)"
+              base="4 bileşenin ağırlıklı toplamı"
+              notes={[
+                "Satış Momentumu %40 — ciro ivmesi: son 30g vs önceki 30g (%45), 90g aylık baseline (%35) ve geçen yıl aynı dönem (%20); uzun sessizlik düşüşü büyütür (×1.5'e kadar).",
+                "Davranışsal %30 — sessizlik: son siparişten bu yana geçen gün (%50, ana sinyal) + sipariş sıklığı düşüşü (%30, fatura sayısı) + sepet daralması (%20, distinct ürün grubu).",
+                "Ödeme %20 — bu ekranda görüntülenirken tahsilat verisinden anlık hesaplanır: son 30g tahsilat/ciro karşılama oranı + çek/senet (vade) payı cezası.",
+                "Etkileşim %10 — ziyaret cadence'i: son 90g ziyaret sıklığına göre beklenen aralık (15/30/60 gün) ile son ziyaretten bu yana geçen süre kıyaslanır.",
+                "Tier eşikleri: 0–29 sağlıklı · 30–54 izlemede · 55–74 riskli · 75+ kritik.",
+                "Baz ciro < 1.000 TL ise ilgili sinyal 'yok' sayılır — yeni/dormant müşteri skoru bozmaz. Hiçbir bileşen hesaplanamazsa tier 'Yetersiz veri' olur.",
+              ]}
+            />
           </div>
           <div className="mt-1 flex items-baseline gap-2">
             <span
@@ -714,25 +893,25 @@ function ForesightDashboard({
       <div className="grid grid-cols-4 gap-3">
         <DashKpi
           icon={<AlertCircle size={14} />}
-          label="Risk sinyali"
+          label="Risk uyarısı"
           value={data.riskFlags.length}
           tone={data.riskFlags.length > 0 ? "bad" : "muted"}
         />
         <DashKpi
           icon={<Calendar size={14} />}
-          label="14 günde olay"
+          label="Yaklaşan olay (14g)"
           value={data.events.length}
           tone={data.events.length > 0 ? "accent" : "muted"}
         />
         <DashKpi
           icon={<TrendingDown size={14} />}
-          label="Düşmüş kategori"
+          label="Bıraktığı kategori"
           value={data.dropped.length}
           tone={data.dropped.length > 0 ? "warn" : "muted"}
         />
         <DashKpi
           icon={<Users size={14} />}
-          label="Segment fırsatı"
+          label="Benzerinin aldığı"
           value={data.cohort.length}
           tone={data.cohort.length > 0 ? "accent" : "muted"}
         />

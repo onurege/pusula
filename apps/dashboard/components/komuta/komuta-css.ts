@@ -600,6 +600,24 @@ export const KOMUTA_CSS = `
 .komuta-root .ai-body strong { color: #1c1917; }
 .komuta-root .ai-body p { margin-bottom: 8px; }
 
+/* AI brief fallback — Gemini fail durumunda gösterilir */
+.komuta-root .ai-brief-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  background: var(--color-surface-2);
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--color-fg-2);
+  margin: 12px 0;
+}
+.komuta-root .ai-brief-empty-icon { font-size: 18px; line-height: 1; flex-shrink: 0; }
+.komuta-root .ai-brief-empty-sub { color: var(--color-muted); }
+.komuta-root .ai-brief-empty-link { color: var(--color-accent); text-decoration: underline; }
+.komuta-root .ai-brief-empty-link:hover { color: var(--color-accent-hover); }
+
 .komuta-root .footer-bar {
   margin-top: 14px; padding: 10px 16px; display: flex; justify-content: space-between;
   font-size: 11px; color: #a8a29e; flex-wrap: wrap; gap: 8px;

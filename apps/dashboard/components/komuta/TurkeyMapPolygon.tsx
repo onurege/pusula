@@ -1,12 +1,22 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
+import { usePathname } from "next/navigation";
 import maplibregl from "maplibre-gl";
 import type { KomutaRegionRow } from "@/lib/api";
 import { FinanceAgentLauncher } from "./FinanceAgentLauncher";
+import { TREND_LEGEND, trendColor } from "./trend-colors";
 
 type Props = {
   regions: KomutaRegionRow[];
+  /**
+   * Bölgeye tıklayınca yönlendirilecek harita path'i. Explicit verilmezse
+   * mevcut URL'den otomatik tespit: /v3/* → /v3/harita, /v2/* → /v2/harita,
+   * aksi /map. Aynı KomutaPage hem /komuta hem /v3/cockpit'ten servis
+   * edildiği için bu auto-detect navbar tutarlılığını koruyor — V3
+   * kullanıcısı haritaya tıkladığında V1 sayfasına atılmıyor.
+   */
+  basePath?: string;
 };
 
 const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -28,16 +38,9 @@ const INITIAL_ZOOM = 4.7;
 // Renklendirme: YoY artış/azalış bazlı (yeşil → gri → kırmızı). Sabit bölge
 // rengi değil — Komuta'nın amacı "hangi bölge yanıyor" göstermek.
 
-/** YoY delta'ya göre il polygon dolgu rengi — yeşil (büyüyen) → gri (yatay)
- *  → kırmızı (düşen). null deltaPct (geçen yıl 0 ciro) için nötr gri. */
-function deltaColor(deltaPct: number | null): string {
-  if (deltaPct == null) return "#a8a29e";
-  if (deltaPct >= 15) return "#16a34a";
-  if (deltaPct >= 5) return "#84cc16";
-  if (deltaPct >= -5) return "#a8a29e";
-  if (deltaPct >= -15) return "#ea580c";
-  return "#dc2626";
-}
+/** YoY delta'ya göre il polygon dolgu rengi — ortak pastel palette
+ *  (trend-colors.ts). Treemap + scatter + harita aynı tonu paylaşır. */
+const deltaColor = trendColor;
 
 /**
  * Komuta TR + KKTC haritası — gerçek il polygon'larıyla.
@@ -50,9 +53,22 @@ function deltaColor(deltaPct: number | null): string {
  *   - Bölge etiketinde YoY% yazıyor
  *   - Karta tıklanınca /map?region=<klasik-bolge>'a gider
  */
-export function TurkeyMapPolygon({ regions }: Props) {
+export function TurkeyMapPolygon({ regions, basePath }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  // Auto-detect: explicit basePath verilmediyse URL'den çıkar.
+  const pathname = usePathname() ?? "";
+  const effectiveBasePath =
+    basePath ??
+    (pathname.startsWith("/v3")
+      ? "/v3/harita"
+      : pathname.startsWith("/v2")
+        ? "/v2/harita"
+        : "/map");
+  // useEffect içindeki click handler closure'unda sabit kalmasın diye ref'le
+  // tut — props değiştikçe handler güncel path'i okur.
+  const basePathRef = useRef(effectiveBasePath);
+  basePathRef.current = effectiveBasePath;
 
   // bölge adı → row (data lookup için)
   const byBolge = useMemo(() => {
@@ -69,7 +85,16 @@ export function TurkeyMapPolygon({ regions }: Props) {
       center: INITIAL_CENTER,
       zoom: INITIAL_ZOOM,
       attributionControl: false,
+      // Harita sabit: sayfa scroll'u haritaya takılmasın, harita kaymasın.
+      // interactive:true kalır → il polygon click (map'e drill-down) çalışır;
+      // yalnızca pan/zoom kapatılır.
       interactive: true,
+      scrollZoom: false,
+      dragPan: false,
+      doubleClickZoom: false,
+      touchZoomRotate: false,
+      boxZoom: false,
+      keyboard: false,
       dragRotate: false,
       pitchWithRotate: false,
       touchPitch: false,
@@ -226,7 +251,7 @@ export function TurkeyMapPolygon({ regions }: Props) {
           const params = new URLSearchParams();
           params.set("region", cls);
           if (typeof window !== "undefined") {
-            window.location.href = `/map?${params.toString()}`;
+            window.location.href = `${basePathRef.current}?${params.toString()}`;
           }
         });
         map.on("mouseenter", "prov-fill", () => {
@@ -292,21 +317,11 @@ export function TurkeyMapPolygon({ regions }: Props) {
       <div ref={containerRef} className="tmp-canvas" />
 
       <div className="tmp-legend">
-        <span className="lg">
-          <span className="dot" style={{ background: "#16a34a" }} /> +%15+
-        </span>
-        <span className="lg">
-          <span className="dot" style={{ background: "#84cc16" }} /> +%5..+%15
-        </span>
-        <span className="lg">
-          <span className="dot" style={{ background: "#a8a29e" }} /> ±%5
-        </span>
-        <span className="lg">
-          <span className="dot" style={{ background: "#ea580c" }} /> -%5..-%15
-        </span>
-        <span className="lg">
-          <span className="dot" style={{ background: "#dc2626" }} /> -%15-
-        </span>
+        {TREND_LEGEND.map((s) => (
+          <span key={s.bucket} className="lg">
+            <span className="dot" style={{ background: s.hex }} /> {s.label}
+          </span>
+        ))}
         <span className="lg muted">İl polygon'una tıklayınca /map'e gider</span>
       </div>
 

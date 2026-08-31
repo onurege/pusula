@@ -1,7 +1,48 @@
 import { runReadOnly } from "./db.js";
+import { sqlNow } from "./now.js";
 import { cachedClear, withCache } from "./cache.js";
 import { getLocalDb } from "./local-db.js";
-import { loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
+import { getTenantConfig } from "./tenant/index.js";
+import { distFilterClause, type TenantScope } from "./auth.js";
+
+/**
+ * `allowedDistKods` (null → merkez, dizi → dist scope) SQLite `dist_kod`
+ * kolonuna güvenli IN(...) filtresine çevirir. Sayı dizisi olduğu için
+ * `.join(",")` injection riski taşımaz (Number.isInteger guard'lı).
+ */
+function sqliteDistFilter(allowedDistKods: number[] | null | undefined): string {
+  if (allowedDistKods == null) return "";
+  const ids = allowedDistKods.filter((n) => Number.isInteger(n));
+  if (ids.length === 0) return " AND 1=0";
+  return ` AND dist_kod IN (${ids.join(",")})`;
+}
+
+/** MSSQL tarafı için TenantScope + distFilterClause üretir — komuta/wietnauer
+ *  ile aynı desen. */
+function scopeFromAllowed(allowedDistKods: number[] | null | undefined): TenantScope {
+  return allowedDistKods == null
+    ? { type: "merkez", distKods: null, cities: null }
+    : { type: "dist", distKods: allowedDistKods.filter((n) => Number.isInteger(n)), cities: null };
+}
+
+/**
+ * TR il adını UPPER + ASCII (diacritic-strip) formuna normalize eden SQL
+ * expression — case + diacritic-insensitive eşleştirme için. SQLite native
+ * Turkish collation yok, manuel REPLACE zinciri yapıyoruz.
+ *
+ * Kullanım: `${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`
+ * "İZMİR", "İzmir", "IZMIR", "izmir" hepsi "IZMIR"'e indirgenir → eşleşir.
+ *
+ * Pernod (TBLMUSTERI'den "İZMİR" upper Turkish) + FMCG demo (seed'de "İzmir"
+ * canonical) + olası karışık state'ler tek noktadan tutarlı.
+ */
+function SEHIR_NORM_SQL(expr: string): string {
+  return (
+    `UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(${expr},` +
+    `'İ','I'),'ı','I'),'Ş','S'),'ş','S'),'Ğ','G'),'ğ','G'),'Ü','U'),'ü','U'))`
+  );
+}
 
 export type RiskTier = "high" | "medium" | "low" | "active";
 
@@ -10,6 +51,13 @@ export type MapCustomer = {
   distKod: number | null;
   unvan: string;
   kisaAd: string | null;
+  /** Müşteri kodu — TBLMUSTERI.TXTKOD (ör. "000022120.01.3341"). Saha
+   *  ekibinin fiziksel etiket/fatura üzerinde gördüğü kod; md9 harita
+   *  aramasında ünvan yanında bununla da eşleşme yapılır. */
+  musteriKodu: string | null;
+  /** Takip kodu — TBLMUSTERI.TXTERPKOD (distribütörün kendi ERP/muhasebe
+   *  sisteminde bu müşteriyi izlediği kısa kod, ör. "120.01.3341"). */
+  takipKodu: string | null;
   adres: string | null;
   sehir: string | null;
   ilce: string | null;
@@ -29,6 +77,20 @@ export type MapCustomer = {
   /** 30-day ciro and the prior 30-day ciro — feed momentum view. */
   ciro30: number;
   ciroPrev30: number;
+  /**
+   * md11 — üstteki dönem filtresiyle seçilen satış-aktivite penceresi
+   * (30/60/90 gün). Filtre verilmezse 30 (eski davranış).
+   */
+  activityDays: number;
+  /**
+   * md11 — `activityDays` penceresine göre hesaplanan ciro. 30g için
+   * `ciro30`, 60g için `ciro30 + ciroPrev30` (0-60g kümülatif), 90g için
+   * sync anında ayrıca toplanan 90g cirosu. Yalnızca haritada gösterilen
+   * birincil ciro/aktivite metriğini besler — risk skoru bileşenlerini
+   * (`momentum` vb.) etkilemez, onlar sabit pencerelerle hesaplanmaya
+   * devam eder.
+   */
+  activityCiro: number;
   /** @deprecated Tek-tier eski model. Yeni UI `riskScore.tier` kullanır.
    *  Sync hâlâ doldurur; geriye dönük uyumluluk için bir süre kalır. */
   riskTier: RiskTier;
@@ -520,7 +582,37 @@ export type MapCustomerFilters = {
   /** Show only customers not visited for ≥ N days. */
   minDaysSinceVisit?: number;
   limit?: number;
+  /**
+   * md11 — üstteki dönem filtresinin satış-aktivite penceresi. Yalnızca
+   * 30/60/90 kabul edilir (whitelist); başka bir değer veya undefined ise
+   * mevcut 30-günlük davranışa (regresyonsuz) düşer.
+   *
+   * Etkilediği alanlar:
+   *   - `MapCustomer.activityCiro` / `activityDays` (haritada gösterilen
+   *     birincil ciro metriği bu pencereye göre hesaplanır).
+   *   - `salesFilter` ("with"/"without") — açıkça geçirilirse bu pencereye
+   *     göre filtrelenir; verilmezse eski `has_sales` (sabit 30g) kolonu
+   *     kullanılır.
+   *
+   * BİLEREK dokunulmayan: `riskTier` / `riskScore` (composite Risk Score) —
+   * bunlar sync anında sabit pencerelerle (30/60/90/YoY) hesaplanıp SQLite'a
+   * yazılır; harita dönem filtresi risk modelini DEĞİŞTİRMEZ.
+   */
+  activityDays?: number;
+  /** Dist-bazlı veri izolasyonu — sunucu-otoriter. null/undefined → merkez
+   *  (filtre yok), dizi → yalnızca bu dist_kod'lara ait müşteriler. */
+  allowedDistKods?: number[] | null;
+  /** Şehir-bazlı veri izolasyonu (kullanıcı yetkisi). null → kısıt yok. */
+  allowedCities?: string[] | null;
 };
+
+/** md11 dönem filtresi — yalnızca bu üç değer kabul edilir. */
+const ACTIVITY_DAY_OPTIONS = [30, 60, 90] as const;
+type ActivityDays = (typeof ACTIVITY_DAY_OPTIONS)[number];
+
+function isActivityDays(n: unknown): n is ActivityDays {
+  return typeof n === "number" && (ACTIVITY_DAY_OPTIONS as readonly number[]).includes(n);
+}
 
 export type MapFacets = {
   cities: string[];
@@ -553,7 +645,12 @@ export async function listMapCustomers(
   const where: string[] = [];
   const params: Record<string, unknown> = {};
   if (filters.sehir) {
-    where.push("sehir = @sehir");
+    // Case + diacritic-insensitive eşleştirme. DB tarafında Pernod
+    // ("İZMİR" — Türkçe upper), FMCG demo ("İzmir" — canonical mixed),
+    // ve olası eski state ("IZMIR" — ASCII upper) hepsi mevcut olabiliyor.
+    // URL'den de farklı form'lar gelebiliyor (geojson "İzmir" vs eski cache
+    // "İZMİR"). İki tarafı da SAME normalize → eşleşme garantilenir.
+    where.push(`${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`);
     params.sehir = filters.sehir;
   }
   if (filters.bolge) {
@@ -586,10 +683,27 @@ export async function listMapCustomers(
     where.push("dist_kod = @distKod");
     params.distKod = Math.floor(filters.distKod);
   }
+  // md11 dönem filtresi — açıkça geçirilip whitelist'te ise (30/60/90)
+  // salesFilter bu pencereye göre `days_since_last_sale`'dan hesaplanır;
+  // aksi halde (parametre yok / geçersiz değer) eski sabit 30g `has_sales`
+  // kolonu kullanılır — regresyon yok. `has_sales` zaten "son 30g'de satış
+  // var mı" ile aynı anlama geldiği için activityDays=30 iki yol da eşdeğer
+  // sonuç verir.
+  const activityDaysExplicit = isActivityDays(filters.activityDays);
   if (filters.salesFilter === "with") {
-    where.push("has_sales = 1");
+    if (activityDaysExplicit) {
+      where.push("(days_since_last_sale IS NOT NULL AND days_since_last_sale <= @activityDays)");
+      params.activityDays = filters.activityDays;
+    } else {
+      where.push("has_sales = 1");
+    }
   } else if (filters.salesFilter === "without") {
-    where.push("has_sales = 0");
+    if (activityDaysExplicit) {
+      where.push("(days_since_last_sale IS NULL OR days_since_last_sale > @activityDays)");
+      params.activityDays = filters.activityDays;
+    } else {
+      where.push("has_sales = 0");
+    }
   }
 
   // Yeni tier filter (composite Risk Score) varsa onu kullan; yoksa eski
@@ -605,15 +719,36 @@ export async function listMapCustomers(
     where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
     params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
   }
+  // Dist-bazlı veri izolasyonu — sunucu-otoriter. Integer dizisi olduğu için
+  // `.join(",")` güvenli (Number.isInteger guard'lı, parametreli değil).
+  const distIsoClause = sqliteDistFilter(filters.allowedDistKods);
+  if (distIsoClause) where.push(distIsoClause.replace(/^ AND /, ""));
+
+  // Şehir-bazlı veri izolasyonu (kullanıcı yetkisi) — sunucu-otoriter,
+  // parametreli. null → kısıt yok; boş → hiçbir şey.
+  if (filters.allowedCities) {
+    if (filters.allowedCities.length === 0) {
+      where.push("1=0");
+    } else {
+      const cityRefs = filters.allowedCities.map((c, i) => {
+        params[`ycity${i}`] = c.trim();
+        return `@ycity${i}`;
+      });
+      where.push(`TRIM(sehir) IN (${cityRefs.join(",")})`);
+    }
+  }
 
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const sql = `
-    SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd, adres, sehir,
+    SELECT id, dist_kod AS distKod, unvan, kisa_ad AS kisaAd,
+           musteri_kodu AS musteriKodu, takip_kodu AS takipKodu,
+           adres, sehir,
            ilce, distributor, bolge, lat, lng, has_sales AS hasSales,
            days_since_last_sale  AS daysSinceLastSale,
            days_since_last_visit AS daysSinceLastVisit,
            ciro_30d              AS ciro30,
            ciro_prev_30d         AS ciroPrev30,
+           ciro_t90              AS ciroT90,
            risk_tier             AS riskTier,
            risk_score            AS riskScore,
            risk_tier_v2          AS riskTierV2,
@@ -632,6 +767,8 @@ export async function listMapCustomers(
     distKod: number | null;
     unvan: string;
     kisaAd: string | null;
+    musteriKodu: string | null;
+    takipKodu: string | null;
     adres: string | null;
     sehir: string | null;
     ilce: string | null;
@@ -644,6 +781,7 @@ export async function listMapCustomers(
     daysSinceLastVisit: number | null;
     ciro30: number | null;
     ciroPrev30: number | null;
+    ciroT90: number | null;
     riskTier: string | null;
     riskScore: number | null;
     riskTierV2: string | null;
@@ -651,11 +789,26 @@ export async function listMapCustomers(
     riskReasons: string | null;
   }>;
 
+  // md11 — birincil aktivite/ciro penceresi, sync anında önceden toplanmış
+  // 30g/30-60g/90g pencerelerden derlenir (yeni bir MSSQL sorgusu gerekmez,
+  // mirror zaten bunları tutuyor). Whitelist dışı/eksik değer → 30 (mevcut
+  // davranış).
+  const activityDays: ActivityDays = isActivityDays(filters.activityDays)
+    ? filters.activityDays
+    : 30;
+  const activityCiroFor = (r: { ciro30: number | null; ciroPrev30: number | null; ciroT90: number | null }): number => {
+    if (activityDays === 60) return (r.ciro30 ?? 0) + (r.ciroPrev30 ?? 0);
+    if (activityDays === 90) return r.ciroT90 ?? 0;
+    return r.ciro30 ?? 0;
+  };
+
   return rows.map((r) => ({
     id: r.id,
     distKod: r.distKod ?? null,
     unvan: r.unvan,
     kisaAd: r.kisaAd ?? null,
+    musteriKodu: r.musteriKodu ?? null,
+    takipKodu: r.takipKodu ?? null,
     adres: r.adres,
     sehir: r.sehir,
     ilce: r.ilce,
@@ -668,6 +821,8 @@ export async function listMapCustomers(
     daysSinceLastVisit: r.daysSinceLastVisit ?? null,
     ciro30: r.ciro30 ?? 0,
     ciroPrev30: r.ciroPrev30 ?? 0,
+    activityDays,
+    activityCiro: activityCiroFor(r),
     riskTier: (r.riskTier as RiskTier) ?? "low",
     riskScore: rehydrateRiskScore(r),
   }));
@@ -785,6 +940,8 @@ export type MapRegionFilters = {
   /** Composite Risk Score tier filter. */
   tier?: RiskTierV2;
   minDaysSinceVisit?: number;
+  /** Dist-bazlı veri izolasyonu — sunucu-otoriter. null/undefined → merkez. */
+  allowedDistKods?: number[] | null;
 };
 
 export async function listMapRegions(
@@ -797,7 +954,8 @@ export async function listMapRegions(
   const where: string[] = ["sehir IS NOT NULL AND sehir <> ''"];
   const params: Record<string, unknown> = {};
   if (filters.sehir) {
-    where.push("sehir = @sehir");
+    // Case + diacritic-insensitive eşleştirme (bkz. üst not).
+    where.push(`${SEHIR_NORM_SQL("sehir")} = ${SEHIR_NORM_SQL("@sehir")}`);
     params.sehir = filters.sehir;
   }
   if (typeof filters.distKod === "number" && Number.isFinite(filters.distKod)) {
@@ -818,6 +976,9 @@ export async function listMapRegions(
     where.push("(days_since_last_visit IS NULL OR days_since_last_visit >= @minDaysSinceVisit)");
     params.minDaysSinceVisit = Math.floor(filters.minDaysSinceVisit);
   }
+  // Dist-bazlı veri izolasyonu — sunucu-otoriter.
+  const distIsoClauseRegions = sqliteDistFilter(filters.allowedDistKods);
+  if (distIsoClauseRegions) where.push(distIsoClauseRegions.replace(/^ AND /, ""));
 
   // Önce şehir bazlı agg, sonra JS tarafında klasik bölgeye topla.
   // (SQLite tarafında province → region mapping yapacak fonksiyon yok;
@@ -960,6 +1121,31 @@ export function getMapFacets(repoRoot: string): MapFacets {
   return { cities, distributors };
 }
 
+/**
+ * Bir müşterinin `dist_kod`'unun scope içinde olup olmadığını SQLite
+ * mirror'dan kontrol eder. Dist kullanıcı başka dist'in müşteri detayını
+ * (satış/foresight) görememelidir — server.ts bu sonuca göre 403/404 döner.
+ *
+ * `allowedDistKods == null` → merkez, her zaman true.
+ * Müşteri mirror'da bulunamazsa (senkron gecikmesi/hatalı id) da `true`
+ * döner — var olmayan kayıt için 404 zaten ayrı bir kontrolle ele alınmalı,
+ * bu fonksiyon SADECE "başka dist'in müşterisi" durumunu yakalar.
+ */
+export function customerInScope(
+  repoRoot: string,
+  musteriKod: number,
+  allowedDistKods: number[] | null | undefined,
+): boolean {
+  if (allowedDistKods == null) return true;
+  const db = getLocalDb(repoRoot);
+  const row = db
+    .prepare("SELECT dist_kod AS distKod FROM map_customers WHERE id = ?")
+    .get(Math.floor(musteriKod)) as { distKod: number | null } | undefined;
+  if (!row) return true;
+  if (row.distKod == null) return true;
+  return allowedDistKods.includes(row.distKod);
+}
+
 export function getSyncStatus(repoRoot: string): MapSyncStatus {
   const db = getLocalDb(repoRoot);
   const row = db
@@ -1004,12 +1190,23 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_30 AS (
+      -- BUG FIX (harita "son 30g ciro" ~6x şişkin idi): üst sınır eksikti.
+      -- "GETDATE()" bu tenant'ta DEMO_DATE/NOW_MODE=max-invoice anchor'ına
+      -- patchleniyor (db.ts applyDemoDate) ve bu anchor gerçek en-son fatura
+      -- tarihinden GERİDE kalabiliyor (frozen-clock demo senaryosu) — anchor
+      -- sonrası faturalar hâlâ DB'de var. Üst sınır olmadan "son 30g" aslında
+      -- "anchor-30g'den bugüne (gerçek now) kadar her şey" oluyordu, yani
+      -- ~4.5 ay veri tek 30g etiketiyle gösteriliyordu. Diğer sabit pencereler
+      -- (ciro_prev_30, ciro_yoy_30d, urun_grup_prev_30) zaten üst sınırlıydı;
+      -- bu üç CTE (ciro_30, ciro_t90, urun_grup_30) ve ziyaret90 sayaç
+      -- eksikti — hepsi burada aynı desenle kapatıldı.
       SELECT f.LNGMUSTERIKOD,
              SUM(f.DBLNETTUTAR) AS ciro,
              COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_prev_30 AS (
@@ -1024,12 +1221,15 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
     ),
     -- Risk skoru momentum bileşeni için: 90 günlük baseline + YoY pencere
     ciro_t90 AS (
+      -- BUG FIX: aynı üst-sınır eksikliği (bkz. ciro_30 yorumu) — 90g
+      -- baseline de anchor sonrası tüm faturaları yutuyordu.
       SELECT f.LNGMUSTERIKOD,
              SUM(f.DBLNETTUTAR) AS ciro,
              COUNT(*)           AS fatura
       FROM dbo.TBLMSDFATURA AS f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     ciro_yoy_30d AS (
@@ -1055,6 +1255,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         ON g.TXTKOD = u.TXTURUNGRUPKOD AND g.LNGDISTKOD = u.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
       GROUP BY f.LNGMUSTERIKOD
     ),
     urun_grup_prev_30 AS (
@@ -1074,9 +1275,14 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       GROUP BY f.LNGMUSTERIKOD
     ),
     son_ziyaret AS (
+      -- ziyaret90 sayacı da aynı üst-sınır eksikliğini taşıyordu (bkz.
+      -- ciro_30 yorumu) — anchor sonrası ziyaretler de 90g'e sızıyordu.
+      -- MAX(z.TRHGIRIS) kasıtlı olarak sınırsız kalır (tüm zamanların son
+      -- ziyareti — daysSinceLastVisit hesabı için gerekli).
       SELECT z.LNGMUSTERIKOD,
              MAX(z.TRHGIRIS) AS son,
              SUM(CASE WHEN z.TRHGIRIS >= DATEADD(day, -90, GETDATE())
+                       AND z.TRHGIRIS <  DATEADD(day, 1, GETDATE())
                       THEN 1 ELSE 0 END) AS ziyaret90
       FROM dbo.TBLPMPZIYARETBASLIK AS z
       WHERE z.TRHGIRIS IS NOT NULL
@@ -1087,11 +1293,17 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       m.LNGDISTKOD   AS distKod,
       m.TXTUNVAN     AS unvan,
       m.TXTKISAAD    AS kisaAd,
+      -- md9: harita aramasında ünvan yanında müşteri kodu (TXTKOD, saha
+      -- ekibinin gördüğü fiziksel kod) ve takip kodu (TXTERPKOD, distribütör
+      -- ERP/muhasebe eşleştirme kodu) ile de arama yapılabilsin diye çekilir.
+      NULLIF(LTRIM(RTRIM(m.TXTKOD)), '')    AS musteriKodu,
+      NULLIF(LTRIM(RTRIM(m.TXTERPKOD)), '') AS takipKodu,
       m.TXTADRES1    AS adres,
       m.TXTSEHIR     AS sehir,
       m.TXTILCE      AS ilce,
       d.TXTAD        AS distributor,
-      -- Bölge: TBLDIST.TXTGRUP → TBLDISTGRUP.TXTAD. LNGDISTKOD şartı yok
+      -- Bölge: TBLDIST.TXTEKGRUP → TBLDISTEKGRUP.TXTAD (standart 5-bölge:
+      -- MARMARA/EGE/ANADOLU/AKDENİZ/GÜNEYDOĞU). LNGDISTKOD şartı yok
       -- (her ikisi de NULL olduğu için JOIN'i boşaltır).
       g.TXTAD        AS bolge,
       CAST(m.DBLKOORDINATX AS FLOAT) AS lat,
@@ -1111,7 +1323,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
       ISNULL(z.ziyaret90, 0)    AS ziyaret90
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST    AS d   ON d.LNGKOD = m.LNGDISTKOD
-    LEFT JOIN dbo.TBLDISTGRUP AS g  ON g.TXTKOD = d.TXTGRUP
+    LEFT JOIN dbo.TBLDISTEKGRUP AS g  ON g.TXTKOD = d.TXTEKGRUP
     LEFT JOIN son_satis        AS s    ON s.LNGMUSTERIKOD    = m.LNGKOD
     LEFT JOIN ciro_30          AS c30  ON c30.LNGMUSTERIKOD  = m.LNGKOD
     LEFT JOIN ciro_prev_30     AS cp30 ON cp30.LNGMUSTERIKOD = m.LNGKOD
@@ -1120,7 +1332,11 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
     LEFT JOIN urun_grup_30     AS ug30  ON ug30.LNGMUSTERIKOD  = m.LNGKOD
     LEFT JOIN urun_grup_prev_30 AS ugp30 ON ugp30.LNGMUSTERIKOD = m.LNGKOD
     LEFT JOIN son_ziyaret      AS z    ON z.LNGMUSTERIKOD    = m.LNGKOD
+    -- md19: sadece AKTİF müşteri + AKTİF distribütör altındakiler.
+    -- Pasif müşteri (m.BYTDURUM) veya pasif/eksik dist (d.BYTDURUM) haritaya
+    -- girmesin — aksi halde nokta sayısı gerçek aktiften fazla çıkıyordu.
     WHERE m.DBLKOORDINATX > 0 AND m.DBLKOORDINATY > 0
+      AND m.BYTDURUM = 0 AND d.BYTDURUM = 0
     ORDER BY hasSales DESC, m.LNGKOD
   `;
   const cityFacetSql = `
@@ -1147,7 +1363,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   const db = getLocalDb(repoRoot);
   const insCustomer = db.prepare(`
     INSERT INTO map_customers
-      (id, dist_kod, unvan, kisa_ad, adres, sehir, ilce, distributor, bolge,
+      (id, dist_kod, unvan, kisa_ad, musteri_kodu, takip_kodu, adres, sehir, ilce, distributor, bolge,
        lat, lng, has_sales,
        days_since_last_sale, days_since_last_visit,
        ciro_30d, ciro_prev_30d, risk_tier,
@@ -1157,7 +1373,7 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
        ziyaret_90d,
        risk_score, risk_tier_v2, risk_components, risk_reasons)
     VALUES
-      (@id, @distKod, @unvan, @kisaAd, @adres, @sehir, @ilce, @distributor, @bolge,
+      (@id, @distKod, @unvan, @kisaAd, @musteriKodu, @takipKodu, @adres, @sehir, @ilce, @distributor, @bolge,
        @lat, @lng, @hasSales,
        @daysSinceLastSale, @daysSinceLastVisit,
        @ciro30, @ciroPrev30, @riskTier,
@@ -1209,6 +1425,8 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
         distKod: r.distKod == null ? null : Number(r.distKod),
         unvan: String(r.unvan ?? ""),
         kisaAd: (r.kisaAd as string | null) ?? null,
+        musteriKodu: (r.musteriKodu as string | null) ?? null,
+        takipKodu: (r.takipKodu as string | null) ?? null,
         adres: (r.adres as string | null) ?? null,
         sehir: (r.sehir as string | null) ?? null,
         ilce: (r.ilce as string | null) ?? null,
@@ -1335,7 +1553,16 @@ export async function getCustomerDetail(
   const id = Math.floor(musteriKod);
   const d = Math.floor(days);
 
-  const cacheKey = `${id}:${d}`;
+  // Demo tenant — MSSQL yok, SQLite mirror'dan sentezle. Müşteri kartı
+  // ziyaret + tahsilat + belge sayılarını gerçekçi şekilde gösterir.
+  const tenant = getTenantConfig();
+  if (tenant.id === "fmcg-demo") {
+    return loadCustomerDetailFromMirror(id, d);
+  }
+
+  // Cache v3: bakiye alanları kaldırıldı (TBLTCPMUSTERIBAKIYE proje-bazlı
+  // tutarsız bulundu; payment skoru artık sadece tahsilat coverage'tan).
+  const cacheKey = `v3:${id}:${d}`;
   const result = await withCache<CustomerDetail>(
     "customer-detail",
     cacheKey,
@@ -1343,6 +1570,110 @@ export async function getCustomerDetail(
     { forceRefresh: options.forceRefresh },
   );
   return result.value;
+}
+
+/**
+ * FMCG demo için müşteri detayını SQLite mirror'dan sentezle. Sync sırasında
+ * yazılan ciro_30d / fatura_30d / ziyaret_90d / days_since_last_* alanlarından
+ * gerçekçi bir CustomerDetail üretir.
+ *
+ * Sentezlenenler:
+ *   - ziyaret30 = ziyaret_90d / 3 (1 aylık pencereye indir)
+ *   - rutIci/rutDisi = 80/20 split (sahanın çoğu rota üzerinde)
+ *   - tahsilat split: nakit 60% / çek 25% / senet 10% / KK 5% (TR bakkal default)
+ *   - belge sayıları: her ziyarette ~1 fatura + 1 irsaliye + 0.5 sipariş
+ */
+function loadCustomerDetailFromMirror(id: number, _days: number): CustomerDetail {
+  const repoRoot = process.cwd();
+  const db = getLocalDb(repoRoot);
+  const row = db
+    .prepare(
+      `SELECT ciro_30d, fatura_30d, ziyaret_90d,
+              days_since_last_sale, days_since_last_visit
+       FROM map_customers WHERE id = ?`,
+    )
+    .get(id) as
+    | {
+        ciro_30d: number | null;
+        fatura_30d: number | null;
+        ziyaret_90d: number | null;
+        days_since_last_sale: number | null;
+        days_since_last_visit: number | null;
+      }
+    | undefined;
+
+  if (!row) {
+    return emptyCustomerDetail();
+  }
+
+  const ciro30 = row.ciro_30d ?? 0;
+  const fatura30 = row.fatura_30d ?? 0;
+  // ziyaret_90d 90 günlük; 30g penceresine indir.
+  const ziyaret30 = Math.round((row.ziyaret_90d ?? 0) / 3);
+  const rutIciZiyaret = Math.floor(ziyaret30 * 0.8);
+  const rutDisiZiyaret = ziyaret30 - rutIciZiyaret;
+
+  // Tahsilat dağılımı — TR bakkal/market default tipik kompozisyon.
+  const tahsilatNakit = Math.round(ciro30 * 0.6);
+  const tahsilatCek = Math.round(ciro30 * 0.25);
+  const tahsilatSenet = Math.round(ciro30 * 0.1);
+  const tahsilatKK = Math.round(ciro30 * 0.05);
+
+  // Belge sayıları: her ziyaret bir fatura + irsaliye, yarısında ek sipariş.
+  const ziyaretFaturaSayisi = ziyaret30;
+  const ziyaretIrsaliyeSayisi = ziyaret30;
+  const ziyaretSiparisSayisi = Math.round(ziyaret30 * 0.5);
+
+  // Tarihler — gün sayısı geri sayarak demo tarihi 2026-04-17'ye göre.
+  const demoToday = new Date("2026-04-17T00:00:00Z").getTime();
+  const sonFaturaTarihi =
+    row.days_since_last_sale !== null
+      ? new Date(demoToday - row.days_since_last_sale * 86_400_000)
+          .toISOString()
+          .slice(0, 10)
+      : null;
+  const sonZiyaretTarihi =
+    row.days_since_last_visit !== null
+      ? new Date(demoToday - row.days_since_last_visit * 86_400_000)
+          .toISOString()
+          .slice(0, 10)
+      : null;
+
+  return {
+    ciro30,
+    fatura30,
+    sonFaturaTarihi,
+    ziyaret30,
+    rutIciZiyaret,
+    rutDisiZiyaret,
+    sonZiyaretTarihi,
+    tahsilatNakit,
+    tahsilatCek,
+    tahsilatSenet,
+    tahsilatKK,
+    ziyaretFaturaSayisi,
+    ziyaretIrsaliyeSayisi,
+    ziyaretSiparisSayisi,
+  };
+}
+
+function emptyCustomerDetail(): CustomerDetail {
+  return {
+    ciro30: 0,
+    fatura30: 0,
+    sonFaturaTarihi: null,
+    ziyaret30: 0,
+    rutIciZiyaret: 0,
+    rutDisiZiyaret: 0,
+    sonZiyaretTarihi: null,
+    tahsilatNakit: 0,
+    tahsilatCek: 0,
+    tahsilatSenet: 0,
+    tahsilatKK: 0,
+    ziyaretFaturaSayisi: 0,
+    ziyaretIrsaliyeSayisi: 0,
+    ziyaretSiparisSayisi: 0,
+  };
 }
 
 async function loadCustomerDetailFromMssql(
@@ -1459,4 +1790,155 @@ export async function getCustomerSales(
   options: { forceRefresh?: boolean } = {},
 ): Promise<CustomerDetail> {
   return getCustomerDetail(musteriKod, days, options);
+}
+
+// ---------------------------------------------------------------------------
+// Şehir bazlı YoY — /map sayfasının city drill seviyesi için.
+// Son 30g vs Geçen yıl aynı 30g (-395..-365 gün) penceresi — Komuta'nın
+// fetchRegions'ı ile aynı window. Müşterilerin ciroPrev30'u "önceki ay"
+// olduğu için bu data MSSQL'den taze gelir, mirror üzerinden değil.
+// ---------------------------------------------------------------------------
+
+export type MapCityYoY = {
+  sehir: string;
+  /** Diacritic-strip normalize edilmiş — geojson province_norm ile eşleştirmek için */
+  sehirNorm: string;
+  ciro: number;
+  ciroPrev: number;
+  deltaPct: number | null;
+};
+
+/** Şehir bazlı YoY (son 30g vs geçen yıl aynı 30g). region parametresi
+ *  JS tarafında master JSON ile filtre uygular; verilmezse tüm 81 il döner.
+ *
+ *  SQL'de bölge filter'i YOK — Türkçe karakter (Çorum/Kayseri/İçel)
+ *  MSSQL UPPER() + LIKE pattern'i ile uyumsuz, eşleşmeyen şehirler düşerdi.
+ *  81 il agregasyonu ucuz, tüm illeri hesaplayıp JS'de filtre etmek
+ *  daha sağlam. */
+export async function listMapCityYoY(
+  region?: string,
+  allowedDistKods?: number[] | null,
+): Promise<MapCityYoY[]> {
+  const master = await loadRegionMaster();
+  if (region && !master.byRegion.has(region)) {
+    // Bilinmeyen region adı → boş döner
+    return [];
+  }
+
+  const scope = scopeFromAllowed(allowedDistKods);
+  const distClause = distFilterClause(scope, "f.LNGDISTKOD");
+
+  const sql = `
+    WITH son AS (
+      SELECT m.TXTSEHIR AS sehir, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+        ${distClause}
+      GROUP BY m.TXTSEHIR
+    ),
+    onceki AS (
+      SELECT m.TXTSEHIR AS sehir, SUM(f.DBLNETTUTAR) AS ciro
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
+        AND m.TXTSEHIR IS NOT NULL AND m.TXTSEHIR <> ''
+        ${distClause}
+      GROUP BY m.TXTSEHIR
+    )
+    SELECT COALESCE(s.sehir, o.sehir) AS sehir,
+           ISNULL(s.ciro, 0) AS ciro,
+           ISNULL(o.ciro, 0) AS ciroPrev
+    FROM son s
+    FULL OUTER JOIN onceki o ON o.sehir = s.sehir
+  `;
+  const out = await runReadOnly(sql, { limit: 500, timeoutMs: 60_000 });
+  console.info(
+    `[map city-yoy] SQL ${out.rows.length} ham şehir döndü (region filter JS'de uygulanacak: ${region ?? "yok"})`,
+  );
+
+  // Customer.sehir → master province_norm match (Komuta'nın matchProvince
+  // mantığı ile aynı). Birden fazla raw sehir aynı province'a düşerse
+  // toplama yapılır.
+  const matchProvince = (raw: string): string | null => {
+    const norm = raw
+      .replace(/İ/g, "I").replace(/ı/g, "I").replace(/I/g, "I").replace(/i/g, "I")
+      .replace(/Ş/g, "S").replace(/ş/g, "S")
+      .replace(/Ğ/g, "G").replace(/ğ/g, "G")
+      .replace(/Ü/g, "U").replace(/ü/g, "U")
+      .replace(/Ö/g, "O").replace(/ö/g, "O")
+      .replace(/Ç/g, "C").replace(/ç/g, "C")
+      .toUpperCase().trim();
+    if (!norm) return null;
+    if (master.byProvince.has(norm)) return norm;
+    const firstToken = norm.split(/[\s\-_./]+/)[0];
+    if (firstToken && master.byProvince.has(firstToken)) return firstToken;
+    for (const p of master.byProvince.keys()) {
+      if (p && norm.includes(p)) return p;
+    }
+    return null;
+  };
+
+  const byProvince = new Map<string, { ciro: number; ciroPrev: number; rawSehir: string }>();
+  const unmatched: string[] = [];
+  const droppedByRegion: string[] = [];
+  for (const row of out.rows) {
+    const raw = String(row.sehir ?? "").trim();
+    if (!raw) continue;
+    const matched = matchProvince(raw);
+    if (!matched) {
+      unmatched.push(raw);
+      continue;
+    }
+    // ALIAS → KANONİK: master "AFYONKARAHISAR" diye match etse de geojson
+    // sadece "AFYON" polygon'u taşıyor; canonicalProvince ile mapler.
+    const province = canonicalProvince(matched);
+    // İstenen bölgenin dışındaki şehirler düşür
+    if (region) {
+      const info = master.byProvince.get(province);
+      if (!info || info.region !== region) {
+        droppedByRegion.push(`${raw} → ${province} (${info?.region ?? "?"})`);
+        continue;
+      }
+    }
+    const e = byProvince.get(province) ?? {
+      ciro: 0,
+      ciroPrev: 0,
+      rawSehir: raw,
+    };
+    e.ciro += Number(row.ciro ?? 0);
+    e.ciroPrev += Number(row.ciroPrev ?? 0);
+    byProvince.set(province, e);
+  }
+  console.info(
+    `[map city-yoy] Sonuç: ${byProvince.size} il match etti${region ? ` (region=${region})` : ""}, ${unmatched.length} eşleşmeyen, ${droppedByRegion.length} bölge dışı`,
+  );
+  if (unmatched.length > 0) {
+    console.warn(
+      `[map city-yoy] Eşleşmeyen şehirler (master JSON'a eklenmeli):`,
+      unmatched.slice(0, 10).join(", "),
+    );
+  }
+  if (region && byProvince.size === 0) {
+    console.error(
+      `[map city-yoy] ${region} için HİÇBİR şehir eşleşmedi — bölge dışı dropped örnekleri:`,
+      droppedByRegion.slice(0, 5).join(" | "),
+    );
+  }
+
+  return Array.from(byProvince.entries()).map(([provNorm, agg]) => ({
+    sehir: agg.rawSehir,
+    sehirNorm: provNorm,
+    ciro: agg.ciro,
+    ciroPrev: agg.ciroPrev,
+    deltaPct:
+      agg.ciroPrev > 0
+        ? ((agg.ciro - agg.ciroPrev) / agg.ciroPrev) * 100
+        : null,
+  }));
 }
