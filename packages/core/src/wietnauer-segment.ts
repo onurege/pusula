@@ -63,7 +63,9 @@ const CACHE_DOMAIN = "wietnauer-segment";
 // (Komuta'daki kanıtlı fetchChannelByCustomerType pattern'i). Eski
 // TBLMUSTERIGRUP ve Ek Saha 8 (TBLMUSTERIEKSAHA × TBLEKSAHASECENEK)
 // kaynakları bu boyutlar için artık kullanılmıyor.
-const CACHE_VERSION = "v6";
+// v7: C) Müşteri Tipi boyutu TBLMUSTERIGRUPKIRILIM → TBLMUSTERIGRUP (cockpit
+// Kanal Mix ile aynı; A) ile ayrışsın). Stale cache eski kırılımı servis etmesin.
+const CACHE_VERSION = "v7";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -316,14 +318,14 @@ async function fetchMusteriGrupSegmentRaw(win: { lower: string; upper: string },
 }
 
 /**
- * C) Müşteri Tipi — Müşteri Grup Kırılımı ile AYNI kaynak
- * (TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM.TXTKOD → TXTAD).
+ * C) Müşteri Tipi — TBLMUSTERIGRUP (TBLMUSTERI.TXTGRUPKOD → TXTAD):
+ * OFF TRADE / ON TRADE / TURİZM / TEDARİKÇİ / CP&S gibi müşteri grubu.
  *
- * İş kararıyla bu boyut artık A) Müşteri Grubu ile aynı kırılım kaynağından
- * besleniyor (bkz. fetchMusteriGrupSegmentRaw / komuta.ts
- * fetchChannelByCustomerType). Eski Ek Saha 8 (TBLMUSTERIEKSAHA ×
- * TBLEKSAHASECENEK, Perakende/On Trade/Otel/Tali Bayi/OPA) kaynağı bu boyut
- * için artık kullanılmıyor.
+ * Cockpit Kanal Mix (komuta.ts fetchChannelMonthly) ile AYNI boyut kaynağı.
+ * A) Müşteri Grubu ise Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM,
+ * Prestige/Premium/Standart…) kullanır — iki panel bilinçli olarak FARKLI
+ * boyutları gösterir. Eski Ek Saha 8 (TBLMUSTERIEKSAHA × TBLEKSAHASECENEK)
+ * kaynağı bu boyut için artık kullanılmıyor.
  *
  * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0) —
  * kırılım kodu boş/eşleşmeyenler "(Tanımsız)" grubunda sayılır (LEFT JOIN).
@@ -338,10 +340,10 @@ async function fetchEkSahaSegmentRaw(win: { lower: string; upper: string }, citi
       SELECT
         m.LNGKOD AS musteri_kod,
         m.LNGDISTKOD AS dist_id,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
-        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)), ''), '0') AS tip_kod
+        ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
+        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKOD)), ''), '0') AS tip_kod
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
       WHERE m.BYTDURUM = 0${cityColClause(cities, "m.TXTSEHIR")}
     ),
     fatura_30g AS (

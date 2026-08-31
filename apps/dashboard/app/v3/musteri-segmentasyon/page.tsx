@@ -49,7 +49,7 @@ type SegmentSnapshot = {
  *
  *   A) Müşteri Grubu — Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM)
  *   B) Müşteri Ek Grubu (bayilik formatı)
- *   C) Müşteri Tipi — A) ile AYNI kaynak (Müşteri Grup Kırılımı)
+ *   C) Müşteri Tipi — TBLMUSTERIGRUP (OFF/ON TRADE/Turizm…, cockpit Kanal Mix boyutu)
  *   D) Cross: Müşteri Tipi × Marka heatmap
  *   E) İskonto Kırılımı: Ek Grup / nokta (müşteri) bazında (md35)
  *
@@ -87,8 +87,8 @@ export default async function V3MusteriSegmentasyonPage({ searchParams }: Props)
     ? snap.musteriGrubu.reduce((acc, r) => acc + r.musteriSayi, 0)
     : 0;
   const description = snap
-    ? `Müşteri Grubu ve Müşteri Tipi, Müşteri Grup Kırılımı kaynağından (${kirilimSayisi} kırılım, ${toplamMusteriSayisi.toLocaleString("tr-TR")} müşteri); Ek Grubu (bayilik formatı, ${ekGrupSayisi} grup) ayrı boyut — ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`
-    : `Müşteri Grubu, Ek Grubu (bayilik formatı) ve Müşteri Tipi — üç bağımsız boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`;
+    ? `Müşteri Grubu = Müşteri Grup Kırılımı (${kirilimSayisi} kırılım, ${toplamMusteriSayisi.toLocaleString("tr-TR")} müşteri, Prestige/Premium/Standart…); Müşteri Tipi = müşteri grubu (TBLMUSTERIGRUP: OFF/ON TRADE/Turizm…); Ek Grubu (bayilik formatı, ${ekGrupSayisi} grup) — üç ayrı boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`
+    : `Müşteri Grubu (kırılım), Müşteri Tipi (müşteri grubu) ve Ek Grubu (bayilik formatı) — üç bağımsız boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`;
 
   return (
     <div className="v3-page">

@@ -2145,7 +2145,7 @@ export async function getKomutaSnapshot(
   // semi-join (join eklemeden tüm fetcher'lara yayılır). distClause'a katlanır
   // → her `${distClause}` bunları da taşır. Değerler facet dropdown'dan gelen
   // kısa kodlar; tek-tırnak escape + uzunluk sınırı ile injection'a kapalı.
-  const escSql = (v: string) => v.replace(/'/g, "''").slice(0, 80);
+  const escSql = (v: string) => v.slice(0, 80).replace(/'/g, "''");
   const bolge = options.bolge?.trim() || null; // şehir-tabanlı 8 coğrafi bölge ADI
   const kanal = options.kanal?.trim() || null; // müşteri grup kırılımı KODU (TXTGRUPKIRILIMKOD)
   // Bölge: seçili bölgenin GERÇEK şehirleri (region master → TXTSEHIR) IN listesi.
