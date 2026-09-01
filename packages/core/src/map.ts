@@ -1173,7 +1173,10 @@ export function getSyncStatus(repoRoot: string): MapSyncStatus {
  * the ONLY function that talks to MSSQL on the map data path; the
  * dashboard reads from SQLite afterwards.
  */
-export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
+export async function syncMapData(
+  repoRoot: string,
+  opts: { invalidateKomuta?: boolean } = {},
+): Promise<MapSyncStatus> {
   const startedAt = Date.now();
 
   // Pre-aggregated risk dimensions per customer — single trip during sync so
@@ -1495,7 +1498,15 @@ export async function syncMapData(repoRoot: string): Promise<MapSyncStatus> {
   // stay because they have their own per-radar refresh affordance.
   cachedClear("customer-detail");
   cachedClear("foresight");
-  cachedClear("komuta");
+  // komuta: refreshAllSnapshots map sync'i komuta WARM'ından hemen önce çağırır
+  // ve komuta'yı zaten forceRefresh ile (brief dahil) yeniden ısıtır. Orada
+  // ayrıca clear etmek, taze brief'i siler ve manuel yenilemede (yalnız caller
+  // scope'u ısınır) diğer merkez scope'ların brief'ini uçurur. Bu yüzden refresh
+  // akışı invalidateKomuta:false geçer. Standalone /api/map/sync (arkasından warm
+  // gelmez) default true ile komuta'yı invalidate etmeye devam eder.
+  if (opts.invalidateKomuta !== false) {
+    cachedClear("komuta");
+  }
 
   return status;
 }
