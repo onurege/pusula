@@ -63,6 +63,7 @@ import {
   verifySession,
   resolveTenantScope,
   listAllowedDistributors,
+  listTopActiveDistIds,
   AUTH_COOKIE_NAME,
   scopeSingleDistId,
   type TenantScope,
@@ -765,12 +766,10 @@ app.get("/api/map/sync-status", async (c) => {
 });
 
 app.post("/api/map/sync", async (c) => {
-  try {
-    await scopeFromRequest(c);
-  } catch (err) {
-    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
-    return c.json({ error: (err as Error).message }, 500);
-  }
+  // Ağır harita senkronu yalnızca admin: normal kullanıcılar datayı yoramasın.
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   try {
     const status = await syncMapData(REPO_ROOT);
     return c.json(status);
@@ -930,6 +929,8 @@ app.get("/api/komuta/facets", async (c) => {
 app.post("/api/refresh-all", async (c) => {
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  // Ağır tam-yenileme yalnızca admin: normal kullanıcılar datayı yoramasın.
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   if (DEMO_DATA) return c.json({ ok: true, skipped: "demo" });
   try {
     await refreshAllSnapshots("manual");
@@ -1432,6 +1433,35 @@ async function refreshAllSnapshots(reason: string) {
 
     // 3) Harita müşteri aynası — "Verileri yenile" butonuyla aynı sync.
     await warmStep(tag, "map sync", () => syncMapData(REPO_ROOT));
+
+    // 4) Dist scope ısıtma — merkez drilldown ve tek-dist kullanıcıların cache
+    //    anahtarı { distId: X }'tir; merkez (null) ısıtma bunları kapsamaz.
+    //    En aktif dist'leri hacme göre seçip (hepsini değil) komuta + tüm V3
+    //    snapshot'larını o scope'ta ısıtırız. WARM_DIST_SCOPES=0 ile kapatılır;
+    //    WARM_DIST_LIMIT ile dist sayısı ayarlanır (03:00 job süresi / MSSQL yükü).
+    if (process.env.WARM_DIST_SCOPES !== "0") {
+      const distLimit = parseInt(process.env.WARM_DIST_LIMIT ?? "25", 10);
+      const distIds = await listTopActiveDistIds(distLimit).catch((err) => {
+        console.error(`${tag} dist listesi fail:`, (err as Error).message);
+        return [] as number[];
+      });
+      console.log(`${tag} dist scope ısıtma: ${distIds.length} dist (limit ${distLimit})`);
+      for (const distId of distIds) {
+        const distOpts: V3SnapshotOpts = {
+          forceRefresh: true,
+          strategicBrands: tenant.strategicBrands ?? [],
+          allowedDistKods: null,
+          distId,
+        };
+        // Komuta yalnız TL (9LE merkez'de ısıtıldı; dist başına maliyeti sınırla).
+        await warmStep(tag, `komuta d${distId}`, () =>
+          getKomutaSnapshot({ forceRefresh: true, unit: "tl", distId }),
+        );
+        for (const [name, fn] of v3) {
+          await warmStep(tag, `v3 ${name} d${distId}`, () => fn(distOpts));
+        }
+      }
+    }
 
     console.log(`${tag} başarılı (${new Date().toISOString()})`);
   } catch (err) {

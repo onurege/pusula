@@ -20,6 +20,7 @@
 import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { runReadOnly } from "./db.js";
+import { sqlNow } from "./now.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { getUserPerm } from "./user-perms.js";
 
@@ -437,6 +438,31 @@ export function cityCacheTag(cities: string[] | null | undefined): string {
 export function scopeSingleDistId(scope: TenantScope): number | null {
   if (scope.distKods && scope.distKods.length === 1) return scope.distKods[0] ?? null;
   return null;
+}
+
+/**
+ * Son `days` günde en çok fatura kesen aktif dist kodları (hacme göre azalan).
+ * Gece-refresh'in dist-scope cache'lerini ısıtması için — TÜM dist'leri değil,
+ * gerçekten kullanılan en aktif olanları döndürür (03:00 job'ını ve MSSQL'i
+ * boğmamak için `limit` ile sınırlı). Session gerektirmez (sunucu job'ı).
+ */
+export async function listTopActiveDistIds(limit = 25, days = 30): Promise<number[]> {
+  const n = Math.max(1, Math.min(500, Math.floor(limit)));
+  const d = Math.max(1, Math.min(400, Math.floor(days)));
+  const res = await runReadOnly(
+    `SELECT TOP (${n}) f.LNGDISTKOD AS id
+     FROM dbo.TBLMSDFATURA f
+     INNER JOIN dbo.TBLDIST dist ON dist.LNGKOD = f.LNGDISTKOD AND dist.BYTDURUM = 0
+     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+       AND f.TRHISLEMTARIHI >= DATEADD(day, -${d}, ${sqlNow()})
+       AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+     GROUP BY f.LNGDISTKOD
+     ORDER BY COUNT(*) DESC`,
+    { limit: 600, timeoutMs: 30_000 },
+  );
+  return res.rows
+    .map((r) => Number(r.id))
+    .filter((x) => Number.isFinite(x));
 }
 
 /** İzinli distribütörlerin (kod + ad) listesi — dropdown için. */

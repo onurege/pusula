@@ -1,6 +1,6 @@
 import { withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
-import { generate } from "./gemini.js";
+import { generateClaude } from "./claude.js";
 import {
   currentYyyymm,
   getMultiplier,
@@ -1833,7 +1833,7 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
   ].join("\n");
 
   try {
-    const text = await generate(system, userPrompt, {
+    const text = await generateClaude(system, userPrompt, {
       temperature: 0.4,
       maxOutputTokens: 800,
     });
@@ -1860,15 +1860,6 @@ function isEmptySnapshot(s: KomutaSnapshot): boolean {
     s.matrix.length === 0 &&
     s.reps.length === 0 &&
     s.portfolio.length === 0
-  );
-}
-
-/** Snapshot data dolu ama AI brief üretilemedi — cache'ten brief'i
- *  invalidate etmek için ayrı kontrol. Veri tamken brief tekrar denenmeli. */
-function isMissingBrief(s: KomutaSnapshot): boolean {
-  return (
-    !isEmptySnapshot(s) &&
-    (typeof s.brief !== "string" || s.brief.trim().length < 50)
   );
 }
 
@@ -2297,7 +2288,12 @@ export async function getKomutaSnapshot(
         portfolio,
         customerTypeBrand,
       };
-      const brief = await fetchBrief(partial);
+      // AI yorumu (brief) YALNIZCA forceRefresh'te üretilir — yani gece görevi
+      // (03:00) ve admin "Veriyi Yenile" akışında. Normal kullanıcı yüklemesinde
+      // (cache MISS) LLM çağrısı YAPILMAZ; brief boş kalır, bir sonraki gece
+      // görevinde dolar. Böylece her tıklamada Claude token maliyeti oluşmaz ve
+      // cockpit hızlı açılır. Cache HIT'te zaten gecenin brief'i servis edilir.
+      const brief = options.forceRefresh ? await fetchBrief(partial) : "";
       let snap: KomutaSnapshot = { ...partial, brief };
       // Reel TL: geçmiş değerleri TÜFE ile bugünün parasına çevir.
       if (options.reelTL) {
@@ -2321,21 +2317,10 @@ export async function getKomutaSnapshot(
       distId: options.distId,
     });
   }
-  // Veri var ama Gemini brief üretilememiş (network/key/timeout) → retry et.
-  // Bu sayede AI yorumu sürekli "boş" cache'lenip kalmaz, bir sonraki istekte
-  // tekrar denenir. forceRefresh false ise yine de bir kez dene.
-  if (isMissingBrief(cached.value) && !options.forceRefresh) {
-    console.warn(
-      "[komuta] cached snapshot has empty/short brief, retrying with refresh",
-    );
-    return getKomutaSnapshot({
-      forceRefresh: true,
-      reelTL: options.reelTL,
-      unit: options.unit,
-      allowedDistKods: options.allowedDistKods,
-      distId: options.distId,
-    });
-  }
+  // NOT: Eski "brief boşsa forceRefresh ile retry et" bloğu KALDIRILDI. Brief
+  // artık yalnızca gece görevi/admin yenilemesinde üretiliyor; kullanıcı
+  // yüklemesinde boş brief'i yeniden üretmeye çalışmak (LLM çağrısı) tam da
+  // önlemek istediğimiz per-tıklama token maliyetini doğururdu.
   return cached.value;
 }
 

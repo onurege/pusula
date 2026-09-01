@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 import { cn } from "./cn";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
-import { GlobalRefreshButton } from "@/components/global-refresh-button";
 import { useTenant } from "@/components/tenant-provider";
 import { useAuth } from "@/components/auth/auth-context";
 import { useContent } from "@/components/content-provider";
@@ -160,7 +159,8 @@ export function Navbar() {
               <Settings size={16} strokeWidth={2} />
             </Link>
           )}
-          <GlobalRefreshButton />
+          {/* "Veriyi Yenile" kaldırıldı — ağır yenileme yalnızca admin panelinde
+              (kullanıcılar datayı yormasın). Bkz. /admin. */}
           {!tenant.ui?.forceLightTheme && <ThemeToggle />}
           <UserChip />
         </div>
