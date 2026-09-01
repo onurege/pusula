@@ -4,9 +4,9 @@
  * (brief) bunu kullanır; embeddings ve diğer generate() çağrıları Gemini'de
  * kalır (bilinçli — yalnızca brief taşındı).
  *
- * Model env ile ayarlanır (CLAUDE_BRIEF_MODEL); varsayılan claude-opus-5.
- * Brief basit bir 3-paragraf özet olduğu için düşük effort + adaptif thinking
- * ile ucuz/hızlı çalışır. Anahtar: ANTHROPIC_API_KEY.
+ * Model env ile ayarlanır (CLAUDE_BRIEF_MODEL); varsayılan claude-haiku-4-5
+ * (brief basit bir 3-paragraf özet — en ucuz model yeterli). Anahtar:
+ * ANTHROPIC_API_KEY.
  */
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -32,7 +32,7 @@ export async function generateClaude(
   userPrompt: string,
   options: { temperature?: number; maxOutputTokens?: number } = {},
 ): Promise<string> {
-  const model = process.env.CLAUDE_BRIEF_MODEL?.trim() || "claude-opus-5";
+  const model = process.env.CLAUDE_BRIEF_MODEL?.trim() || "claude-haiku-4-5";
   const res = await getClient().messages.create({
     model,
     max_tokens: options.maxOutputTokens ?? 1024,
