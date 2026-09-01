@@ -766,12 +766,10 @@ app.get("/api/map/sync-status", async (c) => {
 });
 
 app.post("/api/map/sync", async (c) => {
-  try {
-    await scopeFromRequest(c);
-  } catch (err) {
-    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
-    return c.json({ error: (err as Error).message }, 500);
-  }
+  // Ağır harita senkronu yalnızca admin: normal kullanıcılar datayı yoramasın.
+  const session = await verifySession(tokenFromRequest(c));
+  if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   try {
     const status = await syncMapData(REPO_ROOT);
     return c.json(status);
@@ -931,6 +929,8 @@ app.get("/api/komuta/facets", async (c) => {
 app.post("/api/refresh-all", async (c) => {
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+  // Ağır tam-yenileme yalnızca admin: normal kullanıcılar datayı yoramasın.
+  if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   if (DEMO_DATA) return c.json({ ok: true, skipped: "demo" });
   try {
     await refreshAllSnapshots("manual");

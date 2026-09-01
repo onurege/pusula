@@ -213,10 +213,6 @@ function Header({
 }) {
   const rel = formatRelative(generatedAt);
   const modeLabel = reelTL ? "Reel TL" : "Nominal TL";
-  const refreshHref = "/komuta?" + new URLSearchParams({
-    refresh: "1",
-    ...(reelTL ? { reel: "1" } : {}),
-  }).toString();
   return (
     <header className="komuta-page-header">
       <div className="komuta-page-header-main">
@@ -237,9 +233,6 @@ function Header({
           <span className="live-dot" />
           {rel}
         </span>
-        <Link href={refreshHref} className="refresh-btn" prefetch={false}>
-          ↻ Yenile
-        </Link>
       </div>
     </header>
   );
