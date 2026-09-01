@@ -465,6 +465,49 @@ export async function listTopActiveDistIds(limit = 25, days = 30): Promise<numbe
     .filter((x) => Number.isFinite(x));
 }
 
+/**
+ * Merkez kullanıcıların (BYTTIP=0) GÖRDÜĞÜ distinct dist-kod kümeleri.
+ *
+ * Neden gerekli: `resolveTenantScope` merkez için bile `distKods`'u Panorama
+ * kümesi olarak döndürür (null=filtresiz DEĞİL). Cockpit/V3 snapshot cache
+ * anahtarı bu AÇIK listeye göre kurulur (ör. "d1_4_5..._31"). Gece/manuel warm
+ * eğer `allowedDistKods` geçmezse `null`→"all" anahtarını ısıtır ve cockpit'in
+ * gerçekte okuduğu "d1_4..." anahtarına HİÇ dokunmaz → AI brief boş kalır,
+ * merkez ilk açılışta cache'i ıskalar. Bu fonksiyon warm'ın cockpit ile AYNI
+ * anahtarı ısıtmasını sağlar. Aynı dist kümesini paylaşan kullanıcılar imza
+ * bazında tek sefer döner (distinct).
+ */
+export async function listMerkezScopes(): Promise<number[][]> {
+  const res = await runReadOnly(
+    `SELECT v.LNGKOD AS userId, v.LNGDISTKOD AS distId
+       FROM dbo.ERCVIEWTBLKULLANICIDIST_DASHBOARD v
+       INNER JOIN dbo.TBLDIST d ON d.LNGKOD = v.LNGDISTKOD AND d.BYTDURUM = 0
+       INNER JOIN dbo.TBLKULLANICI u ON u.LNGKOD = v.LNGKOD AND u.BYTDURUM = 0 AND u.BYTTIP = 0
+      WHERE v.BYTDURUM = 0`,
+    { limit: 100_000, timeoutMs: 30_000 },
+  );
+  const byUser = new Map<number, Set<number>>();
+  for (const r of res.rows) {
+    const uid = Number(r.userId);
+    const did = Number(r.distId);
+    if (!Number.isInteger(uid) || !Number.isInteger(did)) continue;
+    const set = byUser.get(uid) ?? new Set<number>();
+    set.add(did);
+    byUser.set(uid, set);
+  }
+  const seen = new Set<string>();
+  const scopes: number[][] = [];
+  for (const set of byUser.values()) {
+    const sorted = [...set].sort((a, b) => a - b);
+    const sig = sorted.join("_");
+    if (sig && !seen.has(sig)) {
+      seen.add(sig);
+      scopes.push(sorted);
+    }
+  }
+  return scopes;
+}
+
 /** İzinli distribütörlerin (kod + ad) listesi — dropdown için. */
 export async function listAllowedDistributors(
   session: UserSession,

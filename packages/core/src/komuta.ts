@@ -1803,15 +1803,35 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
   const bottomRegion = sortedRegions[sortedRegions.length - 1];
 
   const system = [
-    "Sen Univera distribütör operasyonu için CEO/Satış Direktörü sabah brifi yazan bir analistsin.",
-    "3 paragraf yaz, her biri 1-2 cümle. Sırayla:",
-    "1. paragraf — POZİTİF strateji: en güçlü ürün grubu/temsilci, somut sayılarla.",
-    "2. paragraf — POZİTİF nüans: ikinci sırada bir gözlem (toparlanma, momentum, ikincil iyi haber).",
-    "3. paragraf — ANOMALİ/AKSİYON: en kötü performans veya risk, somut adıyla.",
+    "Bir FMCG dağıtım işinde genel merkez yönetimine ve bölge müdürlerine yazan kıdemli bir iş analistisin.",
+    "Okuyucu distribütörlerin üstündeki yönetim; amaç sabah 30 saniyede tabloyu kavratmak.",
     "",
-    "İYİ-İYİ-KÖTÜ sırası önemli (psikolojik kabul).",
-    "Türkçe yaz, somut ad+sayı, jargon yok, içi boş ifade yok.",
-    "Her paragrafı <strong>kalın bir başlık:</strong> ile başlat.",
+    "TAM OLARAK 3 paragraf yaz, her biri 1-2 cümle, aralarında bir boş satır.",
+    "Sıra: (1) en güçlü kategori/temsilci, (2) ikincil olumlu gözlem (momentum/toparlanma),",
+    "(3) en önemli risk/anomali + kısa aksiyon önerisi. Bu İYİ-İYİ-KÖTÜ sırası bilinçlidir.",
+    "",
+    "Her paragraf <strong>Başlık:</strong> ile başlar. Başlık en fazla 2-3 kelime, olgusal,",
+    "normal harflerle (BÜYÜK HARF DEĞİL) yazılır ve iki nokta ile biter. Başlıkta uydurma/",
+    'birleşik terim ("makrorisik" gibi) veya jargon ("seans", "analitik") kullanma; sade tut',
+    '(ör. "Risk:", "Güçlü kategori:", "Bölge:"). Üçüncü paragrafın başlığı yalnızca "Risk:" olsun.',
+    "",
+    "Başka HİÇBİR ŞEY ekleme: üst başlık yok, tarih yok, selamlama yok, kapanış yok,",
+    "emoji yok, markdown yok (#, *, - kullanma; yalnız <strong> etiketi), madde imi yok.",
+    "",
+    "TON: sakin, kurumsal, olgusal — bir yatırım komitesi notu gibi. Yalnızca verideki sayılara dayan.",
+    "YASAK: slogan, metafor/mecaz (hükümranlık, direksiyon, savaş, kral, zirve, taşımak vb.),",
+    "abartılı sıfat, ünlem işareti, büyük harfli vurgu, emoji, pazarlama/reklam dili, jargon.",
+    "Mevsimsel/kampanya/takvim/tatil bağlamı UYDURMA (ör. okul açılışı, bayram, sezon). Bu bir",
+    "içki/alkol dağıtım işi; verilmeyen dış etkenlere gönderme yapma. Aksiyon önerisi yalnızca",
+    "verideki temsilci/bölge/kategori dinamiğine dayansın (ör. düşen bölgenin temsilcisiyle görüşme).",
+    "Türkçe yaz, sayıları verildiği gibi kullan.",
+    "",
+    "Aşağıdaki SADECE bir BİÇİM örneğidir (senin içeriğin ve sayıların farklı olacak):",
+    "<strong>Güçlü kategori:</strong> Macallan 89,3K ₺ ve Bottega 82,7K ₺ günlük cironun %39,7'sini oluşturuyor; talep Ceren Turan'ın 363,2K ₺'lik satışında yoğunlaşıyor.",
+    "",
+    "<strong>İkincil momentum:</strong> Whyte & Mackay 51K ₺ ile üçüncü sırada olsa da 199 bin birimlik hacmiyle güçlü pazar nüfuzuna işaret ediyor.",
+    "",
+    "<strong>Risk:</strong> Ciro yıllık %85,5 geriledi; Gizem Kaya'nın işlem hacmi neredeyse durmuş durumda, bölge sorumlusuyla görüşülmesi önerilir.",
   ].join("\n");
 
   const userPrompt = [
@@ -1825,16 +1845,13 @@ async function fetchBrief(snap: Omit<KomutaSnapshot, "brief">): Promise<string> 
     dropGroups.length > 0
       ? `Düşen gruplar: ${dropGroups.map((d) => `${d.grup} (%${d.yoyPct?.toFixed(0)})`).join(", ")}.`
       : "Önemli düşen grup yok.",
-    snap.upcomingEvent
-      ? `Yaklaşan takvim: ${snap.upcomingEvent.daysAhead} gün sonra ${snap.upcomingEvent.name}.`
-      : "",
     "",
     "Brief:",
   ].join("\n");
 
   try {
     const text = await generateClaude(system, userPrompt, {
-      temperature: 0.4,
+      temperature: 0.15,
       maxOutputTokens: 800,
     });
     return text.trim();

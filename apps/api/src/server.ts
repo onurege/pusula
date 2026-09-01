@@ -64,6 +64,7 @@ import {
   resolveTenantScope,
   listAllowedDistributors,
   listTopActiveDistIds,
+  listMerkezScopes,
   AUTH_COOKIE_NAME,
   scopeSingleDistId,
   type TenantScope,
@@ -771,7 +772,11 @@ app.post("/api/map/sync", async (c) => {
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
   if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   try {
-    const status = await syncMapData(REPO_ROOT);
+    // invalidateKomuta:false — map sync komuta'nın MSSQL kaynağını değiştirmez
+    // (komuta yerel müşteri aynasını okumaz); komuta yalnız kendi forceRefresh
+    // akışıyla (gece/manuel) tazelenir. Burada komuta'yı silmek, taze brief'i
+    // ve diğer merkez scope'ları gereksiz yere uçururdu.
+    const status = await syncMapData(REPO_ROOT, { invalidateKomuta: false });
     return c.json(status);
   } catch (err) {
     // Log the full stack server-side so we can inspect it in the API log,
@@ -933,7 +938,17 @@ app.post("/api/refresh-all", async (c) => {
   if (!isAdminUser(session.username)) return c.json({ error: "Yetki yok" }, 403);
   if (DEMO_DATA) return c.json({ ok: true, skipped: "demo" });
   try {
-    await refreshAllSnapshots("manual");
+    // Manuel yenileme HIZLI olmalı (server-action → fetch timeout'una düşmesin,
+    // "unexpected response"). İki daraltma:
+    //  1) dist-scope ısıtma ATLANIR (gece 03:00 / boot işi).
+    //  2) TÜM merkez scope'lar (16 kullanıcı) yerine YALNIZ tıklayan admin'in
+    //     kendi Panorama scope'u ısıtılır — göreceği tam o scope; brief dahil.
+    // Gece/boot job'ı listMerkezScopes ile hepsini kapsamaya devam eder.
+    const scope = resolveTenantScope(session, null);
+    await refreshAllSnapshots("manual", {
+      warmDistScopes: false,
+      merkezScopes: [scope.distKods],
+    });
     return c.json({ ok: true });
   } catch (err) {
     console.error("[/api/refresh-all] failed:", err);
@@ -1391,7 +1406,16 @@ async function warmStep(
   }
 }
 
-async function refreshAllSnapshots(reason: string) {
+async function refreshAllSnapshots(
+  reason: string,
+  opts: {
+    warmDistScopes?: boolean;
+    // Manuel yenilemede yalnız tıklayan admin'in KENDİ merkez scope'unu ısıtırız
+    // (hızlı + göreceği tam o scope). Verilmezse (gece/boot) TÜM merkez scope'lar
+    // listMerkezScopes ile çözülür. Her eleman bir Panorama dist kümesi (null=all).
+    merkezScopes?: Array<number[] | null>;
+  } = {},
+) {
   const tag = `[refresh:${reason}]`;
   console.log(`${tag} başlıyor (${new Date().toISOString()})`);
   const tenant = getTenantConfig();
@@ -1408,15 +1432,54 @@ async function refreshAllSnapshots(reason: string) {
       console.error(`${tag} now-anchor fail:`, (err as Error).message);
     });
 
-    // 1) Komuta (TL + 9L)
-    for (const unit of ["tl", "9le"] as const) {
-      await warmStep(tag, `komuta ${unit}`, () =>
-        getKomutaSnapshot({ forceRefresh: true, unit }),
-      );
+    // Merkez kullanıcıların GERÇEK dist küme(leri). resolveTenantScope merkez
+    // için bile distKods'u Panorama kümesi olarak döndürür (null=filtresiz
+    // DEĞİL); cockpit/V3 bu AÇIK listeyle çağırıyor → cache anahtarı "d1_4..._31".
+    // Warm eskiden allowedDistKods geçmiyordu → "all" anahtarını ısıtıyordu ve
+    // cockpit'in okuduğu anahtara HİÇ dokunmuyordu (AI brief boş, ilk açılış
+    // cache-miss). Artık warm cockpit ile AYNI anahtar(lar)ı ısıtır. Kümeler
+    // alınamazsa null=merkez-filtresiz'e düşülür (eski davranış — bozulmaz).
+    const merkezScopes =
+      opts.merkezScopes ??
+      (await listMerkezScopes().catch((err) => {
+        console.error(`${tag} listMerkezScopes fail:`, (err as Error).message);
+        return [] as number[][];
+      }));
+    const warmScopes: Array<number[] | null> =
+      merkezScopes.length > 0 ? merkezScopes : [null];
+    console.log(
+      `${tag} merkez scope: ${warmScopes.length} küme (${warmScopes
+        .map((s) => (s ? `${s.length} dist` : "all"))
+        .join(", ")})`,
+    );
+
+    // 1) Harita müşteri aynası — "Verileri yenile" ile aynı sync. KOMUTA/V3
+    //    WARM'INDAN ÖNCE çalışmalı: syncMapData sonunda cachedClear("komuta"/
+    //    "foresight"/"customer-detail") çağırıyor. Eskiden map sync komuta
+    //    warm'ından SONRA geliyordu → taze komuta brief'ini siliyordu, sonraki
+    //    cockpit yüklemesi boş brief üretiyordu ("yenileyince brief kayboluyor").
+    //    Önce temizle, SONRA ısıt → brief kalıcı. Ayrıca invalidateKomuta:false:
+    //    komuta'yı map sync değil, hemen aşağıdaki forceRefresh warm tazeler; map
+    //    sync ayrıca komuta'yı silmemeli (manuel yenilemede diğer merkez scope'ların
+    //    brief'ini uçurur — manuel yalnız caller scope'unu ısıtır).
+    await warmStep(tag, "map sync", () =>
+      syncMapData(REPO_ROOT, { invalidateKomuta: false }),
+    );
+
+    // 2) Komuta (TL + 9L) — her merkez scope için (cockpit anahtarıyla eşleşir)
+    for (const scope of warmScopes) {
+      const label = scope ? `d${scope.length}` : "all";
+      for (const unit of ["tl", "9le"] as const) {
+        await warmStep(tag, `komuta ${unit} [${label}]`, () =>
+          getKomutaSnapshot({ forceRefresh: true, unit, allowedDistKods: scope }),
+        );
+      }
     }
 
-    // 2) V3 snapshot'ları — merkez kapsam. Bunlar daha önce gece job'ında
-    //    tazelenMİYORdu; "son güncelleme" bu yüzden ilk hesap tarihinde donuyordu.
+    // 3) V3 snapshot'ları — aynı merkez scope(lar) ile. Bunlar daha önce gece
+    //    job'ında tazelenMİYORdu; "son güncelleme" bu yüzden ilk hesap tarihinde
+    //    donuyordu. Ayrıca yanlış (all) anahtarda ısınıyordu → merkez ilk açılış
+    //    cache-miss. Artık cockpit anahtarıyla eşleşir.
     const v3: Array<[string, (o: V3SnapshotOpts) => Promise<unknown>]> = [
       ["yonetim", getWietnauerYonetimSnapshot],
       ["marka", getWietnauerMarkaSnapshot],
@@ -1427,19 +1490,25 @@ async function refreshAllSnapshots(reason: string) {
       ["satis", getWietnauerSatisSnapshot],
       ["stok", getWietnauerStokSnapshot],
     ];
-    for (const [name, fn] of v3) {
-      await warmStep(tag, `v3 ${name}`, () => fn(merkezOpts));
+    for (const scope of warmScopes) {
+      const label = scope ? `d${scope.length}` : "all";
+      for (const [name, fn] of v3) {
+        await warmStep(tag, `v3 ${name} [${label}]`, () =>
+          fn({ ...merkezOpts, allowedDistKods: scope }),
+        );
+      }
     }
-
-    // 3) Harita müşteri aynası — "Verileri yenile" butonuyla aynı sync.
-    await warmStep(tag, "map sync", () => syncMapData(REPO_ROOT));
 
     // 4) Dist scope ısıtma — merkez drilldown ve tek-dist kullanıcıların cache
     //    anahtarı { distId: X }'tir; merkez (null) ısıtma bunları kapsamaz.
     //    En aktif dist'leri hacme göre seçip (hepsini değil) komuta + tüm V3
     //    snapshot'larını o scope'ta ısıtırız. WARM_DIST_SCOPES=0 ile kapatılır;
     //    WARM_DIST_LIMIT ile dist sayısı ayarlanır (03:00 job süresi / MSSQL yükü).
-    if (process.env.WARM_DIST_SCOPES !== "0") {
+    // Dist scope ısıtma yalnız gece/boot'ta (ağır — ~20 dist × komuta+V3).
+    // Manuel "Veriyi Yenile" (HTTP isteği) bunu ATLAR; yoksa istek dakikalarca
+    // sürüp server-action timeout'una düşer ("unexpected response"). Manuel
+    // yenileme merkez + V3 + harita ile hızlı tamamlanır; dist'ler gece ısınır.
+    if (opts.warmDistScopes !== false && process.env.WARM_DIST_SCOPES !== "0") {
       const distLimit = parseInt(process.env.WARM_DIST_LIMIT ?? "25", 10);
       const distIds = await listTopActiveDistIds(distLimit).catch((err) => {
         console.error(`${tag} dist listesi fail:`, (err as Error).message);
@@ -1495,9 +1564,13 @@ if (DEMO_DATA) {
   // Açılış warm'ı — server dinlemeye başladıktan ~10s sonra tüm cache'leri
   // bir kez tazele. Böylece `pm2 restart` = anında güncel veri (V3 dahil),
   // 03:00'ı beklemeden. Boot'u bloklamamak için await edilmez.
-  setTimeout(() => {
-    void refreshAllSnapshots("startup");
-  }, 10_000);
+  if (process.env.SKIP_STARTUP_WARM !== "1") {
+    setTimeout(() => {
+      void refreshAllSnapshots("startup");
+    }, 10_000);
+  } else {
+    console.log("[enroute-api] SKIP_STARTUP_WARM=1 → açılış warm'ı atlandı");
+  }
 }
 
 process.on("SIGINT", async () => {
