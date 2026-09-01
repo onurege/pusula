@@ -117,14 +117,10 @@ export default async function KomutaPage({ searchParams }: Props) {
           <div className="ai-brief-empty">
             <span className="ai-brief-empty-icon">🤖</span>
             <div>
-              <strong>Günün AI yorumu üretilemedi.</strong>{" "}
+              <strong>Günün AI yorumu henüz hazır değil.</strong>{" "}
               <span className="ai-brief-empty-sub">
-                Gemini servisi yanıt vermedi (network / API key / timeout).
-                Sayfayı{" "}
-                <a href="/komuta?refresh=1" className="ai-brief-empty-link">
-                  ?refresh=1 ile yenile
-                </a>{" "}
-                veya API server log'larına bak.
+                Yorum, gece güncellemesinde (03:00) bir kez üretilir ve gün
+                boyu aynı kalır. Bir sonraki güncellemede otomatik gelecek.
               </span>
             </div>
           </div>

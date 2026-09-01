@@ -90,7 +90,7 @@ export function CustomerTypeBrandPanel({
               {truncate(m, 12)}
             </div>
           ))}
-          <div className="ctb-head right">Tip Toplam</div>
+          <div className="ctb-head right">Dip Toplam</div>
 
           {rows.map((row) => {
             const total = rowTotal(row.cells);
