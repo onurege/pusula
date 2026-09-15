@@ -983,6 +983,42 @@ function main() {
   // yeniden hesaplanamaz → boş kokpit).
   cachedWrite("komuta", "v10-nominal-tl-all", snap, 850);
 
+  // Kokpit FACET'leri (filtre dropdown'ları) — `getKomutaFacets` (key "facets-v4")
+  // ve bağımlısı `getRegionCityMap` (key "region-city-map-v1"), aynı "komuta"
+  // domain'inde AYRI cache girdileri. Pre-bake edilmezse demo'da (MSSQL yok)
+  // cache-miss → bağlantı timeout'u → kokpit açılmıyor. Şekiller: KomutaFacets
+  // = {bolgeler,kanallar,urunGruplari:{kod,ad}[]}; region-city-map = [bölge,şehir[]][].
+  const komutaFacets = {
+    bolgeler: [
+      "MARMARA", "EGE", "AKDENIZ", "İÇ ANADOLU", "KARADENIZ", "GÜNEYDOĞU ANADOLU", "DOĞU ANADOLU",
+    ].map((r) => ({ kod: r, ad: r })),
+    kanallar: [
+      { kod: "PREM", ad: "Premium" },
+      { kod: "PRES", ad: "Prestige" },
+      { kod: "STD", ad: "Standart" },
+      { kod: "EKO", ad: "Ekonomik" },
+    ],
+    urunGruplari: [
+      { kod: "CIK", ad: "Çikolata & Şekerleme" },
+      { kod: "BIS", ad: "Bisküvi & Gofret" },
+      { kod: "KAH", ad: "Kahve & İçecek Toz" },
+      { kod: "ATI", ad: "Atıştırmalık" },
+      { kod: "SUT", ad: "Süt Mamulleri" },
+      { kod: "TEM", ad: "Temizlik & Bakım" },
+    ],
+  };
+  cachedWrite("komuta", "facets-v4", komutaFacets, 200);
+  const komutaRegionCityMap: [string, string[]][] = [
+    ["MARMARA", ["İSTANBUL", "BURSA", "KOCAELİ", "TEKİRDAĞ", "BALIKESİR"]],
+    ["EGE", ["İZMİR", "MANİSA", "AYDIN", "DENİZLİ", "MUĞLA"]],
+    ["AKDENIZ", ["ANTALYA", "ADANA", "MERSİN", "HATAY"]],
+    ["İÇ ANADOLU", ["ANKARA", "KONYA", "KAYSERİ", "ESKİŞEHİR"]],
+    ["KARADENIZ", ["SAMSUN", "TRABZON", "ORDU"]],
+    ["GÜNEYDOĞU ANADOLU", ["GAZİANTEP", "ŞANLIURFA", "DİYARBAKIR"]],
+    ["DOĞU ANADOLU", ["ERZURUM", "VAN", "MALATYA"]],
+  ];
+  cachedWrite("komuta", "region-city-map-v1", komutaRegionCityMap, 100);
+
   // Diğer 8 v3 ekranı için pre-baked snapshot cache'leri (satış, marka,
   // segment, stok, saha, aktivasyon, iskonto, yönetim). Her biri kendi
   // fetcher'ının default demo anahtarı altına yazar → demo MSSQL'siz tüm
