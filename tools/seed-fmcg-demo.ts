@@ -27,6 +27,8 @@ import {
   cachedWrite,
   computeCustomerRiskScore,
   type KomutaSnapshot,
+  type KomutaCustomerTypeBrandSnapshot,
+  type KomutaCustomerTypeBrandRow,
   type KomutaKpiCard,
   type KomutaRegionRow,
   type KomutaChannelSlice,
@@ -757,11 +759,36 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
     };
   });
 
+  // md34 — Müşteri Tipi × Marka kırılımı (son 30g). Demo: markalı ürün aileleri
+  // Top-N sütun, jenerik (marka=null) kategoriler "Diğer" sütununda toplanır;
+  // satırlar müşteri tipleri (CHANNEL_TYPES), son satır dip toplam.
+  const ctbBrands = PRODUCT_FAMILIES.filter((p) => p.brand)
+    .slice(0, 8)
+    .map((p) => p.brand as string);
+  const ctbMarkalar = [...ctbBrands, "Diğer"];
+  const ctbRows: KomutaCustomerTypeBrandRow[] = CHANNEL_TYPES.map((ch) => {
+    const tipCiro = totalCiro * ch.share;
+    const cells = ctbMarkalar.map((marka) => {
+      const w = marka === "Diğer" ? 12 : (PRODUCT_FAMILIES.find((p) => p.brand === marka)?.weight ?? 6);
+      const ciro = Math.round(((tipCiro * w) / 100) * rand(0.8, 1.2));
+      return { marka, ciro, miktar: Math.max(1, Math.round(ciro / rand(60, 140))) };
+    });
+    return { musteriTipi: ch.name, cells };
+  });
+  const ctbTotalCells = ctbMarkalar.map((marka, i) => ({
+    marka,
+    ciro: ctbRows.reduce((s, r) => s + r.cells[i]!.ciro, 0),
+    miktar: ctbRows.reduce((s, r) => s + r.cells[i]!.miktar, 0),
+  }));
+  ctbRows.push({ musteriTipi: "Toplam", cells: ctbTotalCells, isTotal: true });
+  const customerTypeBrand: KomutaCustomerTypeBrandSnapshot = {
+    markalar: ctbMarkalar,
+    rows: ctbRows,
+  };
+
   const snapshot: KomutaSnapshot = {
     generatedAt: new Date().toISOString(),
     reelTL: false,
-    otvNet: false,
-    otvAvgRate: null,
     demoDate: "2026-04-17",
     unit: "tl",
     kpis,
@@ -782,6 +809,7 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
     reps,
     topDists,
     portfolio,
+    customerTypeBrand,
     brief:
       "Son 30 günde toplam ciro " +
       `geçen yılın aynı periyoduna göre ${(yoyPct ?? 0).toFixed(1)}% değişim ` +
@@ -937,11 +965,13 @@ function main() {
   console.log("[seed-fmcg-demo] Komuta snapshot oluşturuluyor...");
   const snap = generateKomutaSnapshot(customers);
 
-  // Cache key formatı `getKomutaSnapshot` ile BİREBİR olmalı:
-  //   CACHE_VERSION-reel|nominal-otv|gross-unit-scopeKey
-  // Merkez/açık-erişim (distKods=null) → scopeKey="all". CACHE_VERSION komuta.ts'te
-  // bump edilirse (şu an v7) BURASI da güncellenmeli, yoksa demo cache miss'e düşer.
-  cachedWrite("komuta", "v7-nominal-gross-tl-all", snap, 850);
+  // Cache key formatı `getKomutaSnapshot` (komuta.ts) ile BİREBİR olmalı:
+  //   CACHE_VERSION-{reel|nominal}-{unit}-{scopeKey}
+  // Merkez/açık-erişim (distKods=null) → scopeKey="all", varsayılan görünüm
+  // nominal + unit "tl". CACHE_VERSION komuta.ts'te bump edilirse (şu an v10)
+  // BURASI da güncellenmeli, yoksa demo cache-miss'e düşer (MSSQL yok →
+  // yeniden hesaplanamaz → boş kokpit).
+  cachedWrite("komuta", "v10-nominal-tl-all", snap, 850);
 
   // Risk dağılımı özet log
   const tierCounts = customers.reduce<Record<string, number>>((a, c) => {
