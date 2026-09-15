@@ -981,7 +981,10 @@ function main() {
   // nominal + unit "tl". CACHE_VERSION komuta.ts'te bump edilirse (şu an v10)
   // BURASI da güncellenmeli, yoksa demo cache-miss'e düşer (MSSQL yok →
   // yeniden hesaplanamaz → boş kokpit).
-  cachedWrite("komuta", "v10-nominal-tl-all", snap, 850);
+  // Anahtar: [CACHE_VERSION, reel|nominal, unit, scopeKey]. scopeKey (komuta.ts)
+  // = (distKods==null?"all":…) + "-" + cityCacheTag(cities). Default demo:
+  // dist yok → "all", cityCacheTag(null) → "all" ⇒ scopeKey "all-all".
+  cachedWrite("komuta", "v10-nominal-tl-all-all", snap, 850);
 
   // Kokpit FACET'leri (filtre dropdown'ları) — `getKomutaFacets` (key "facets-v4")
   // ve bağımlısı `getRegionCityMap` (key "region-city-map-v1"), aynı "komuta"
