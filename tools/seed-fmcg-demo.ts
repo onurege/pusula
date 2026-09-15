@@ -43,6 +43,16 @@ import {
   type ProductTier,
   type RiskTier,
 } from "@enroute/core";
+// V3 ekran snapshot'ları — her modül ilgili fetcher'ın default demo cache
+// anahtarına pre-baked bundle yazar (offline demo tüm ekranları doldurur).
+import { seedSatis } from "./demo-seed/satis";
+import { seedMarka } from "./demo-seed/marka";
+import { seedSegment } from "./demo-seed/segment";
+import { seedStok } from "./demo-seed/stok";
+import { seedSaha } from "./demo-seed/saha";
+import { seedAktivasyon } from "./demo-seed/aktivasyon";
+import { seedIskonto } from "./demo-seed/iskonto";
+import { seedYonetim } from "./demo-seed/yonetim";
 
 // ---------- Sabitler & yardımcılar ------------------------------------------
 
@@ -972,6 +982,20 @@ function main() {
   // BURASI da güncellenmeli, yoksa demo cache-miss'e düşer (MSSQL yok →
   // yeniden hesaplanamaz → boş kokpit).
   cachedWrite("komuta", "v10-nominal-tl-all", snap, 850);
+
+  // Diğer 8 v3 ekranı için pre-baked snapshot cache'leri (satış, marka,
+  // segment, stok, saha, aktivasyon, iskonto, yönetim). Her biri kendi
+  // fetcher'ının default demo anahtarı altına yazar → demo MSSQL'siz tüm
+  // ekranları doldurur.
+  seedSatis();
+  seedMarka();
+  seedSegment();
+  seedStok();
+  seedSaha();
+  seedAktivasyon();
+  seedIskonto();
+  seedYonetim();
+  console.log("[seed-fmcg-demo] V3 ekran cache'leri yazıldı (8 ekran).");
 
   // Risk dağılımı özet log
   const tierCounts = customers.reduce<Record<string, number>>((a, c) => {
