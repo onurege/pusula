@@ -471,6 +471,65 @@ export type ForesightResult = {
   actions: string[];
 };
 
+// -- SİPARİŞ ÖNERİSİ (reorder) ----------------------------------------------
+// Miktar kasten yok — ürün kararı: satışçı miktarı kendi girer, biz sadece
+// "hangi ürün, ne zaman" sinyalini veririz.
+
+export type ReorderOverdueItem = {
+  urunKod: number;
+  urunAd: string;
+  sonSiparis: string;
+  ortAralikGun: number;
+  siparisSayisi: number;
+  gunGecikti: number;
+};
+
+export type ReorderWinBackItem = {
+  urunKod: number;
+  urunAd: string;
+  sonSiparis: string;
+  ortAralikGun: number;
+  siparisSayisi: number;
+  gunGecti: number;
+};
+
+export type ReorderCrossSellItem = {
+  urunKod: number;
+  urunAd: string;
+  /** Müşterinin zaten sahip olduğu, bu öneriyle en çok birlikte alınan ÇIPA ürün — UI'da "{anchorUrunAd} alıyor → bunu da alıyor" bağlamı için. */
+  anchorUrunKod: number;
+  anchorUrunAd: string;
+  birlikteSayisi: number;
+};
+
+export type ReorderResult = {
+  musteriKod: number;
+  generatedAt: string;
+  overdue: ReorderOverdueItem[];
+  winBack: ReorderWinBackItem[];
+  crossSell: ReorderCrossSellItem[];
+  ozet: {
+    toplamGecikmis: number;
+    toplamWinback: number;
+    toplamCross: number;
+  };
+};
+
+/**
+ * Dist-scope sunucu-otoriter uygulanır (auth cookie → Bearer → API guard);
+ * `distKod` burada sadece `getCustomerSales`/`getCustomerForesight` ile aynı
+ * çağrı imzasını korumak için var, endpoint'e iletilmez.
+ */
+export async function getCustomerReorder(
+  id: number,
+  distKod: number | null,
+): Promise<ReorderResult> {
+  void distKod;
+  const qp = new URLSearchParams();
+  qp.set("musteriKod", String(id));
+  return request(`/api/reorder/customer?${qp.toString()}`);
+}
+
 // Komuta Köprüsü types ------------------------------------------------------
 
 export type KomutaKpiCard = {

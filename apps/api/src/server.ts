@@ -24,6 +24,7 @@ import {
   getKomutaSnapshot,
   getKomutaFacets,
   getMapFacets,
+  getCustomerReorder,
   getWietnauerYonetimSnapshot,
   getWietnauerMarkaSnapshot,
   getWietnauerAktivasyonSnapshot,
@@ -1105,6 +1106,46 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
   } catch (err) {
     console.error("[/api/map/customers/:id/foresight] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Sipariş Öneri — Insider (FMCG/Panorama) tek müşteri için overdue/winBack/
+// crossSell sinyalleri. Dist-scope SUNUCU-OTORİTER: `scopeFromRequest` oturumu
+// doğrular, `getCustomerReorder`'a yalnız `scope.distKods`/`scopeSingleDistId`
+// geçilir — client'ın gönderdiği herhangi bir dist bilgisi asla güvenilmez.
+//
+// GUV-06: IP başına dakikada ~20 istek — generate/explain/run-sql ile AYNI
+// desen. Ağır uç: 40M satırlık TBLMSDBELGEDETAY'a karşı iki LOOP JOIN sorgusu
+// (geçmiş + cross-sell) — burst-abuse tek IP'den DB'yi zorlayabilir.
+app.get("/api/reorder/customer", async (c) => {
+  if (!checkRateLimit("heavy", clientIp(c), HEAVY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
+    return c.json({ error: "Çok fazla istek. Lütfen bir dakika sonra tekrar deneyin." }, 429);
+  }
+  let scope: TenantScope;
+  try {
+    scope = await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    // Ham hata client'a sızmaz — yalnız log'a, response'a jenerik mesaj.
+    console.error("[/api/reorder/customer] scope resolution failed:", err);
+    return c.json({ error: "Yetki kapsamı çözülemedi" }, 500);
+  }
+  try {
+    const musteriKodRaw = c.req.query("musteriKod");
+    const musteriKod = musteriKodRaw != null ? parseInt(musteriKodRaw, 10) : NaN;
+    if (!Number.isFinite(musteriKod)) {
+      return c.json({ error: "musteriKod zorunlu" }, 400);
+    }
+    const result = await getCustomerReorder({
+      musteriKod,
+      allowedDistKods: scope.distKods,
+      distId: scopeSingleDistId(scope),
+    });
+    return c.json(result);
+  } catch (err) {
+    // Ham DB hatası client'a sızmaz — yalnız log'a, response'a sanitize edilmiş mesaj.
+    console.error("[/api/reorder/customer] failed:", err);
+    return c.json({ error: "Sipariş önerisi hesaplanamadı" }, 500);
   }
 });
 

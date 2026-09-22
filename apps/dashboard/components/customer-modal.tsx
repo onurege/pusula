@@ -18,6 +18,13 @@ import {
 } from "lucide-react";
 import type { CustomerSales, ForesightResult, MapCustomer } from "@/lib/api";
 import { explainOnRadar, getCustomerForesight, getCustomerSales } from "@/lib/api-actions";
+import type { CustomerSales, ForesightResult, MapCustomer, ReorderResult } from "@/lib/api";
+import {
+  explainOnRadar,
+  getCustomerForesight,
+  getCustomerReorder,
+  getCustomerSales,
+} from "@/lib/api-actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardHeader } from "@/components/ui/card";
@@ -181,6 +188,11 @@ type ForesightState =
   | { kind: "ok"; data: ForesightResult }
   | { kind: "err"; message: string };
 
+type ReorderState =
+  | { kind: "loading" }
+  | { kind: "ok"; data: ReorderResult }
+  | { kind: "err"; message: string };
+
 type Props = {
   customer: MapCustomer;
   onClose: () => void;
@@ -190,6 +202,7 @@ export function CustomerModal({ customer, onClose }: Props) {
   const [sales, setSales] = useState<SalesState>({ kind: "loading" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
   const [foresight, setForesight] = useState<ForesightState>({ kind: "idle" });
+  const [reorder, setReorder] = useState<ReorderState>({ kind: "loading" });
 
   // Fetch detail when the modal opens / customer changes.
   useEffect(() => {
@@ -200,6 +213,12 @@ export function CustomerModal({ customer, onClose }: Props) {
     getCustomerSales(customer.id, customer.distKod)
       .then((data) => !cancelled && setSales({ kind: "ok", data }))
       .catch((err) => !cancelled && setSales({ kind: "err", message: (err as Error).message }));
+
+    setReorder({ kind: "loading" });
+    getCustomerReorder(customer.id, customer.distKod)
+      .then((data) => !cancelled && setReorder({ kind: "ok", data }))
+      .catch((err) => !cancelled && setReorder({ kind: "err", message: (err as Error).message }));
+
     return () => {
       cancelled = true;
     };
@@ -478,6 +497,23 @@ export function CustomerModal({ customer, onClose }: Props) {
                 </div>
               </section>
 
+              {/* Sipariş Önerisi */}
+              <section>
+                <SectionHeading>{translate(locale, "customer.section.reorder", "Sipariş Önerisi")}</SectionHeading>
+                {reorder.kind === "loading" && (
+                  <div className="text-sm text-muted text-center py-6">
+                    {translate(locale, "customer.reorder.loading", "Sipariş önerileri yükleniyor…")}
+                  </div>
+                )}
+                {reorder.kind === "err" && (
+                  <div className="rounded-md border border-bad/40 bg-bad/10 p-4 text-sm">
+                    <div className="font-medium text-bad mb-1">{translate(locale, "customer.reorder.error", "Sipariş önerisi alınamadı")}</div>
+                    <code className="text-xs text-muted">{reorder.message}</code>
+                  </div>
+                )}
+                {reorder.kind === "ok" && <ReorderSuggestions data={reorder.data} locale={locale} />}
+              </section>
+
               {/* AI Analizi + Öngörü */}
               <section className="pt-2 border-t border-border space-y-3">
                 <div className="grid grid-cols-2 gap-2">
@@ -606,6 +642,123 @@ function MiniTile({ label, value }: { label: string; value: string }) {
 }
 
 function formatCompact(n: number): string {
+// ---------------------------------------------------------------------------
+// Sipariş Önerisi — miktar kasten yok (satışçı girer), sadece hangi ürün /
+// ne zaman sinyali.
+// ---------------------------------------------------------------------------
+
+function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; locale?: Locale }) {
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-muted">
+        <span className="text-fg-2 font-medium">{data.ozet.toplamGecikmis}</span>{" "}
+        {translate(locale, "customer.reorder.overdue_count", "gecikmiş")} ·{" "}
+        <span className="text-fg-2 font-medium">{data.ozet.toplamWinback}</span>{" "}
+        {translate(locale, "customer.reorder.dropped_count", "bırakılmış")} ·{" "}
+        <span className="text-fg-2 font-medium">{data.ozet.toplamCross}</span>{" "}
+        {translate(locale, "customer.reorder.suggestion_count", "öneri")}
+      </div>
+
+      <ReorderGroup
+        title={translate(locale, "customer.reorder.overdue_title", "Gecikmiş siparişler")}
+        titleTone="text-bad"
+        itemTone="border-bad/30 bg-bad/5"
+        items={data.overdue}
+        emptyText={translate(locale, "customer.reorder.overdue_empty", "gecikmiş sipariş yok")}
+        keyOf={(o) => o.urunKod}
+        renderItem={(o) => (
+          <>
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm truncate">{o.urunAd}</span>
+              <span className="text-xs font-semibold text-bad shrink-0">
+                {translate(locale, "customer.reorder.overdue_days", "{n} gün gecikti", { n: o.gunGecikti })}
+              </span>
+            </div>
+            <div className="text-[10px] text-muted mt-0.5">
+              {translate(locale, "customer.reorder.overdue_meta", "{count} sipariş · ort {days}g", {
+                count: o.siparisSayisi,
+                days: o.ortAralikGun,
+              })}
+            </div>
+          </>
+        )}
+      />
+
+      <ReorderGroup
+        title={translate(locale, "customer.reorder.dropped_title", "Bırakılan ürünler")}
+        titleTone="text-warn"
+        itemTone="border-warn/30 bg-warn/5"
+        items={data.winBack}
+        emptyText={translate(locale, "customer.reorder.dropped_empty", "bırakılmış ürün yok")}
+        keyOf={(w) => w.urunKod}
+        renderItem={(w) => (
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-sm truncate">{w.urunAd}</span>
+            <span className="text-xs font-semibold text-warn shrink-0">
+              {translate(locale, "customer.reorder.dropped_days", "{n} gündür sipariş yok", { n: w.gunGecti })}
+            </span>
+          </div>
+        )}
+      />
+
+      <ReorderGroup
+        title={translate(locale, "customer.reorder.cross_sell_title", "Çapraz-satış önerisi")}
+        titleTone="text-muted"
+        itemTone="border-border bg-surface"
+        items={data.crossSell}
+        emptyText={translate(locale, "customer.reorder.cross_sell_empty", "öneri yok")}
+        keyOf={(c) => c.urunKod}
+        renderItem={(c) => (
+          <div>
+            <div className="text-sm truncate">{c.urunAd}</div>
+            <div className="text-[10px] text-muted mt-0.5 truncate">
+              <span className="text-fg-2 font-medium">{c.anchorUrunAd}</span>{" "}
+              {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
+            </div>
+          </div>
+        )}
+      />
+    </div>
+  );
+}
+
+function ReorderGroup<T>({
+  title,
+  titleTone,
+  itemTone,
+  items,
+  emptyText,
+  keyOf,
+  renderItem,
+}: {
+  title: string;
+  titleTone: string;
+  itemTone: string;
+  items: T[];
+  emptyText: string;
+  keyOf: (item: T) => React.Key;
+  renderItem: (item: T) => React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className={"text-[10px] uppercase tracking-wider font-semibold mb-1.5 " + titleTone}>
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div className="text-xs text-muted">{emptyText}</div>
+      ) : (
+        <ul className="space-y-1.5">
+          {items.map((item) => (
+            <li key={keyOf(item)} className={"rounded-md border px-3 py-2 " + itemTone}>
+              {renderItem(item)}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
   if (typeof n !== "number" || isNaN(n)) return "—";
   if (Math.abs(n) >= 1_000_000_000)
     return (n / 1_000_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mr";

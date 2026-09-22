@@ -25,6 +25,12 @@ export async function getCustomerForesight(
   return api.getCustomerForesight(...args);
 }
 
+export async function getCustomerReorder(
+  ...args: Parameters<typeof api.getCustomerReorder>
+): ReturnType<typeof api.getCustomerReorder> {
+  return api.getCustomerReorder(...args);
+}
+
 export async function explainOnRadar(
   ...args: Parameters<typeof api.explainOnRadar>
 ): ReturnType<typeof api.explainOnRadar> {
