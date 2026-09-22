@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { PATHNAME_HEADER } from "@/lib/request-pathname";
 
 const AUTH_COOKIE = "enroute_auth";
 
@@ -7,14 +8,26 @@ const AUTH_COOKIE = "enroute_auth";
  * burada yalnızca cookie varlığına bakarız (hızlı kapı). Geçersiz/expired
  * token'lar veri isteğinde API tarafından 401 ile reddedilir.
  *
- * Muaf yollar: /login, /api/auth/*, Next statikleri.
+ * Muaf yollar: /login, /setup (Faz A Dalga 2 — boş sunucuda henüz oturum
+ * YOK, tavuk-yumurta; bkz. `app/layout.tsx` üst yorumu), /api/auth/*,
+ * /api/setup/* (aynı gerekçe — kendi yetkisini `x-setup-token` header'ıyla
+ * ayrıca kanıtlar, bkz. `app/api/setup/[...path]/route.ts`), Next statikleri.
+ *
+ * Ayrıca HER istekte `PATHNAME_HEADER` enjekte eder — kök layout (Server
+ * Component) `isTenantFullyMissing()` true iken hangi sayfanın istendiğini
+ * bilip `/setup` dışındakileri oraya yönlendirebilsin diye (bkz.
+ * `lib/request-pathname.ts` üst yorumu). Bu ekleme mevcut auth/redirect
+ * mantığını DEĞİŞTİRMEZ — yalnız `NextResponse.next()` çağrısına bir istek
+ * header'ı ekler.
  */
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   const isPublic =
     pathname === "/login" ||
+    pathname === "/setup" ||
     pathname.startsWith("/api/auth/") ||
+    pathname.startsWith("/api/setup/") ||
     pathname.startsWith("/_next/") ||
     pathname.startsWith("/fonts/") ||
     pathname.startsWith("/brand/") ||
@@ -39,7 +52,9 @@ export function middleware(req: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  const requestHeaders = new Headers(req.headers);
+  requestHeaders.set(PATHNAME_HEADER, pathname);
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 export const config = {

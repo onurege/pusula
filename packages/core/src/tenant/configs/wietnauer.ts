@@ -1,4 +1,4 @@
-import type { TenantConfig } from "../types.js";
+import type { TenantConfig } from "../types";
 
 /**
  * Wietnauer Türkiye — Pernod gibi Univera ERP'sini kullanan alkol/içecek
@@ -98,4 +98,31 @@ export const WIETNAUER_CONFIG: TenantConfig = {
     "GLENROTHES",
     "BRUGAL",
   ],
+
+  // Müşteri Grup Kırılımı (md34) — TBLMUSTERI.TXTGRUPKIRILIMKOD →
+  // TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TXTAD (Prestige/Premium Plus/Premium/
+  // Standart Plus/Standart). Bugün komuta.ts + wietnauer-{saha,iskonto,
+  // aktivasyon,segment}.ts'te hardcoded olan değerlerin BİREBİR aynısı —
+  // Insider konfigüratörünün Faz A default'u (bkz. phase0-insider-konfigurator.md).
+  dimensions: {
+    customerBreakdown: {
+      table: "TBLMUSTERIGRUPKIRILIM",
+      joinColumn: "TXTGRUPKIRILIMKOD",
+      labelColumn: "TXTAD",
+    },
+    // Faz B — `brandTable`/`brandJoinColumn` (yukarıda) ile BİREBİR aynı
+    // değerler; SQL'e giden okuma yolu artık buradan (config-driven boyut).
+    productBreakdown: {
+      table: "TBLURUNGRUP",
+      joinColumn: "TXTURUNGRUPKOD",
+      labelColumn: "TXTAD",
+    },
+    // Faz B — `distRegionTable`/`distRegionColumn` (yukarıda) ile BİREBİR
+    // aynı değerler.
+    regionBreakdown: {
+      table: "TBLDISTEKGRUP",
+      joinColumn: "TXTEKGRUP",
+      labelColumn: "TXTAD",
+    },
+  },
 };

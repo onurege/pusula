@@ -13,7 +13,15 @@ import {
 import { currentDate, demoDate, sqlNow } from "./now.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince, regionForCitySync } from "./tr-regions.js";
 import { distFilterClause, cityFactClause, cityCacheTag, type TenantScope } from "./auth.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getTenantConfig, getCustomerBreakdownMeta, getProductBreakdownMeta, getRegionBreakdownMeta } from "./tenant/index.js";
+import {
+  customerBreakdownJoin,
+  customerBreakdownLabelExpr,
+  customerBreakdownFacetSql,
+  customerBreakdownFilterClause,
+} from "./tenant/customer-breakdown-sql.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
+import { regionBreakdownJoin, regionBreakdownCodeExpr, regionBreakdownLabelExpr } from "./tenant/region-breakdown-sql.js";
 import { foldOther, sumBy } from "./fold-other.js";
 
 /**
@@ -850,18 +858,20 @@ async function fetchChannelByCustomerType(unit: ValueUnit, distClause: string): 
     ? `d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "f.DBLNETTUTAR";
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH base AS (
       SELECT
         DATEPART(year,  f.TRHISLEMTARIHI) AS yil,
         DATEPART(month, f.TRHISLEMTARIHI) AS ay,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS kanal,
+        ${customerBreakdownLabelExpr(kirilimMeta, "kanal")},
         ${rowExpr} AS tutar
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski
-      -- ek-saha(8) müşteri tipi yerine (TBLMUSTERI.TXTGRUPKIRILIMKOD → kırılım adı).
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      -- ek-saha(8) müşteri tipi yerine. Tablo/kolon tenant config'ten
+      -- (resolveIdentifier doğrulamalı — Faz 0 C1).
+      ${customerBreakdownJoin(kirilimMeta)}
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
@@ -1036,23 +1046,10 @@ async function fetchUpcomingEvent(): Promise<KomutaUpcomingEvent | null> {
 /** Hacim böleni (tenant): Pernod 9LE→9, Wietnauer 70cl→1 (DBLLITRE zaten 70cl-eşdeğeri). md7. */
 function vd(): string { return String(getTenantConfig().volume.divisor ?? 9); }
 
-/**
- * Tenant config'inden marka tablosu (`brandTable`) + join kolonunu
- * (`brandJoinColumn`) alıp doğrular — SQL string interpolasyonuna girmeden
- * önce hardcoded enum güvencesi (wietnauer-marka.ts `getBrandTableMeta` ile
- * aynı desen; komuta.ts kendi kopyasını tutar, cross-module private import
- * yapılmıyor).
- */
-function getBrandTableMeta(): { brandTable: string; joinCol: string } {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
-  return { brandTable, joinCol };
-}
+// `getBrandTableMeta()` (bu dosyanın eski `tenant.brandTable` hardcoded enum
+// guard'ı) Faz B'de kaldırıldı — tek çağıran (`fetchCustomerTypeBrand`) artık
+// doğrudan `getProductBreakdownMeta()` (→ `resolveProductBreakdown`, `tenant/
+// identifier.ts`) çağırıyor; admin panel override'ı bu sink'te de etkili olur.
 
 function unitValueExpr(unit: ValueUnit, opts: {
   /** Fatura toplam alias'ı (örn. `f.DBLNETTUTAR`) — TL modunda kullanılır. */
@@ -1315,9 +1312,7 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
   // Top bölgeler ve top gruplar tespit edilir, sonra pivot.
   // dist_grup CTE: distribütör → coğrafi bölge eşlemesi. Kaynak tenant'a göre
   // TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge, Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge.
-  const tenant = getTenantConfig();
-  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
-  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
+  const regionMeta = getRegionBreakdownMeta();
   // 9LE modunda her aggregation TBLURUNEKSAHA (saha 26) çarpanına ihtiyaç duyar.
   const valExpr = unit === "9le"
     ? `SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()}))`
@@ -1333,9 +1328,9 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
     : "";
   const sql = `
     WITH dist_grup AS (
-      SELECT d.LNGKOD AS distKod, dg.TXTKOD AS bolgeKod, dg.TXTAD AS bolge
+      SELECT d.LNGKOD AS distKod, ${regionBreakdownCodeExpr("dg", "bolgeKod")}, ${regionBreakdownLabelExpr(regionMeta, "dg", "bolge")}
       FROM dbo.TBLDIST d
-      INNER JOIN dbo.${distRegionTable} dg ON dg.TXTKOD = d.${distRegionColumn}
+      ${regionBreakdownJoin(regionMeta, "d", "dg", "INNER")}
       WHERE d.BYTDURUM = 0
     ),
     top_bolge AS (
@@ -1686,11 +1681,12 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
 type CustomerTypeBrandRaw = { tip: string; marka: string; ciro: number; miktar: number };
 
 async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustomerTypeBrandSnapshot> {
-  const { brandTable, joinCol } = getBrandTableMeta();
+  const productMeta = getProductBreakdownMeta();
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH base AS (
       SELECT
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip,
+        ${customerBreakdownLabelExpr(kirilimMeta, "tip")},
         b.TXTAD AS marka,
         d.DBLNETFIYAT AS ciro,
         d.DBLMIKTAR AS miktar
@@ -1700,10 +1696,10 @@ async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustome
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin(productMeta)}
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski ek-saha(8) yerine.
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      ${customerBreakdownJoin(kirilimMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
@@ -2066,18 +2062,14 @@ export async function getKomutaFacets(): Promise<KomutaFacets> {
     CACHE_DOMAIN,
     "facets-v4",
     async () => {
+      const kirilimMeta = getCustomerBreakdownMeta();
       const [regionMap, kirilim, kategori] = await Promise.all([
         // Bölge: müşterisi olan 8 coğrafi bölge (region master sırası korunur).
         getRegionCityMap(),
         // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle
-        // aynı boyut (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM), ≥5 müşterili.
+        // aynı boyut (tenant config'ten, `resolveIdentifier` doğrulamalı), ≥5 müşterili.
         runReadOnly(
-          `SELECT LTRIM(RTRIM(k.TXTKOD)) kod, MAX(k.TXTAD) ad, COUNT(DISTINCT m.LNGKOD) n
-           FROM dbo.TBLMUSTERIGRUPKIRILIM k
-           INNER JOIN dbo.TBLMUSTERI m ON LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)) = LTRIM(RTRIM(k.TXTKOD)) AND m.BYTDURUM = 0
-           WHERE k.TXTAD IS NOT NULL AND LTRIM(RTRIM(k.TXTKOD)) <> ''
-           GROUP BY LTRIM(RTRIM(k.TXTKOD)) HAVING COUNT(DISTINCT m.LNGKOD) >= 5
-           ORDER BY COUNT(DISTINCT m.LNGKOD) DESC`,
+          customerBreakdownFacetSql(kirilimMeta),
           { limit: 100, timeoutMs: 20_000 },
         ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
         // Ürün Grubu: TBLURUNEKGRUP (Kategori — Viski/Likör/Tekila…). ≥4 aktif
@@ -2164,9 +2156,11 @@ export async function getKomutaSnapshot(
       ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTSEHIR)) IN (${cities.map((c) => `N'${escSql(c)}'`).join(",")}))`
       : " AND 1=0";
   }
-  // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle aynı boyut.
+  // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle aynı
+  // boyut. Kolon adı tenant config'ten (`resolveIdentifier` doğrulamalı); DEĞER
+  // (`kanal`, facet dropdown'dan) escSql ile ayrıca kaçışlanır.
   const kanalClause = kanal
-    ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTGRUPKIRILIMKOD)) = N'${escSql(kanal)}')`
+    ? customerBreakdownFilterClause(getCustomerBreakdownMeta(), escSql(kanal))
     : "";
   // Ürün Grubu (Kategori): base distClause dist+şehir+bölge+kanal içerir (grup
   // HARİÇ). İki yol:

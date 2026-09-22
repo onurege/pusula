@@ -11,7 +11,8 @@
 import { runReadOnly } from "./db.js";
 import { sqlNow, resolveWindowBounds } from "./now.js";
 import { withCache } from "./cache.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getProductBreakdownMeta } from "./tenant/index.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
 import { cityFactClause, cityColClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer";
@@ -180,16 +181,9 @@ async function fetchBrands(
 ): Promise<BrandRawRow[]> {
   // Marka tablosu tenant'a göre değişir (Pernod: TBLURUNEKGRUP, Wietnauer:
   // TBLURUNGRUP). Univera standart hiyerarşi tutmaz; her dağıtıcı kendi
-  // kurgusunu yapar — config'den okuyup interpolasyon ile SQL'e yaz.
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-
-  // Hardcoded enum — SQL injection emniyeti (config TypeScript union'dan gelir).
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  // kurgusunu yapar — `getProductBreakdownMeta()` doğrular (allowlist +
+  // canlı override) SQL'e yazmadan önce.
+  const productMeta = getProductBreakdownMeta();
 
   const sql = `
     SELECT
@@ -204,7 +198,7 @@ async function fetchBrands(
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin(productMeta)}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= ${win.lower}
       AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}

@@ -1,8 +1,18 @@
 import sql from "mssql";
 import { sqlNow, nowIsOverridden, setNowAnchor } from "./now.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getTenantConfig, resolveDatabaseName } from "./tenant/index.js";
+import { getDbConnectionMeta, getDecryptedDbConnectionOverride } from "./tenant/db-connection-config.js";
+import { getActiveDbId } from "./request-context.js";
 
-let pool: sql.ConnectionPool | null = null;
+// Havuzlar `${prefix}::${dbId}` anahtarıyla tutulur — çok-DB (login'de DB
+// seçimi) için: aynı prefix altında farklı dbId'ler AYRI havuz alır, böylece
+// iki kullanıcı iki farklı DB'de EŞZAMANLI çalışabilir (tek-havuz modeli her
+// istekte kapat-aç yapardı). Tek-DB tenant'larda dbId hep boş → tek anahtar
+// (`${prefix}::`) → bugünkü davranış birebir.
+const pools = new Map<string, sql.ConnectionPool>();
+// Havuzlar hangi tenant/prefix için açıldığını izler — DEĞİŞİNCE (tenant
+// switch) tüm havuzlar kapatılır. Kaynak TİPİ (env/store) izlenmez (bkz.
+// `getPool()` "neden cache-hit yolunda I/O yok"); o karar yalnız cache-miss'te.
 let poolPrefix: string | null = null;
 
 function readEnv(name: string, fallback?: string): string {
@@ -12,24 +22,10 @@ function readEnv(name: string, fallback?: string): string {
   throw new Error(`Missing required env var: ${name}`);
 }
 
-export async function getPool(): Promise<sql.ConnectionPool> {
-  // Tenant'a göre env prefix — Pernod: "MSSQL_", Wietnauer: "W_MSSQL_". Aynı
-  // Univera sunucusu, farklı DB. Tenant switch'inde pool yeniden açılır.
-  const prefix = getTenantConfig().mssqlEnvPrefix || "MSSQL_";
-
-  if (pool && pool.connected && poolPrefix === prefix) return pool;
-
-  // Prefix değişti — eski pool'u kapat.
-  if (pool) {
-    try {
-      await pool.close();
-    } catch {
-      /* yok say */
-    }
-    pool = null;
-  }
-
-  const config: sql.config = {
+/** `.env` prefix'inden (`${prefix}SERVER` vb.) — bugünkü davranış, BİREBİR
+ *  korunur (pernod/wietnauer regresyon-sıfır: store override yoksa bu dal). */
+function buildConfigFromEnv(prefix: string): sql.config {
+  return {
     server: readEnv(`${prefix}SERVER`),
     port: parseInt(readEnv(`${prefix}PORT`, "1433"), 10),
     database: readEnv(`${prefix}DATABASE`),
@@ -55,18 +51,125 @@ export async function getPool(): Promise<sql.ConnectionPool> {
     },
     pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
   };
-
-  pool = await new sql.ConnectionPool(config).connect();
-  poolPrefix = prefix;
-  return pool;
 }
 
-export async function closePool(): Promise<void> {
-  if (pool) {
-    await pool.close();
-    pool = null;
-    poolPrefix = null;
+/**
+ * Konfigüratörün şifreli store override'ından (Faz A Dalga 2 "creds →
+ * getPool wire") — `decryptSecret` BURADA, yalnız YENİ bir pool açılırken
+ * (cache-miss) çağrılır; `getPool()`'un cache-hit dalı bu fonksiyona hiç
+ * girmez, dolayısıyla her istekte değil, yalnız gerçek pool-init'te çözülür.
+ * Store `port`/`encrypt`/`trustServerCertificate` alanlarını taşımaz (bugünkü
+ * `DbConnectionInput` şeması kasıtlı dar) — güvenli varsayılanlar kullanılır
+ * (`.env` dalıyla AYNI TLS varsayılan mantığı: prod'da sertifika doğrulanır).
+ */
+function buildConfigFromOverride(tenantId: string): sql.config {
+  const override = getDecryptedDbConnectionOverride(tenantId);
+  if (!override) {
+    throw new Error(`[db] "${tenantId}" için beklenen DB override okunamadı (race?).`);
   }
+  return {
+    server: override.server,
+    port: 1433,
+    database: override.database,
+    user: override.user,
+    password: override.password,
+    requestTimeout: 120_000,
+    connectionTimeout: 30_000,
+    options: {
+      encrypt: true,
+      trustServerCertificate: process.env.NODE_ENV !== "production",
+    },
+    pool: { max: 4, min: 0, idleTimeoutMillis: 30_000 },
+  };
+}
+
+/**
+ * Aktif tenant'ın DB bağlantı havuzu. Kaynak sırası (additive, `tenant/
+ * index.ts getTenantConfig()` additive fallback'iyle AYNI felsefe):
+ *   1. Konfigüratörün şifreli store override'ı (`db-connection-config.ts`
+ *      `saveDbConnectionOverride`) VARSA — o kullanılır (kodsuz DB kurulumu).
+ *   2. YOKSA — bugünkü `.env` `${prefix}SERVER/...` fallback'i (pernod/
+ *      wietnauer'ın DAVRANIŞI BİREBİR KORUNUR, hiçbir override kaydı yoksa
+ *      bu fonksiyon eskisiyle AYNI kod yolunu izler).
+ *
+ * PERFORMANS (Collina — hot path'i ölç, tahmin etme): `runReadOnly()` HER
+ * sorguda `getPool()` çağırır. Cache-HIT yolunda (bağlı pool + aynı prefix)
+ * BİLİNÇLİ OLARAK hiçbir disk I/O yapılmaz — store override var mı kontrolü
+ * (`getDbConnectionMeta`, senkron `fs.readFileSync`) yalnız YENİ bir pool
+ * açılırken (cache-MISS: ilk çağrı, tenant switch, ya da `closePool()`
+ * sonrası) çalışır. Bunu her çağrıda tekrarlamak, event loop'u HER sorguda
+ * gereksiz bir senkron dosya okumasıyla bloklardı.
+ *
+ * Bunun BEDELİ: env→store geçişi (creds ilk kez store'a yazılır) `poolPrefix`
+ * aynı kaldığı için KENDİLİĞİNDEN yakalanmaz — bu yüzden creds
+ * kaydedildikten SONRA `closePool()` çağırmak ZORUNLUDUR (admin/setup save
+ * endpoint'leri bunu YAPAR, bkz. `server.ts`). `closePool()` cache'i
+ * sıfırlar; bir sonraki `getPool()` store'un o an var olup olmadığını taze
+ * okur.
+ */
+export async function getPool(): Promise<sql.ConnectionPool> {
+  const tenant = getTenantConfig();
+  const prefix = tenant.mssqlEnvPrefix || "MSSQL_";
+
+  // Prefix değişti (tenant switch) — tüm havuzları kapat.
+  if (poolPrefix !== null && poolPrefix !== prefix) {
+    await closeAllPools();
+  }
+  poolPrefix = prefix;
+
+  // Aktif isteğin seçili DB'si — ALS'ten (ucuz, I/O yok). Tek-DB'de undefined.
+  // Anahtarı ham database adı DEĞİL, ucuz dbId ile kuruyoruz: böylece cache-HIT
+  // yolunda hiçbir dosya okuması / decrypt YOK (store meta ve resolve yalnız
+  // aşağıdaki MISS dalında çalışır — hot-path davranışı birebir korunur).
+  const activeDbId = getActiveDbId();
+  const key = `${prefix}::${activeDbId ?? ""}`;
+
+  const existing = pools.get(key);
+  if (existing && existing.connected) return existing;
+  if (existing) {
+    try {
+      await existing.close();
+    } catch {
+      /* yok say */
+    }
+    pools.delete(key);
+  }
+
+  // --- cache-MISS dalı (ilk çağrı / tenant switch / closePool sonrası) ---
+  // dbId → gerçek `database` adı (allowlist, fail-closed; tek-DB'de null).
+  const activeDatabase = resolveDatabaseName(activeDbId);
+  // Yalnız VARLIK kontrolü — decrypt YOK (ucuz), ve yalnız BURADA çalışır.
+  const hasStoreOverride = getDbConnectionMeta(tenant.id).hasPassword;
+  const config = hasStoreOverride ? buildConfigFromOverride(tenant.id) : buildConfigFromEnv(prefix);
+  // Çok-DB: bağlantının yalnız `database` alanını override et (sunucu/kimlik AYNI).
+  if (activeDatabase) config.database = activeDatabase;
+
+  const p = await new sql.ConnectionPool(config).connect();
+  pools.set(key, p);
+  return p;
+}
+
+/** Tüm açık havuzları kapatır ve cache'i sıfırlar. */
+async function closeAllPools(): Promise<void> {
+  for (const p of pools.values()) {
+    try {
+      await p.close();
+    } catch {
+      /* yok say */
+    }
+  }
+  pools.clear();
+  poolPrefix = null;
+}
+
+/**
+ * TÜM havuzları kapatır VE cache'i sıfırlar — DB creds kaydedildikten sonra bir
+ * sonraki `getPool()` çağrısının YENİ bağlantı açmasını (taze store/env
+ * kararıyla) garanti eden güvenli reset yolu. SIGINT handler'ı da bunu
+ * kullanır (mevcut davranış).
+ */
+export async function closePool(): Promise<void> {
+  await closeAllPools();
 }
 
 // Read-only guard. Even though the connection user should be db_datareader,
@@ -84,6 +187,13 @@ const FORBIDDEN_PATTERNS = [
   /\bGRANT\b/i,
   /\bREVOKE\b/i,
   /\bDENY\b/i,
+  // Security M1 (defense-in-depth): WAITFOR DELAY/TIME kendi başına bir yazım
+  // değil ama (a) bilinen bir blind-injection zaman-tabanlı keşif primitifi
+  // ve (b) read-only sözleşmesinin ruhuna aykırı bir DoS/askıya-alma vektörü
+  // (istek havuzunu `requestTimeout`e kadar bloke eder). Konfigüratör
+  // endpoint'leri kullanıcı girdisini SQL'e hiç interpolate etmese de bu
+  // guard tüm `runReadOnly` çağıranları için tek yerde geçerli.
+  /\bWAITFOR\b/i,
 ];
 
 export function assertReadOnly(query: string): void {

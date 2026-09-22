@@ -1,5 +1,6 @@
 export * from "./types.js";
 export * from "./db.js";
+export * from "./request-context.js";
 export * from "./dictionary.js";
 export * from "./gemini.js";
 export * from "./introspect.js";
@@ -33,3 +34,24 @@ export * from "./user-perms.js";
 export * from "./fold-other.js";
 export * from "./volume.js";
 export * from "./demo-mask.js";
+// Insider konfigüratörü (Faz A Dalga 2 müşteri kırılımı; Faz B Dalga 1
+// ürün/marka + bölge) — çekirdek servisler; apps/api endpoint'leri bunları
+// çağırır, mantık taşımaz.
+export * from "./tenant/schema-check.js";
+export * from "./tenant/customer-breakdown-candidates.js";
+export * from "./tenant/customer-breakdown-config-service.js";
+export * from "./tenant/product-breakdown-candidates.js";
+export * from "./tenant/product-breakdown-config-service.js";
+export * from "./tenant/region-breakdown-candidates.js";
+export * from "./tenant/region-breakdown-config-service.js";
+export * from "./tenant/db-connection-config.js";
+// Çok-DB (login'de DB seçimi) — kodsuz yönetim servisi.
+export * from "./tenant/databases-config.js";
+// Kodsuz tenant onboarding (Faz A Dalga 1) — tenant KİMLİĞİ (id/displayName/
+// labels/strategicBrands/industry/tax), DB creds/dimensions'tan AYRI store.
+export * from "./tenant/tenant-id.js";
+export * from "./tenant/tenant-definition-store.js";
+export * from "./tenant/tenant-config-service.js";
+// Güvenli setup modu (Faz A Dalga 2) — boş sunucu tavuk-yumurtası çözümü;
+// bkz. packages/core/src/tenant/setup-mode.ts dosya-üstü yorumu.
+export * from "./tenant/setup-mode.js";

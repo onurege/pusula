@@ -20,7 +20,9 @@
 import { withCache } from "./cache.js";
 import { sqlNow } from "./now.js";
 import { runReadOnly } from "./db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getProductBreakdownMeta } from "./tenant/index.js";
+import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
 import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-iskonto";
@@ -354,15 +356,7 @@ async function fetchDiscountByBrandRaw(
   dateFrom: string | null,
   dateTo: string | null,
 ): Promise<DiscountBrandRawRow[]> {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-
-  // SQL injection emniyeti — enum doğrulama (config TS union'dan gelir)
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   const curClause = dateRangeClause(
     "f.TRHISLEMTARIHI",
@@ -391,7 +385,7 @@ async function fetchDiscountByBrandRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin(productMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND ${curClause}${cityFactClause(cities)}
       GROUP BY b.TXTKOD, b.TXTAD, f.LNGDISTKOD
@@ -407,7 +401,7 @@ async function fetchDiscountByBrandRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin(productMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND ${prevClause}${cityFactClause(cities)}
       GROUP BY b.TXTKOD, f.LNGDISTKOD
@@ -592,10 +586,13 @@ async function fetchDiscountBySegmentRaw(
     dateTo,
     `f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()})`,
   );
+  // Segment tablo/kolonu tenant config'ten (`resolveIdentifier` doğrulamalı —
+  // Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH base AS (
       SELECT
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment,
+        ${customerBreakdownLabelExpr(kirilimMeta, "segment")},
         f.LNGDISTKOD AS dist_id,
         f.LNGMUSTERIKOD AS musteri_id,
         f.DBLBRUTTUTAR     AS brut,
@@ -603,7 +600,7 @@ async function fetchDiscountBySegmentRaw(
         f.DBLNETTUTAR      AS net
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      ${customerBreakdownJoin(kirilimMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
         AND ${dateClause}${cityFactClause(cities)}

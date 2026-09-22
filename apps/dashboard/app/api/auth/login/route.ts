@@ -6,7 +6,7 @@ const API_URL = process.env.ENROUTE_API_URL ?? "http://localhost:8080";
 const AUTH_COOKIE = "enroute_auth";
 
 export async function POST(request: Request) {
-  let body: { username?: string; password?: string };
+  let body: { username?: string; password?: string; dbId?: string };
   try {
     body = await request.json();
   } catch {
@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   const res = await fetch(`${API_URL}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username: body.username, password: body.password }),
+    body: JSON.stringify({ username: body.username, password: body.password, dbId: body.dbId }),
     cache: "no-store",
   });
 

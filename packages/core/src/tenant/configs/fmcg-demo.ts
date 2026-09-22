@@ -66,6 +66,31 @@ export const FMCG_DEMO_CONFIG: TenantConfig = {
   brandTable: "TBLURUNEKGRUP",
   brandJoinColumn: "TXTURUNEKGRUPKOD",
 
+  // Demo MSSQL'e bağlanmadığı için bu SQL hiç çalışmaz — yine de tip
+  // uyumluluğu ve gelecekte canlıya alınırsa doğru default için Pernod ile
+  // aynı değerler.
+  dimensions: {
+    customerBreakdown: {
+      table: "TBLMUSTERIGRUPKIRILIM",
+      joinColumn: "TXTGRUPKIRILIMKOD",
+      labelColumn: "TXTAD",
+    },
+    // Pernod ile aynı katmanlama — bkz. `brandTable` yorumu (yukarıda).
+    productBreakdown: {
+      table: "TBLURUNEKGRUP",
+      joinColumn: "TXTURUNEKGRUPKOD",
+      labelColumn: "TXTAD",
+    },
+    // `distRegionTable`/`distRegionColumn` tanımsız bırakılmıştı (sink'ler
+    // `?? "TBLDISTGRUP"`/`?? "TXTGRUP"` default'una düşüyordu) — o default'un
+    // BİREBİR aynısı.
+    regionBreakdown: {
+      table: "TBLDISTGRUP",
+      joinColumn: "TXTGRUP",
+      labelColumn: "TXTAD",
+    },
+  },
+
   labels: {
     morningHeadline: "Bu Sabah Sahada Ne Oluyor",
     channelTypeTitle: "Müşteri Tipi · Son 12 Ay",

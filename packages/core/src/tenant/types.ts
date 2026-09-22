@@ -12,6 +12,66 @@
 export type Industry = "alcohol" | "fmcg";
 
 /**
+ * Müşteri kırılımı boyutu — TBLMUSTERI üzerindeki bir lookup-kod kolonunu
+ * (`joinColumn`) bir lookup tablosuna (`table`) bağlar; o tablonun okunabilir
+ * adı `labelColumn`'da tutulur (Univera kuralı: lookup tabloları TXTKOD (PK) +
+ * TXTAD (ad) çiftini taşır — bu ikisi arasındaki JOIN anahtarı sabit "TXTKOD",
+ * config'e girmez).
+ *
+ * Örnek (Wietnauer default): TBLMUSTERI.TXTGRUPKIRILIMKOD →
+ * TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TBLMUSTERIGRUPKIRILIM.TXTAD.
+ */
+export type CustomerBreakdownDimension = {
+  /** Lookup tablosu — `dbo.` şeması sabit, `resolveIdentifier()` doğrular. */
+  table: string;
+  /** TBLMUSTERI üzerindeki FK kolonu — lookup tablosunun TXTKOD'una bağlanır. */
+  joinColumn: string;
+  /** Lookup tablosunun okunabilir ad kolonu (genelde "TXTAD"). */
+  labelColumn: string;
+};
+
+/**
+ * Ürün/marka kırılımı boyutu — TBLURUN üzerindeki bir lookup-kod kolonunu
+ * (`joinColumn`) bir lookup tablosuna (`table`) bağlar; Univera kuralı
+ * (TXTKOD PK + TXTAD ad) burada da geçerli — bkz. `CustomerBreakdownDimension`
+ * dokümantasyonu. Faz B öncesi bu değerler `TenantConfig.brandTable` /
+ * `brandJoinColumn` alanlarında hardcoded union olarak yaşıyordu (aşağıda
+ * hâlâ dururlar — default kaynağı ve geriye-uyum için); okuma yolu artık
+ * buradan (config-driven boyut) geçer.
+ *
+ * Örnek (Pernod default): TBLURUN.TXTURUNEKGRUPKOD → TBLURUNEKGRUP.TXTKOD,
+ * ad TBLURUNEKGRUP.TXTAD (Chivas Regal, Ballantine's, …).
+ */
+export type ProductBreakdownDimension = {
+  table: string;
+  joinColumn: string;
+  labelColumn: string;
+};
+
+/**
+ * Distribütör → bölge kırılımı boyutu — TBLDIST üzerindeki bir lookup-kod
+ * kolonunu (`joinColumn`) bir lookup tablosuna (`table`) bağlar; aynı
+ * Univera TXTKOD/TXTAD kuralı. Faz B öncesi `TenantConfig.distRegionTable` /
+ * `distRegionColumn` alanlarında hardcoded union olarak yaşıyordu (aşağıda
+ * hâlâ dururlar — default kaynağı ve geriye-uyum için).
+ *
+ * Örnek (Pernod default): TBLDIST.TXTGRUP → TBLDISTGRUP.TXTKOD, ad
+ * TBLDISTGRUP.TXTAD (AKDENIZ, EGE, MARMARA, …).
+ */
+export type RegionBreakdownDimension = {
+  table: string;
+  joinColumn: string;
+  labelColumn: string;
+};
+
+/** Config-driven boyutların tenant başına eşleme kümesi. */
+export type TenantDimensions = {
+  customerBreakdown: CustomerBreakdownDimension;
+  productBreakdown: ProductBreakdownDimension;
+  regionBreakdown: RegionBreakdownDimension;
+};
+
+/**
  * Hacim birimi — TL'nin yanında ikinci bir KPI birimi (TL ↔ X toggle).
  *
  * Alkol sektöründe `9LE` (9-Litre-Equivalent) standart birimdir — Pernod'un
@@ -69,6 +129,20 @@ export type TenantLabels = {
   kpiSourceNote: string;
   /** Hacim çarpanı tooltip metni (9LE veya FMCG karşılığı). */
   volumeMultiplierHint: string;
+};
+
+/**
+ * Aynı Insider kurulumunda login'de seçilebilen bir veritabanı. Aynı Panorama
+ * şeması, aynı sunucu/kimlik — yalnız bağlantının `database` adı değişir
+ * (Panorama'nın "şirket" seçicisinin karşılığı, ör. Reckitt Core / ESSHOME).
+ */
+export type TenantDatabase = {
+  /** URL/JWT-güvenli kısa kimlik. Doğrulama: `^[a-z0-9][a-z0-9-]{0,30}$`. */
+  id: string;
+  /** Login dropdown'ında görünen ad ("Reckitt Core"). */
+  label: string;
+  /** MSSQL database adı — bağlantının YALNIZ `database` alanını override eder. */
+  database: string;
 };
 
 export type TenantConfig = {
@@ -149,6 +223,40 @@ export type TenantConfig = {
    * panelleri bu liste üzerinden render edilir.
    */
   strategicBrands?: string[];
+
+  /**
+   * Login'de seçilebilen veritabanları (aynı şema/sunucu/kimlik, farklı
+   * `database`). Tanımsız veya tek eleman → login'de seçici çıkmaz ve tüm
+   * sorgular bugünkü tek-DB yolunu izler (regresyon-sıfır). Birden çok eleman →
+   * login dropdown'ı + istek-bazlı DB yönlendirmesi (bkz. `request-context.ts`,
+   * `resolveDatabaseName`). İlk eleman varsayılan sayılır (bağlam olmayan
+   * warm/job yolları onu kullanır).
+   */
+  databases?: TenantDatabase[];
+
+  // -- Config-driven boyutlar (Insider konfigüratör) --------------------------
+
+  /**
+   * Alan → tablo/kolon eşlemeleri — Insider konfigüratörünün admin panelden
+   * kodsuz özelleştirebileceği boyutlar. Faz A yalnız `customerBreakdown`
+   * taşıyordu; Faz B `productBreakdown` (bugünkü `brandTable`/
+   * `brandJoinColumn`) ve `regionBreakdown`'ı (bugünkü `distRegionTable`/
+   * `distRegionColumn`) ekledi. `brandTable`/`distRegionTable` alanları
+   * yukarıda hâlâ dururlar (default DEĞER kaynağı + geriye-uyum) ama SQL'e
+   * giden okuma yolu artık `tenant/index.ts` `getProductBreakdownMeta()` /
+   * `getRegionBreakdownMeta()` üzerinden bu `dimensions` alanına gider —
+   * böylece admin panel override'ı bu iki boyutta da çalışır.
+   *
+   * SQL'e interpolate edilmeden önce burada tutulan değerler DAİMA
+   * `resolveIdentifier()`'dan (bkz. `tenant/identifier.ts`) geçmeli — regex
+   * `^[A-Za-z0-9_]+$` + küratörlü allowlist. Bu, `distRegionTable` gibi
+   * doğrulamasız-interpolasyon geçmişindeki hatayı (Faz 0 C1) tekrar etmemek
+   * için zorunlu.
+   *
+   * Runtime override (`getMappingConfig()`, `tenant/index.ts`) bu default'un
+   * ÜSTÜNE biner — şifreli dosya store'dan (`tenant/mapping-store.ts`) okunur.
+   */
+  dimensions: TenantDimensions;
 
   // -- UI davranışı (tenant-özel arayüz kısıtları) ----------------------------
 

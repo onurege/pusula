@@ -49,7 +49,9 @@
 import { runReadOnly } from "./db.js";
 import { sqlNow, resolveWindowBounds } from "./now.js";
 import { withCache } from "./cache.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getRegionBreakdownMeta } from "./tenant/index.js";
+import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
+import { regionBreakdownJoin, regionBreakdownLabelExpr } from "./tenant/region-breakdown-sql.js";
 import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-saha";
@@ -324,6 +326,9 @@ async function fetchCoverage(
   win: { lower: string; upper: string },
   visitUpper: string,
 ): Promise<CoverageRawRow[]> {
+  // Segment tablo/kolonu tenant config'ten (`resolveIdentifier` doğrulamalı —
+  // Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD, f.LNGDISTKOD AS dist_id
@@ -343,9 +348,9 @@ async function fetchCoverage(
     musteri_seg AS (
       SELECT
         m.LNGKOD AS musteri_kod,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
+        ${customerBreakdownLabelExpr(kirilimMeta, "segment")}
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      ${customerBreakdownJoin(kirilimMeta)}
     ),
     dist_musteri AS (
       -- Her müşteri × dist kombinasyonu (aktif veya ziyaret kaynaklı).
@@ -602,9 +607,7 @@ async function fetchDistributorComparison(
 ): Promise<Omit<DistributorComparisonRow, "rank">[]> {
   // Bölge kaynağı tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge,
   // Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge. (komuta fetchHeatmap ile aynı.)
-  const tenant = getTenantConfig();
-  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
-  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
+  const regionMeta = getRegionBreakdownMeta();
   const sql = `
     WITH baz AS (
       SELECT
@@ -627,14 +630,14 @@ async function fetchDistributorComparison(
     SELECT
       b.LNGDISTKOD                                                 AS dist_kod,
       d.TXTAD                                                      AS distributor,
-      g.TXTAD                                                      AS bolge,
+      ${regionBreakdownLabelExpr(regionMeta, "g", "bolge")},
       COUNT(DISTINCT b.LNGSTKOD)                                   AS aktif_rep,
       COUNT(*)                                                     AS ziyaret,
       COUNT(DISTINCT b.LNGMUSTERIKOD)                              AS kapsanan,
       SUM(b.siparis_var)                                           AS siparisli
     FROM baz b
     LEFT JOIN dbo.TBLDIST       d ON d.LNGKOD = b.LNGDISTKOD
-    LEFT JOIN dbo.${distRegionTable} g ON g.TXTKOD = d.${distRegionColumn}
+    ${regionBreakdownJoin(regionMeta, "d", "g", "LEFT")}
     GROUP BY b.LNGDISTKOD, d.TXTAD, g.TXTAD
     ORDER BY COUNT(*) DESC
   `;
@@ -700,7 +703,6 @@ export async function getWietnauerSahaSnapshot(
 ): Promise<WietnauerSahaSnapshot> {
   // strategicBrands şu an saha modülünde kullanılmıyor.
   void options.strategicBrands;
-  void getTenantConfig;
 
   const cities = options.allowedCities ?? null;
   const win = resolveWindowBounds(options.dateFrom, options.dateTo);

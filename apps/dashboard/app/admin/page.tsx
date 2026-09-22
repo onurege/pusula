@@ -37,6 +37,10 @@ export default function AdminPage() {
         <Link href="/admin/yetkiler" style={{ fontSize: 13, fontWeight: 600, color: "var(--color-accent)" }}>
           → Kullanıcı Yetkileri (ekran + distribütör erişimi)
         </Link>
+        <br />
+        <Link href="/admin/konfigurator" style={{ fontSize: 13, fontWeight: 600, color: "var(--color-accent)" }}>
+          → Insider Konfigüratörü (müşteri kırılımı + DB bağlantısı)
+        </Link>
       </header>
 
       {/* Veri Yönetimi — ağır tam-yenileme yalnızca burada (navbar'dan kaldırıldı).

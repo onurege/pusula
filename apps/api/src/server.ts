@@ -13,6 +13,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { z } from "zod";
+import { createAdminGate } from "./admin-gate.js";
+import { createSetupGate } from "./setup-gate.js";
 import {
   analyzeRegionAnomaly,
   closePool,
@@ -61,6 +63,8 @@ import {
   authenticateUser,
   signSession,
   verifySession,
+  runWithDbId,
+  listSelectableDatabases,
   resolveTenantScope,
   listAllowedDistributors,
   listTopActiveDistIds,
@@ -68,9 +72,45 @@ import {
   AUTH_COOKIE_NAME,
   scopeSingleDistId,
   type TenantScope,
+  // Insider Konfigüratörü (Faz A Dalga 2 müşteri kırılımı; Faz B Dalga 1
+  // ürün/marka + bölge) — çekirdek servisler; bkz. packages/core/src/tenant/
+  // {customer,product,region}-breakdown-config-service.ts, db-connection-config.ts.
+  getCustomerBreakdownConfigMeta,
+  previewCustomerBreakdownCandidate,
+  saveCustomerBreakdownOverride,
+  resetCustomerBreakdownOverride,
+  getProductBreakdownConfigMeta,
+  previewProductBreakdownCandidate,
+  saveProductBreakdownOverride,
+  resetProductBreakdownOverride,
+  getRegionBreakdownConfigMeta,
+  previewRegionBreakdownCandidate,
+  saveRegionBreakdownOverride,
+  resetRegionBreakdownOverride,
+  LiveSchemaValidationError,
+  testDbConnection,
+  connectWithMssql,
+  getDbConnectionMeta,
+  saveDbConnectionOverride,
+  getDatabasesConfig,
+  saveDatabasesOverride,
+  // Kodsuz tenant onboarding (Faz A Dalga 1) — tenant KİMLİĞİ; bkz.
+  // packages/core/src/tenant/tenant-config-service.ts.
+  getActiveTenantDefinitionMeta,
+  saveTenantDefinitionOverride,
+  resetTenantDefinitionOverride,
+  isActiveTenantId,
+  TenantValidationError,
+  TenantIdError,
+  // Güvenli setup modu (Faz A Dalga 2) — bkz. packages/core/src/tenant/setup-mode.ts.
+  isTenantFullyMissing,
+  resolveActiveTenantId,
 } from "@enroute/core";
 
-const app = new Hono();
+// `adminUsername` — merkezi admin-gate middleware'inin (aşağıda,
+// `/api/admin/*`) doğruladığı session'dan set ettiği actor; config
+// endpoint'leri audit-trail'e bunu yazar (client body'sinden ASLA).
+const app = new Hono<{ Variables: { adminUsername: string } }>();
 app.use("/api/*", cors({ origin: ["http://localhost:3000", "http://127.0.0.1:3000"] }));
 
 app.get("/api/health", (c) =>
@@ -189,7 +229,17 @@ function tokenFromRequest(c: { req: { header: (k: string) => string | undefined 
 // Sentetik demo tenant'ı mı (MSSQL yok)? Yalnızca `demoData=true` config'inde
 // (fmcg-demo). Login normal işler (statik demo kullanıcısı auth.ts'te); bu flag
 // sadece komuta refresh yollarını kapatmak için (aşağıda).
-const DEMO_DATA = getTenantConfig().demoData === true;
+//
+// BOOT-ÇÖKME ÖNLEME (Faz A Dalga 2, Faz 0 Bootstrap sözleşmesi): aktif
+// tenant HİÇ tanımlı değilse (`isTenantFullyMissing()` — ne REGISTRY'de ne
+// tenant-definition store'da) `getTenantConfig()` THROW eder. Bu satır
+// MODÜL-SEVİYESİNDE (import anında) çalıştığı için, korumasız bir çağrı
+// TÜM sunucuyu (setup uçları dahil) ayağa kalkmadan çökertirdi — setup
+// modunun VAR OLMA SEBEBİNİN kendisini imkansız kılardı. `isTenantFullyMissing()`
+// asla throw etmez; bu durumda `DEMO_DATA=false` güvenli bir varsayılandır
+// (gerçek demoData henüz okunabilir değil — night-refresh zaten aşağıda
+// `DEMO_DATA` kontrolüyle devre dışı kalır, zararsız).
+const DEMO_DATA = isTenantFullyMissing() ? false : getTenantConfig().demoData === true;
 
 async function scopeFromRequest(
   c: { req: { header: (k: string) => string | undefined } },
@@ -202,6 +252,140 @@ async function scopeFromRequest(
   if (session && session.role !== "merkez") throw new Error("UNAUTHENTICATED");
   return resolveTenantScope(session, selectedDistKod ?? null);
 }
+
+// ---------------------------------------------------------------------------
+// GÜVENLİ SETUP MODU — Faz A Dalga 2 (Faz 0 Bootstrap sözleşmesi)
+//
+// Boş sunucu tavuk-yumurtası: yeni `TENANT=<id>` ile açılışta tenant-tanımı
+// yoksa `getTenantConfig()` THROW eder — normal admin girişi (session +
+// admin rolü) MÜMKÜN DEĞİLDİR (henüz ne kullanıcı ne DB var). Bu üç uç
+// `createSetupGate()`'in (SETUP_TOKEN header) koruduğu AYRI bir kapıdan
+// geçer — session/admin-gate GEREKMEZ.
+//
+// KAYIT SIRASI KRİTİK: bu blok, GLOBAL SESSION GUARD'DAN (aşağıda,
+// "GLOBAL AUTH GUARD" başlığı altında) ÖNCE kayıtlı — Hono eşleşen
+// middleware/route'ları KAYIT SIRASINA göre zincirler; bu route'lar (terminal
+// handler'lar) session guard'a HİÇ uğramaz. Bu satırların ALTINA yeni bir
+// `/api/setup/*` route EKLEME — session guard'dan SONRAYA düşer, o zaman
+// session gerektirmeye başlar (sessizce kırılan bir sözleşme).
+//
+// `PUBLIC_ROUTES`'A EKLENMEZ (Faz 0 H-1) — bkz. `setup-gate.ts` dosya-üstü
+// notu: tek gerçek kapı `createSetupGate()`, durum-türevli fail-closed
+// (`isSetupModeActive()` HER İSTEKTE canlı kontrol eder, in-memory bayrak
+// yok — aktif tenant tamamlanınca bir SONRAKİ istek otomatik 404 alır).
+//
+// Server-otoriter tenant (Faz 0 şart #3): `id` hiçbir setup ucunda body'den
+// ALINMAZ — `resolveActiveTenantId()` DAİMA `process.env.TENANT`'ı okur.
+// ---------------------------------------------------------------------------
+
+const TenantLabelsBody = z.object({
+  morningHeadline: z.string().min(1),
+  channelTypeTitle: z.string().min(1),
+  channelTypeSource: z.string().min(1),
+  mapEmptyDataSource: z.string().min(1),
+  kpiSourceNote: z.string().min(1),
+  volumeMultiplierHint: z.string().min(1),
+});
+
+const TenantTaxBody = z.object({
+  key: z.string().min(1),
+  label: z.string(),
+  showInToggle: z.boolean(),
+});
+
+// Admin panel `/api/admin/config/tenant` POST'u `id`'yi body'de bekler
+// (aktif tenant'la eşleşmesi ayrıca doğrulanır, bkz. aşağıdaki route).
+// Setup akışı `.omit({ id: true })` ile AYNI şemayı `id`SİZ kullanır — id
+// orada server tarafında `resolveActiveTenantId()`'den gelir.
+const TenantDefinitionBody = z.object({
+  id: z.string().min(1),
+  displayName: z.string().min(1),
+  industry: z.enum(["alcohol", "fmcg"]),
+  strategicBrands: z.array(z.string().min(1)).min(1),
+  labels: TenantLabelsBody,
+  tax: TenantTaxBody,
+  logoMark: z.string().min(1).optional(),
+});
+const SetupTenantDefinitionBody = TenantDefinitionBody.omit({ id: true });
+
+const DbConnectionBody = z.object({
+  server: z.string().min(1),
+  database: z.string().min(1),
+  user: z.string().min(1),
+  password: z.string().min(1),
+});
+
+app.use("/api/setup/*", createSetupGate());
+
+// POST test — Security H2 ile AYNI sözleşme: ham mssql hatası ASLA dönmez,
+// yalnız `{ok}`.
+app.post("/api/setup/db-connection/test", async (c) => {
+  try {
+    const body = DbConnectionBody.parse(await c.req.json());
+    return c.json(await testDbConnection(connectWithMssql, body));
+  } catch (err) {
+    // Buraya yalnız zod parse hatası düşer — gerçek bağlantı hatası
+    // `testDbConnection` içinde zaten yutulup sanitize edildi.
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST — creds'i şifreli (AES-256-GCM) yaz + aktif pool'u kapat (GÖREV 1:
+// bir sonraki `getPool()` çağrısı yeni creds'le taze bağlantı açar — "kaydet
+// sonrası yeni bağlantı" güvenli reset yolu).
+app.post("/api/setup/db-connection", async (c) => {
+  try {
+    const body = DbConnectionBody.parse(await c.req.json());
+    await saveDbConnectionOverride({
+      tenantId: resolveActiveTenantId(),
+      actor: "setup-token",
+      input: body,
+    });
+    await closePool().catch(() => undefined);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST — tenant KİMLİĞİNİ oluştur/güncelle. `id` body'de YOK (schema
+// `.omit`) — server `resolveActiveTenantId()` ile `process.env.TENANT`'ı
+// kullanır (server-otoriter, Faz 0 şart #3). `saveTenantDefinitionOverride`
+// Dalga 1'in servisidir (reuse) — REGISTRY-çakışma + zorunlu-alan
+// doğrulaması, `clearTenantCache()`, audit hepsi ORTAK yoldan geçer.
+app.post("/api/setup/tenant", async (c) => {
+  try {
+    const body = SetupTenantDefinitionBody.parse(await c.req.json());
+    const config = await saveTenantDefinitionOverride({
+      actor: "setup-token",
+      input: { ...body, id: resolveActiveTenantId() },
+    });
+    return c.json({ ok: true, config });
+  } catch (err) {
+    if (err instanceof TenantValidationError) {
+      return c.json({ error: err.message, issues: err.issues }, 400);
+    }
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// "Kurulum gerekli" kısa-devresi — aktif tenant TÜMÜYLE tanımsızken (Boot-
+// çökme önleme, DEMO_DATA yorumuna bkz.) `/api/setup/*` VE `/api/health`
+// DIŞINDAKİ her `/api/*` isteği için temiz bir 503 döner. `/api/setup/*`
+// zaten yukarıdaki kayıt sırası nedeniyle bu middleware'e hiç uğramaz
+// (terminal handler'lar önce eşleşir) — buradaki path kontrolü savunma-
+// derinliği (sıra yanlışlıkla bozulursa bile setup uçları burada 503'e
+// düşmesin diye). Auth/login DAHİL her şeyi kapsar: tenant yokken
+// `authenticateUser` zaten `getTenantConfig()`'e bağımlı (auth.ts) — bu
+// kısa-devre olmadan ham "[tenant] Bilinmeyen TENANT=..." hatası 500 olarak
+// sızardı; burada TEK, tutarlı, veri sızdırmayan bir mesajla kesilir.
+app.use("/api/*", async (c, next) => {
+  if (c.req.path === "/api/health" || c.req.path.startsWith("/api/setup/")) return next();
+  if (isTenantFullyMissing()) {
+    return c.json({ error: "Kurulum gerekli — bu sunucuda henüz aktif bir tenant tanımı yok." }, 503);
+  }
+  return next();
+});
 
 // POST /api/auth/login — kimlik doğrula, JWT üret. Token body'de döner;
 // dashboard onu :3000 HttpOnly cookie'sine yazar.
@@ -216,17 +400,32 @@ app.post("/api/auth/login", async (c) => {
     if (isRateLimited("login", ip, LOGIN_RATE_LIMIT)) {
       return c.json({ error: "Çok fazla başarısız deneme. Lütfen bir dakika sonra tekrar deneyin." }, 429);
     }
-    const body = (await c.req.json()) as { username?: string; password?: string };
+    const body = (await c.req.json()) as { username?: string; password?: string; dbId?: string };
     const username = (body.username ?? "").trim();
     const password = body.password ?? "";
     if (!username || !password) {
       return c.json({ error: "Kullanıcı adı ve şifre gerekli" }, 400);
     }
-    const user = await authenticateUser(username, password);
+    // Çok-DB (login'de DB seçimi): tenant birden çok DB tanımlıysa `dbId`
+    // ZORUNLU ve allowlist'te olmalı; tek-DB tenant'ta gönderilse bile YOK
+    // SAYILIR (effectiveDbId undefined → bugünkü tek-DB yolu). Auth sorgusu
+    // SEÇİLEN DB'ye gitsin diye `runWithDbId` ile sarılır.
+    const selectable = listSelectableDatabases();
+    let effectiveDbId: string | undefined;
+    if (selectable.length > 0) {
+      const wanted = typeof body.dbId === "string" ? body.dbId.trim() : "";
+      if (!wanted || !selectable.some((d) => d.id === wanted)) {
+        return c.json({ error: "Geçersiz veya eksik veritabanı seçimi." }, 400);
+      }
+      effectiveDbId = wanted;
+    }
+    const user = await runWithDbId(effectiveDbId, () => authenticateUser(username, password));
     if (!user) {
       recordRateLimitHit("login", ip, RATE_LIMIT_WINDOW_MS);
       return c.json({ error: "Geçersiz kullanıcı adı veya şifre" }, 401);
     }
+    // Seçili DB'yi oturuma (JWT) göm — sonraki her istek bu DB'ye yönlenir.
+    user.dbId = effectiveDbId;
     // Erişim politikası: şu an yalnızca MERKEZ tipli kullanıcılar. Distribütör
     // (dist) tipli hesaplar geçerli şifreyle bile giremez. Kimlik doğru olduğu
     // için rate-limit sayılmaz.
@@ -245,6 +444,7 @@ app.post("/api/auth/login", async (c) => {
         displayName: user.displayName,
         role: user.role,
         allowedDistKods: user.allowedDistKods,
+        dbId: user.dbId ?? null,
       },
     });
   } catch (err) {
@@ -272,6 +472,7 @@ app.get("/api/auth/me", async (c) => {
       allowedDistKods: session.allowedDistKods,
       allowedScreens: perm.screens, // null → hepsi
       allowedCities: perm.cities, // null → hepsi
+      dbId: session.dbId ?? null, // çok-DB: aktif veritabanı (tek-DB'de null)
     },
   });
 });
@@ -281,11 +482,26 @@ app.get("/api/auth/distributors", async (c) => {
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum bulunamadı" }, 401);
   try {
-    const distributors = await listAllowedDistributors(session);
+    // Bu uç global auth guard'dan ÖNCE tanımlı (PUBLIC_ROUTES) → ALS'yi guard
+    // sarmalamaz; DB sorgusu seçili DB'ye gitsin diye burada elle sarıyoruz.
+    const distributors = await runWithDbId(session.dbId, () => listAllowedDistributors(session));
     return c.json({ distributors, role: session.role });
   } catch (err) {
     console.error("[/api/auth/distributors] failed:", err);
     return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// GET /api/auth/databases — çok-DB kurulumunda login dropdown'ı için
+// seçilebilir veritabanları (yalnız id+label). Public (login ÖNCESİ okunur);
+// tek-DB tenant'ta boş dizi → dashboard dropdown'ı gizler. Ham `database`
+// adları BURADA DÖNMEZ (yalnız kullanıcıya gösterilen etiket + kısa kimlik).
+app.get("/api/auth/databases", (c) => {
+  try {
+    return c.json({ databases: listSelectableDatabases() });
+  } catch {
+    // Tenant henüz tanımsızsa (setup öncesi) sessizce boş dön.
+    return c.json({ databases: [] });
   }
 });
 
@@ -312,14 +528,45 @@ const PUBLIC_ROUTES = new Set<string>([
   "/api/auth/me",
   "/api/auth/logout",
   "/api/auth/distributors",
+  "/api/auth/databases",
 ]);
 
 app.use("/api/*", async (c, next) => {
   if (PUBLIC_ROUTES.has(c.req.path)) return next();
   const session = await verifySession(tokenFromRequest(c));
   if (!session) return c.json({ error: "Oturum gerekli" }, 401);
-  return next();
+  // Güvenlik (LOW-1 sertleştirme): tenant çok-DB İSE oturumda açık bir `dbId`
+  // ZORUNLU. `dbId`'siz bir oturum (ör. çok-DB açılmadan ÖNCE edinilmiş eski
+  // token) sessizce varsayılan/ilk DB'ye düşmesin — yeniden-login'e zorla.
+  // Böylece "her çok-DB isteğinde açık bir dbId vardır" değişmezi katılaşır.
+  if (!session.dbId && listSelectableDatabases().length > 0) {
+    return c.json({ error: "Oturumu yenileyin — veritabanı seçimi gerekli." }, 401);
+  }
+  // Çok-DB: isteğin geri kalanını oturumdaki `dbId` aktifken çalıştır →
+  // guard'dan SONRA tanımlı tüm veri uçları (`getPool`/`getLocalDb`) seçili
+  // DB'ye yönlenir. Tek-DB'de `dbId` undefined → varsayılan (bugünkü) yol.
+  return runWithDbId(session.dbId, () => next());
 });
+
+// ---------------------------------------------------------------------------
+// MERKEZİ ADMIN GATE — Security H3
+//
+// `/api/admin/*` altındaki HER route (yukarıdaki global guard'dan sonra bile)
+// ayrıca admin rolü zorunlu kılar. Bu satırdan SONRA tanımlanan yeni admin
+// endpoint'leri (Insider Konfigüratörü `config/*` dahil) `isAdminUser`
+// kontrolünü KENDİLERİ TEKRARLAMAZ — bu middleware zaten 401/403'ü kapatır ve
+// doğrulanmış kullanıcı adını `adminUsername` context değişkenine yazar
+// (audit-trail actor'ı için).
+//
+// Var olan `/api/admin/perms|cities|dists|users|...` uçları (bu dosyada daha
+// altta tanımlı) kendi içlerinde hâlâ aynı kontrolü elle yapıyor — bu bir
+// hata DEĞİL: Hono, bir isteğe eşleşen tüm middleware/route'ları KAYIT
+// SIRASINA göre zincirler; bu middleware onlardan ÖNCE kayıtlı olduğu için
+// onları da kapsar (çift kontrol zararsız, dokunulmadı — mevcut davranış
+// korunur). Yeni route eklerken bu satırın ALTINDA `/api/admin/...` deseniyle
+// tanımlandığından emin ol.
+// ---------------------------------------------------------------------------
+app.use("/api/admin/*", createAdminGate(tokenFromRequest));
 
 const RetrieveBody = z.object({
   query: z.string().min(1),
@@ -956,6 +1203,380 @@ app.post("/api/refresh-all", async (c) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Insider Konfigüratörü — /api/admin/config/* (Faz A Dalga 2)
+//
+// `createAdminGate` merkezi middleware'i (yukarıda, `/api/admin/*`) zaten
+// oturum + admin rolünü kapatıyor — burada TEKRAR `isAdminUser` çağrılmaz.
+//
+// Tüm iş mantığı `packages/core/src/tenant/{customer-breakdown-config-service,
+// db-connection-config}.ts`'te — bu handler'lar İNCE: parse → servis çağır →
+// dön. Servis katmanı gerçek MSSQL'e bağlanmadan (`runReadOnly`/`connectFn`
+// enjeksiyonuyla) unit-testlenir; buradaki tek "gerçek" bağımlılık production
+// wiring'i (`runReadOnly`, `connectWithMssql`).
+// ---------------------------------------------------------------------------
+
+const CustomerBreakdownInputBody = z.object({
+  table: z.string().min(1),
+  joinColumn: z.string().min(1),
+  labelColumn: z.string().min(1),
+});
+
+// GET — mevcut kırılım + küratörlü aday listesi (her biri canlı VAR/YOK).
+app.get("/api/admin/config/customer-breakdown", async (c) => {
+  try {
+    return c.json(await getCustomerBreakdownConfigMeta(runReadOnly));
+  } catch (err) {
+    console.error("[/api/admin/config/customer-breakdown GET] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST preview — seçilen aday için canlı önizleme (örnek değer + match-rate +
+// tip bayrağı). Henüz DİSKE HİÇBİR ŞEY YAZMAZ — salt-okunur bir "dene" adımı.
+app.post("/api/admin/config/customer-breakdown/preview", async (c) => {
+  try {
+    const body = CustomerBreakdownInputBody.extend({
+      sampleLimit: z.number().int().min(1).max(50).optional(),
+    }).parse(await c.req.json());
+    const preview = await previewCustomerBreakdownCandidate(
+      runReadOnly,
+      { table: body.table, joinColumn: body.joinColumn, labelColumn: body.labelColumn },
+      body.sampleLimit,
+    );
+    return c.json(preview);
+  } catch (err) {
+    // `resolveCustomerBreakdown` allowlist-dışı girdide THROW eder — bu da
+    // burada 400'e çevrilir (istemci hatası, sunucu hatası değil).
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST kaydet — allowlist + canlı-şema doğrulaması geçmezse 422 (bozuk config
+// diske YAZILMAZ); geçerse atomik yaz → senkron cache invalidate → audit.
+app.post("/api/admin/config/customer-breakdown", async (c) => {
+  try {
+    const body = CustomerBreakdownInputBody.parse(await c.req.json());
+    await saveCustomerBreakdownOverride({
+      run: runReadOnly,
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+      input: body,
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof LiveSchemaValidationError) {
+      return c.json({ error: err.message, check: err.check }, 422);
+    }
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST reset — override'ı kaldır (config dosyasındaki default'a dön).
+app.post("/api/admin/config/customer-breakdown/reset", async (c) => {
+  try {
+    await resetCustomerBreakdownOverride({
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[/api/admin/config/customer-breakdown/reset] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Insider Konfigüratörü — /api/admin/config/product-breakdown/* (Faz B Dalga 1)
+//
+// `customer-breakdown` endpoint'leriyle AYNI kalıp — bkz. yukarıdaki dosya-üstü
+// not. İş mantığı `packages/core/src/tenant/product-breakdown-config-service.ts`.
+// ---------------------------------------------------------------------------
+
+const ProductBreakdownInputBody = z.object({
+  table: z.string().min(1),
+  joinColumn: z.string().min(1),
+  labelColumn: z.string().min(1),
+});
+
+// GET — mevcut ürün/marka kırılımı + küratörlü aday listesi (canlı VAR/YOK).
+app.get("/api/admin/config/product-breakdown", async (c) => {
+  try {
+    return c.json(await getProductBreakdownConfigMeta(runReadOnly));
+  } catch (err) {
+    console.error("[/api/admin/config/product-breakdown GET] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST preview — seçilen aday için canlı önizleme. DİSKE HİÇBİR ŞEY YAZMAZ.
+app.post("/api/admin/config/product-breakdown/preview", async (c) => {
+  try {
+    const body = ProductBreakdownInputBody.extend({
+      sampleLimit: z.number().int().min(1).max(50).optional(),
+    }).parse(await c.req.json());
+    const preview = await previewProductBreakdownCandidate(
+      runReadOnly,
+      { table: body.table, joinColumn: body.joinColumn, labelColumn: body.labelColumn },
+      body.sampleLimit,
+    );
+    return c.json(preview);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST kaydet — allowlist + canlı-şema doğrulaması geçmezse 422; geçerse
+// atomik yaz → senkron cache invalidate → audit.
+app.post("/api/admin/config/product-breakdown", async (c) => {
+  try {
+    const body = ProductBreakdownInputBody.parse(await c.req.json());
+    await saveProductBreakdownOverride({
+      run: runReadOnly,
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+      input: body,
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof LiveSchemaValidationError) {
+      return c.json({ error: err.message, check: err.check }, 422);
+    }
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST reset — override'ı kaldır (config dosyasındaki default'a dön).
+app.post("/api/admin/config/product-breakdown/reset", async (c) => {
+  try {
+    await resetProductBreakdownOverride({
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[/api/admin/config/product-breakdown/reset] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Insider Konfigüratörü — /api/admin/config/region-breakdown/* (Faz B Dalga 1)
+//
+// `customer-breakdown` endpoint'leriyle AYNI kalıp. İş mantığı
+// `packages/core/src/tenant/region-breakdown-config-service.ts`.
+// ---------------------------------------------------------------------------
+
+const RegionBreakdownInputBody = z.object({
+  table: z.string().min(1),
+  joinColumn: z.string().min(1),
+  labelColumn: z.string().min(1),
+});
+
+// GET — mevcut bölge kırılımı + küratörlü aday listesi (canlı VAR/YOK).
+app.get("/api/admin/config/region-breakdown", async (c) => {
+  try {
+    return c.json(await getRegionBreakdownConfigMeta(runReadOnly));
+  } catch (err) {
+    console.error("[/api/admin/config/region-breakdown GET] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST preview — seçilen aday için canlı önizleme. DİSKE HİÇBİR ŞEY YAZMAZ.
+app.post("/api/admin/config/region-breakdown/preview", async (c) => {
+  try {
+    const body = RegionBreakdownInputBody.extend({
+      sampleLimit: z.number().int().min(1).max(50).optional(),
+    }).parse(await c.req.json());
+    const preview = await previewRegionBreakdownCandidate(
+      runReadOnly,
+      { table: body.table, joinColumn: body.joinColumn, labelColumn: body.labelColumn },
+      body.sampleLimit,
+    );
+    return c.json(preview);
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST kaydet — allowlist + canlı-şema doğrulaması geçmezse 422; geçerse
+// atomik yaz → senkron cache invalidate → audit.
+app.post("/api/admin/config/region-breakdown", async (c) => {
+  try {
+    const body = RegionBreakdownInputBody.parse(await c.req.json());
+    await saveRegionBreakdownOverride({
+      run: runReadOnly,
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+      input: body,
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof LiveSchemaValidationError) {
+      return c.json({ error: err.message, check: err.check }, 422);
+    }
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST reset — override'ı kaldır (config dosyasındaki default'a dön).
+app.post("/api/admin/config/region-breakdown/reset", async (c) => {
+  try {
+    await resetRegionBreakdownOverride({
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+    });
+    return c.json({ ok: true });
+  } catch (err) {
+    console.error("[/api/admin/config/region-breakdown/reset] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Insider Konfigüratörü — /api/admin/config/tenant* (Faz A Dalga 1, kodsuz
+// tenant onboarding — kimlik: id/displayName/labels/strategicBrands/
+// industry/tax; DB creds Dalga 2'de kalır, bu uçlara DOKUNMADI).
+//
+// İş mantığı `packages/core/src/tenant/tenant-config-service.ts`'te. GET
+// PARAMETRESİZ — daima `getTenantConfig().id` (server-otoriter, Faz 0 şart).
+// POST `id`'yi body'de bekler ama Security LOW sertleştirmesiyle (Faz A
+// Dalga 2) YALNIZ aktif tenant'ın id'sini kabul eder (aşağıdaki kontrol) —
+// keyfi bir id için "hayalet" tanım yazımı artık MÜMKÜN DEĞİL. POST-reset
+// `id`'yi body'den alır, o da YALNIZ hangi tanım DOSYASININ silineceğini
+// seçer — aktif tenant'ı (`process.env.TENANT`) hiçbiri DEĞİŞTİRMEZ.
+//
+// `TenantLabelsBody`/`TenantTaxBody`/`TenantDefinitionBody`/`DbConnectionBody`
+// şemaları YUKARIDA (setup bölümünde) tanımlı — burada tekrar EDİLMEZ (Metz
+// DRY); setup akışı AYNI şemaları `.omit({id:true})` ile kullanır.
+// ---------------------------------------------------------------------------
+
+// GET — aktif tenant'ın kimlik tanımı (REGISTRY-yönetimli ise definition/config null).
+app.get("/api/admin/config/tenant", (c) => {
+  try {
+    return c.json(getActiveTenantDefinitionMeta());
+  } catch (err) {
+    console.error("[/api/admin/config/tenant GET] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST — tenant tanımını oluştur/güncelle. Security LOW (Faz A Dalga 2):
+// `id` AKTİF tenant'la eşleşmezse 400 — aktif tenant dışında keyfi bir id
+// yazımı kapatılır (`isActiveTenantId`, `tenant-config-service.ts`). Zorunlu-
+// alan + REGISTRY-çakışma doğrulaması başarısızsa 400 (bozuk/çakışan tanım
+// diske YAZILMAZ); geçerse atomik yaz → senkron `clearTenantCache()` →
+// audit ("create-tenant" ilk yazımda, "update-tenant" var olan bir tanımın
+// üstüne yazılırken).
+app.post("/api/admin/config/tenant", async (c) => {
+  try {
+    const body = TenantDefinitionBody.parse(await c.req.json());
+    if (!isActiveTenantId(body.id)) {
+      return c.json(
+        { error: `id "${body.id}" aktif tenant ("${getTenantConfig().id}") ile eşleşmiyor — yalnız aktif tenant düzenlenebilir.` },
+        400,
+      );
+    }
+    const config = await saveTenantDefinitionOverride({
+      actor: c.get("adminUsername"),
+      input: body,
+    });
+    return c.json({ ok: true, config });
+  } catch (err) {
+    if (err instanceof TenantValidationError) {
+      return c.json({ error: err.message, issues: err.issues }, 400);
+    }
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST reset — belirtilen id'nin tanım dosyasını kaldırır (idempotent).
+app.post("/api/admin/config/tenant/reset", async (c) => {
+  let id: string;
+  try {
+    id = z.object({ id: z.string().min(1) }).parse(await c.req.json()).id;
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+  try {
+    await resetTenantDefinitionOverride({ id, actor: c.get("adminUsername") });
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof TenantIdError) {
+      return c.json({ error: err.message }, 400);
+    }
+    console.error("[/api/admin/config/tenant/reset] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// GET — maskeli görünüm: parola ASLA dönmez (yalnız hasPassword boolean).
+app.get("/api/admin/config/db-connection", (c) => {
+  try {
+    return c.json(getDbConnectionMeta(getTenantConfig().id));
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// POST test — Security H2: ham mssql hatası ASLA dönmez, yalnız {ok}.
+app.post("/api/admin/config/db-connection/test", async (c) => {
+  try {
+    const body = DbConnectionBody.parse(await c.req.json());
+    return c.json(await testDbConnection(connectWithMssql, body));
+  } catch (err) {
+    // Buraya yalnız zod parse hatası (body şekli bozuk) düşer — gerçek
+    // bağlantı hatası `testDbConnection` içinde zaten yutulup sanitize edildi.
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// POST — creds'i şifreli (AES-256-GCM) yaz; parola write-only (bu endpoint
+// hiçbir zaman parolayı GERİ döndürmez, yalnız {ok}) + aktif pool'u kapat
+// (GÖREV 1: bir sonraki `getPool()` yeni creds'le taze bağlantı açar).
+app.post("/api/admin/config/db-connection", async (c) => {
+  try {
+    const body = DbConnectionBody.parse(await c.req.json());
+    await saveDbConnectionOverride({
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+      input: body,
+    });
+    await closePool().catch(() => undefined);
+    return c.json({ ok: true });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
+// --- Admin: çok-DB (login'de DB seçimi) — kodsuz yönetim -------------------
+// Aynı sunucu/kimlik, farklı `database`. Liste sır değil (etiket + DB adı) →
+// meta olduğu gibi döner. Kayıtta `closePool()`: bir dbId'nin database adı
+// değişmişse eski havuz taze değeri yakalasın (db-connection ile aynı desen).
+app.get("/api/admin/config/databases", (c) => {
+  try {
+    return c.json({ databases: getDatabasesConfig(getTenantConfig().id) });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+app.post("/api/admin/config/databases", async (c) => {
+  try {
+    const body = (await c.req.json()) as { databases?: unknown };
+    const saved = await saveDatabasesOverride({
+      tenantId: getTenantConfig().id,
+      actor: c.get("adminUsername"),
+      databases: body.databases,
+    });
+    await closePool().catch(() => undefined);
+    return c.json({ ok: true, databases: saved });
+  } catch (err) {
+    return c.json({ error: (err as Error).message }, 400);
+  }
+});
+
 // --- Admin: kullanıcı yetkileri (ekran + şehir) — yalnız merkez rolü --------
 // Yetkiler DB'ye yazılamaz (salt-okunur) → JSON store (user-perms.ts).
 app.get("/api/admin/perms", async (c) => {
@@ -1538,8 +2159,27 @@ async function refreshAllSnapshots(
   }
 }
 
+/**
+ * Warm'ı TÜM seçilebilir veritabanları için çalıştırır (çok-DB kurulumu).
+ * Tek-DB tenant'ta (`listSelectableDatabases()` boş) bugünkü davranış birebir:
+ * bağlamsız tek çağrı → varsayılan DB. Çok-DB'de her DB kendi bağlamında
+ * (`runWithDbId`) ayrı ısıtılır → her biri kendi `<base>-<dbId>.sqlite`
+ * cache dosyasına yazar (kullanıcının login'de seçip okuduğu dosya ile aynı).
+ * Sırayla (paralel değil) — aynı MSSQL sunucusunu aynı anda boğmamak için.
+ */
+async function warmAllDatabases(reason: "night" | "startup"): Promise<void> {
+  const dbs = listSelectableDatabases();
+  if (dbs.length === 0) {
+    await refreshAllSnapshots(reason);
+    return;
+  }
+  for (const db of dbs) {
+    await runWithDbId(db.id, () => refreshAllSnapshots(reason));
+  }
+}
+
 async function nightRefresh() {
-  await refreshAllSnapshots("night");
+  await warmAllDatabases("night");
   // Sonraki gün için tekrar planla
   setTimeout(nightRefresh, 24 * 60 * 60 * 1000);
 }
@@ -1566,7 +2206,7 @@ if (DEMO_DATA) {
   // 03:00'ı beklemeden. Boot'u bloklamamak için await edilmez.
   if (process.env.SKIP_STARTUP_WARM !== "1") {
     setTimeout(() => {
-      void refreshAllSnapshots("startup");
+      void warmAllDatabases("startup");
     }, 10_000);
   } else {
     console.log("[enroute-api] SKIP_STARTUP_WARM=1 → açılış warm'ı atlandı");

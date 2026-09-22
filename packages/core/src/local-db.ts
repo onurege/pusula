@@ -2,10 +2,24 @@ import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { getTenantConfig } from "./tenant/index.js";
+import { getActiveDbId } from "./request-context.js";
 
-let dbInstance: Database.Database | null = null;
-let dbRoot: string | null = null;
-let dbFileName: string | null = null;
+// Açık SQLite mirror'lar mutlak dosya yoluna göre tutulur. Çok-DB (login'de DB
+// seçimi) için dosya adı aktif dbId ile ayrılır (`<base>-<dbId>.sqlite`) —
+// böylece Core ve ESSHOME cache'leri AYRI dosyalarda, verileri KARIŞMAZ (en
+// kritik izolasyon şartı). Tek-DB'de dbId yok → tek dosya, bugünkü ad birebir.
+const instances = new Map<string, Database.Database>();
+
+/**
+ * Aktif isteğin cache dosya adı: tek-DB'de `tenant.sqliteFileName`; çok-DB'de
+ * uzantıdan önce `-<dbId>` eklenir (ör. `musteri-esshome.sqlite`).
+ */
+function effectiveSqliteFileName(base: string): string {
+  const dbId = getActiveDbId();
+  if (!dbId) return base;
+  const dot = base.lastIndexOf(".");
+  return dot === -1 ? `${base}-${dbId}` : `${base.slice(0, dot)}-${dbId}${base.slice(dot)}`;
+}
 
 /**
  * Open (or create) the tenant's local SQLite database next to the repo's
@@ -24,21 +38,13 @@ let dbFileName: string | null = null;
  */
 export function getLocalDb(repoRoot: string): Database.Database {
   const tenant = getTenantConfig();
-  if (
-    dbInstance &&
-    dbRoot === repoRoot &&
-    dbFileName === tenant.sqliteFileName
-  ) {
-    return dbInstance;
-  }
-  if (dbInstance) {
-    dbInstance.close();
-    dbInstance = null;
-  }
-
   const dataDir = path.join(repoRoot, "data");
+  const dbPath = path.join(dataDir, effectiveSqliteFileName(tenant.sqliteFileName));
+
+  const cached = instances.get(dbPath);
+  if (cached) return cached;
+
   mkdirSync(dataDir, { recursive: true });
-  const dbPath = path.join(dataDir, tenant.sqliteFileName);
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
@@ -149,9 +155,7 @@ export function getLocalDb(repoRoot: string): Database.Database {
     `CREATE INDEX IF NOT EXISTS idx_map_customers_tier_v2 ON map_customers(risk_tier_v2);`,
   );
 
-  dbInstance = db;
-  dbRoot = repoRoot;
-  dbFileName = tenant.sqliteFileName;
+  instances.set(dbPath, db);
   return db;
 }
 
@@ -172,10 +176,12 @@ function ensureColumn(
 }
 
 export function closeLocalDb(): void {
-  if (dbInstance) {
-    dbInstance.close();
-    dbInstance = null;
-    dbRoot = null;
-    dbFileName = null;
+  for (const db of instances.values()) {
+    try {
+      db.close();
+    } catch {
+      /* yok say */
+    }
   }
+  instances.clear();
 }

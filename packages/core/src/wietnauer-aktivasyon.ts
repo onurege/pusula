@@ -24,7 +24,9 @@ import { sqlNow } from "./now.js";
 import { currentDate } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getLocalDb } from "./local-db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getProductBreakdownMeta } from "./tenant/index.js";
+import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
+import { productBreakdownJoin, productBreakdownTableSql } from "./tenant/product-breakdown-sql.js";
 import { fileURLToPath } from "node:url";
 import { cityFactClause, cityCacheTag } from "./auth.js";
 
@@ -141,9 +143,11 @@ type ActiveCustomers90dRawRow = {
  * hesaplanabilsin diye. `f.LNGDISTKOD` her satırda mevcut.
  */
 async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<ActiveCustomers90dRawRow[]> {
-  // Segment = müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD →
-  // TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Premium Plus/Standart/
-  // Standart Plus/Off Trade C&PS Tedarikçi vb.).
+  // Segment = müşteri grup kırılımı: TBLMUSTERI.<joinColumn> →
+  // <table>.<labelColumn> (Prestige/Premium/Premium Plus/Standart/Standart
+  // Plus/Off Trade C&PS Tedarikçi vb.). Tablo/kolon tenant config'ten
+  // (`resolveIdentifier` doğrulamalı — Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD AS musteri_id, f.LNGDISTKOD AS dist_id
@@ -169,12 +173,12 @@ async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<Act
       c.dist_id,
       CASE WHEN a.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_aktif,
       CASE WHEN o.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_onceki,
-      ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
+      ${customerBreakdownLabelExpr(kirilimMeta, "segment")}
     FROM combos c
     LEFT JOIN aktif a ON a.musteri_id = c.musteri_id AND a.dist_id = c.dist_id
     LEFT JOIN onceki o ON o.musteri_id = c.musteri_id AND o.dist_id = c.dist_id
     LEFT JOIN dbo.TBLMUSTERI m ON m.LNGKOD = c.musteri_id
-    LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+    ${customerBreakdownJoin(kirilimMeta)}
   `;
   // ~8-9K distinct müşteri (90g aktif) — wietnauer-stok.ts cardinality ile
   // aynı mertebede.
@@ -227,13 +231,7 @@ type SilentCustomerRawRow = Omit<SilentCustomer, "sessizGun"> & { distId: number
  * API'de hesaplanır.
  */
 async function fetchSilentCustomersRaw(cities?: string[] | null): Promise<SilentCustomerRawRow[]> {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   const sql = `
     WITH son_90 AS (
@@ -286,7 +284,7 @@ async function fetchSilentCustomersRaw(cities?: string[] | null): Promise<Silent
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin(productMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})
@@ -367,13 +365,7 @@ async function fetchStrategicBrandSilenceRaw(
 ): Promise<StrategicBrandSilenceRawRow[]> {
   if (strategicBrands.length === 0) return [];
 
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   // Marka isim listesi inline SQL'e quote-escape ile yazılır — SQL injection
   // emniyeti: tek tek REPLACE ile tek tırnak kaçırma.
@@ -384,7 +376,7 @@ async function fetchStrategicBrandSilenceRaw(
   const sql = `
     WITH strat AS (
       SELECT TXTKOD, TXTAD
-      FROM dbo.${brandTable}
+      FROM ${productBreakdownTableSql(productMeta)}
       WHERE UPPER(TXTAD) IN (${escaped.toUpperCase()})
     ),
     son_90 AS (
@@ -398,7 +390,7 @@ async function fetchStrategicBrandSilenceRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
+      INNER JOIN strat b ON b.TXTKOD = u.${productMeta.joinColumn}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
@@ -415,7 +407,7 @@ async function fetchStrategicBrandSilenceRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
+      INNER JOIN strat b ON b.TXTKOD = u.${productMeta.joinColumn}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}

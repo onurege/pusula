@@ -48,7 +48,13 @@
 import { withCache } from "./cache.js";
 import { resolveWindowBounds } from "./now.js";
 import { runReadOnly } from "./db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getTenantConfig, getCustomerBreakdownMeta, getProductBreakdownMeta } from "./tenant/index.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
+import {
+  customerBreakdownJoin,
+  customerBreakdownLabelExpr,
+  customerBreakdownCodeExpr,
+} from "./tenant/customer-breakdown-sql.js";
 import { cityColClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-segment";
@@ -256,15 +262,18 @@ function aggregateTipSegment(rows: TipSegmentRawRow[]): TipSegmentRow[] {
  * API'de hesaplanır.
  */
 async function fetchMusteriGrupSegmentRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<TipSegmentRawRow[]> {
+  // Segment tablo/kolonu tenant config'ten (`resolveIdentifier` doğrulamalı —
+  // Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH musteri_tip AS (
       SELECT
         m.LNGKOD AS musteri_kod,
         m.LNGDISTKOD AS dist_id,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
-        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)), ''), '0') AS tip_kod
+        ${customerBreakdownLabelExpr(kirilimMeta, "tip_ad")},
+        ${customerBreakdownCodeExpr(kirilimMeta, "tip_kod")}
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      ${customerBreakdownJoin(kirilimMeta)}
       WHERE m.BYTDURUM = 0${cityColClause(cities, "m.TXTSEHIR")}
     ),
     fatura_30g AS (
@@ -655,14 +664,7 @@ type SegmentBrandCrossRawRow = {
  * Top-N seçimi + pay% scope SONRASI public API'de hesaplanır.
  */
 async function fetchSegmentBrandCrossRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<SegmentBrandCrossRawRow[]> {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  // SQL injection emniyeti — config TypeScript union'dan.
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   const sql = `
     SELECT
@@ -678,7 +680,7 @@ async function fetchSegmentBrandCrossRaw(win: { lower: string; upper: string }, 
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin(productMeta)}
     INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
     LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
