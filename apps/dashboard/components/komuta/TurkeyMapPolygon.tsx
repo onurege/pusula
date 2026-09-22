@@ -6,6 +6,7 @@ import maplibregl from "maplibre-gl";
 import type { KomutaRegionRow } from "@/lib/api";
 import { FinanceAgentLauncher } from "./FinanceAgentLauncher";
 import { TREND_LEGEND, trendColor } from "./trend-colors";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   regions: KomutaRegionRow[];
@@ -17,6 +18,7 @@ type Props = {
    * kullanıcısı haritaya tıkladığında V1 sayfasına atılmıyor.
    */
   basePath?: string;
+  locale?: Locale;
 };
 
 const MAP_STYLE_LIGHT = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json";
@@ -53,7 +55,7 @@ const deltaColor = trendColor;
  *   - Bölge etiketinde YoY% yazıyor
  *   - Karta tıklanınca /map?region=<klasik-bolge>'a gider
  */
-export function TurkeyMapPolygon({ regions, basePath }: Props) {
+export function TurkeyMapPolygon({ regions, basePath, locale = "tr" }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   // Auto-detect: explicit basePath verilmediyse URL'den çıkar.
@@ -180,7 +182,7 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
           const hasData = !!row && row.ciro > 0;
           const deltaPct = row?.deltaPct ?? null;
           const deltaLabel = !hasData
-            ? "veri yok"
+            ? translate(locale, "komuta.map.no_data", "veri yok")
             : deltaPct == null
               ? "—"
               : `${deltaPct >= 0 ? "+" : ""}%${deltaPct.toFixed(0)} YoY`;
@@ -291,8 +293,10 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
       mapRef.current = null;
     };
     // byBolge değişirse veri güncellenmeli — basit yol: full remount.
+    // locale de deps'e eklendi: bölge label'ları (deltaLabel) locale'e bağlı,
+    // toggle sonrası harita katmanı yeniden çizilsin.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [byBolge]);
+  }, [byBolge, locale]);
 
   // Veri olan bölge sayısı — header sub-text için
   const regionsWithData = regions.filter((r) => r.ciro > 0).length;
@@ -301,15 +305,18 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
     <div className="panel map-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🗺️</span> Türkiye + KKTC · Bölge × YoY
+          <span className="icon">🗺️</span> {translate(locale, "komuta.map.title", "Türkiye + KKTC · Bölge × YoY")}
         </div>
         <div className="panel-meta map-panel-meta">
-          <span>{regionsWithData}/8 bölgede satış var</span>
+          <span>
+            {translate(locale, "komuta.map.regions_with_sales", "{n}/8 bölgede satış var", { n: regionsWithData })}
+          </span>
           <FinanceAgentLauncher
             regions={regions.map((r) => ({
               bolge: r.bolge,
               deltaPct: r.deltaPct,
             }))}
+            locale={locale}
           />
         </div>
       </div>
@@ -322,14 +329,17 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
             <span className="dot" style={{ background: s.hex }} /> {s.label}
           </span>
         ))}
-        <span className="lg muted">İl polygon'una tıklayınca /map'e gider</span>
+        <span className="lg muted">{translate(locale, "komuta.map.polygon_hint", "İl polygon'una tıklayınca /map'e gider")}</span>
       </div>
 
       {/* Bölge bazlı detay — her klasik bölgenin Pernod şehirleri + satış.
           "Doğu Anadolu boş mu, dolu mu" sorusuna doğrudan cevap verir. */}
       <details className="tmp-detail">
         <summary>
-          🔍 Bölge bazlı şehir kırılımı (debug · {regions.length} klasik bölge)
+          🔍{" "}
+          {translate(locale, "komuta.map.debug_summary", "Bölge bazlı şehir kırılımı (debug · {n} klasik bölge)", {
+            n: regions.length,
+          })}
         </summary>
         <div className="tmp-detail-grid">
           {regions
@@ -346,8 +356,8 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
                 </span>
                 <span className="tmp-detail-ciro">
                   {r.ciro > 0
-                    ? `${Math.round(r.ciro / 1000).toLocaleString("tr-TR")} K`
-                    : "veri yok"}
+                    ? `${Math.round(r.ciro / 1000).toLocaleString(locale === "en" ? "en-US" : "tr-TR")} K`
+                    : translate(locale, "komuta.map.no_data", "veri yok")}
                 </span>
                 <span
                   className="tmp-detail-sehirler"
@@ -355,14 +365,20 @@ export function TurkeyMapPolygon({ regions, basePath }: Props) {
                 >
                   {r.sehirler.length === 0
                     ? "—"
-                    : `${r.sehirler.length} şehir: ${r.sehirler.slice(0, 5).join(", ")}${r.sehirler.length > 5 ? "…" : ""}`}
+                    : translate(locale, "komuta.map.city_count", "{n} şehir: {list}{more}", {
+                        n: r.sehirler.length,
+                        list: r.sehirler.slice(0, 5).join(", "),
+                        more: r.sehirler.length > 5 ? "…" : "",
+                      })}
                 </span>
               </div>
             ))}
         </div>
         <div className="tmp-detail-note">
-          Şehir → bölge eşlemesi <code>data/geo/tr-province-region.json</code>
-          {" · "}/map sayfası ile aynı master.
+          {translate(locale, "komuta.map.mapping_note", "Şehir → bölge eşlemesi")}{" "}
+          <code>data/geo/tr-province-region.json</code>
+          {" · "}
+          {translate(locale, "komuta.map.mapping_note_suffix", "/map sayfası ile aynı master.")}
         </div>
       </details>
 

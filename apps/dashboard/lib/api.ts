@@ -92,6 +92,26 @@ async function readAuthToken(): Promise<string | null> {
   }
 }
 
+const LOCALE_COOKIE = "insider_locale";
+
+/**
+ * Server component bağlamında istek locale'ini oku ve Hono API'ye `Cookie:
+ * insider_locale=<v>` olarak ilet. API tarafı `localeFromRequest` bu cookie'yi
+ * okuyup dil-duyarlı çıktı üretir (ör. Komuta KPI etiketleri, Finans/Öngörü
+ * ajan metni). SSR fetch tarayıcı cookie'sini otomatik taşımadığı için burada
+ * elle iletiriz; client bağlamında (next/headers yok) sessizce null döner ve
+ * tarayıcı zaten cookie'yi kendisi gönderir.
+ */
+async function readLocaleCookie(): Promise<string | null> {
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    return store.get(LOCALE_COOKIE)?.value === "en" ? "en" : null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isReadOp = method === "GET" || method === "HEAD";
@@ -104,6 +124,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // token'lı okumalar CACHE'LENMEMELİ — aksi halde bir kullanıcının cevabı
   // başkasına sızar. Bu yüzden token varken no-store zorlanır.
   const token = await readAuthToken();
+  const localeCookie = await readLocaleCookie();
 
   // Cache stratejisi:
   //   - Yazma / refresh=1 / token'lı istek → no-store
@@ -122,6 +143,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(localeCookie ? { Cookie: `${LOCALE_COOKIE}=${localeCookie}` } : {}),
       ...(init?.headers ?? {}),
     },
     ...cacheConfig,

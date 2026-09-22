@@ -2,14 +2,17 @@
 
 import { useMemo } from "react";
 import type { MapCityYoY } from "@/lib/api";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   cities: MapCityYoY[];
   region: string;
+  locale?: Locale;
 };
 
-function fmtCiro(n: number): string {
-  if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)} Mr ₺`;
+function fmtCiro(n: number, locale: Locale = "tr"): string {
+  const suffixBillion = locale === "en" ? "Bn" : "Mr";
+  if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)} ${suffixBillion} ₺`;
   if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} M ₺`;
   if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(0)} K ₺`;
   return `${Math.round(n)} ₺`;
@@ -32,7 +35,7 @@ function pct(n: number | null): string {
  * (örn. Kars +%176 küçük baz, Hakkari -%78 kritik) gerçek aksiyon-değer'i
  * öne çıkarmak.
  */
-export function CityInsights({ cities, region }: Props) {
+export function CityInsights({ cities, region, locale = "tr" }: Props) {
   const insights = useMemo(() => {
     const cleaned = cities.filter((c) => c.ciro > 0 || c.ciroPrev > 0);
 
@@ -88,11 +91,15 @@ export function CityInsights({ cities, region }: Props) {
     <div className="ci-panel">
       <div className="ci-header">
         <div className="ci-title">
-          🔎 <strong>{region}</strong> şehir içgörüleri
+          🔎 <strong>{region}</strong> {translate(locale, "map.city_insights.title", "şehir içgörüleri")}
         </div>
         <div className="ci-sub">
-          {insights.comparedCount} şehir · son 30g vs geçen yıl aynı 30g ·
-          küçük baz etkisini görmek için mutlak Δ TL sıralı
+          {translate(
+            locale,
+            "map.city_insights.subtitle",
+            "{n} şehir · son 30g vs geçen yıl aynı 30g · küçük baz etkisini görmek için mutlak Δ TL sıralı",
+            { n: insights.comparedCount },
+          )}
         </div>
       </div>
 
@@ -102,7 +109,7 @@ export function CityInsights({ cities, region }: Props) {
           <div className="ci-card pos">
             <div className="ci-card-head">
               <span className="ci-card-icon">🚀</span>
-              <span className="ci-card-title">En büyük büyüme</span>
+              <span className="ci-card-title">{translate(locale, "map.city_insights.top_growth", "En büyük büyüme")}</span>
               <span className="ci-card-meta">absolute Δ TL</span>
             </div>
             <div className="ci-rows">
@@ -111,13 +118,13 @@ export function CityInsights({ cities, region }: Props) {
                   <div className="ci-row-name">{c.sehir}</div>
                   <div className="ci-row-stats">
                     <span className="ci-row-delta pos">
-                      +{fmtCiro(c.absDelta)}
+                      +{fmtCiro(c.absDelta, locale)}
                     </span>
                     <span className="ci-row-pct pos">{pct(c.deltaPct)}</span>
                   </div>
                   <div className="ci-row-context">
-                    {fmtCiro(c.ciro)} <span className="ci-row-vs">vs</span>{" "}
-                    {fmtCiro(c.ciroPrev)}
+                    {fmtCiro(c.ciro, locale)} <span className="ci-row-vs">vs</span>{" "}
+                    {fmtCiro(c.ciroPrev, locale)}
                   </div>
                 </div>
               ))}
@@ -130,7 +137,7 @@ export function CityInsights({ cities, region }: Props) {
           <div className="ci-card neg">
             <div className="ci-card-head">
               <span className="ci-card-icon">📉</span>
-              <span className="ci-card-title">En büyük kayıp</span>
+              <span className="ci-card-title">{translate(locale, "map.city_insights.top_loss", "En büyük kayıp")}</span>
               <span className="ci-card-meta">absolute Δ TL</span>
             </div>
             <div className="ci-rows">
@@ -139,13 +146,13 @@ export function CityInsights({ cities, region }: Props) {
                   <div className="ci-row-name">{c.sehir}</div>
                   <div className="ci-row-stats">
                     <span className="ci-row-delta neg">
-                      {fmtCiro(c.absDelta)}
+                      {fmtCiro(c.absDelta, locale)}
                     </span>
                     <span className="ci-row-pct neg">{pct(c.deltaPct)}</span>
                   </div>
                   <div className="ci-row-context">
-                    {fmtCiro(c.ciro)} <span className="ci-row-vs">vs</span>{" "}
-                    {fmtCiro(c.ciroPrev)}
+                    {fmtCiro(c.ciro, locale)} <span className="ci-row-vs">vs</span>{" "}
+                    {fmtCiro(c.ciroPrev, locale)}
                   </div>
                 </div>
               ))}
@@ -158,9 +165,9 @@ export function CityInsights({ cities, region }: Props) {
           <div className="ci-card urgent">
             <div className="ci-card-head">
               <span className="ci-card-icon">⚠️</span>
-              <span className="ci-card-title">Acil aksiyon</span>
+              <span className="ci-card-title">{translate(locale, "map.city_insights.urgent_action", "Acil aksiyon")}</span>
               <span className="ci-card-meta">
-                |Δ%| &gt; 50, baz &gt; 1M ₺
+                |Δ%| &gt; 50, {translate(locale, "map.city_insights.base_gt_1m", "baz")} &gt; 1M ₺
               </span>
             </div>
             <div className="ci-rows">
@@ -169,16 +176,16 @@ export function CityInsights({ cities, region }: Props) {
                   <div className="ci-row-name">{c.sehir}</div>
                   <div className="ci-row-stats">
                     <span className="ci-row-delta neg">
-                      {fmtCiro(c.absDelta)}
+                      {fmtCiro(c.absDelta, locale)}
                     </span>
                     <span className="ci-row-pct neg">{pct(c.deltaPct)}</span>
                   </div>
                   <div className="ci-row-context">
-                    {fmtCiro(c.ciro)} <span className="ci-row-vs">vs</span>{" "}
-                    {fmtCiro(c.ciroPrev)}
+                    {fmtCiro(c.ciro, locale)} <span className="ci-row-vs">vs</span>{" "}
+                    {fmtCiro(c.ciroPrev, locale)}
                   </div>
                   <div className="ci-row-action">
-                    Acil saha ziyareti — bayi/müşteri kaybı kontrolü
+                    {translate(locale, "map.city_insights.urgent_action_desc", "Acil saha ziyareti — bayi/müşteri kaybı kontrolü")}
                   </div>
                 </div>
               ))}
@@ -188,19 +195,35 @@ export function CityInsights({ cities, region }: Props) {
           <div className="ci-card neutral">
             <div className="ci-card-head">
               <span className="ci-card-icon">✓</span>
-              <span className="ci-card-title">Acil aksiyon yok</span>
+              <span className="ci-card-title">{translate(locale, "map.city_insights.no_urgent_action", "Acil aksiyon yok")}</span>
               <span className="ci-card-meta">
-                |Δ%| &gt; 50, baz &gt; 1M ₺
+                |Δ%| &gt; 50, {translate(locale, "map.city_insights.base_gt_1m", "baz")} &gt; 1M ₺
               </span>
             </div>
             <div className="ci-empty">
-              {region} bölgesinde büyük tabanlı kritik düşüş tespit edilmedi.
-              {insights.smallBaseGrower && (
+              {locale === "en" ? (
                 <>
-                  {" "}Tabandaki sıçramalar (örn.{" "}
-                  <strong>{insights.smallBaseGrower.sehir}</strong>{" "}
-                  {pct(insights.smallBaseGrower.deltaPct)}) küçük baz etkisi —
-                  kontrol edilmeye değer ama alarm değil.
+                  No large-base critical decline detected in the {region} region.
+                  {insights.smallBaseGrower && (
+                    <>
+                      {" "}Small-base spikes (e.g.{" "}
+                      <strong>{insights.smallBaseGrower.sehir}</strong>{" "}
+                      {pct(insights.smallBaseGrower.deltaPct)}) are a small-base effect —
+                      worth checking but not an alarm.
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  {region} bölgesinde büyük tabanlı kritik düşüş tespit edilmedi.
+                  {insights.smallBaseGrower && (
+                    <>
+                      {" "}Tabandaki sıçramalar (örn.{" "}
+                      <strong>{insights.smallBaseGrower.sehir}</strong>{" "}
+                      {pct(insights.smallBaseGrower.deltaPct)}) küçük baz etkisi —
+                      kontrol edilmeye değer ama alarm değil.
+                    </>
+                  )}
                 </>
               )}
             </div>

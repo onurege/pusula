@@ -8,11 +8,14 @@ import type { StrategicBrandSilence } from "./types";
  * önceliği.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function StrategicSilencePanel({
   items,
+  locale = "tr",
 }: {
   items: StrategicBrandSilence[];
+  locale?: Locale;
 }) {
   if (panelHidden("panel.risk.strategic")) return null;
   // En kötüden iyiye sırala
@@ -23,17 +26,20 @@ export function StrategicSilencePanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.risk.strategic", "Stratejik Marka Sessizliği")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.strategic", t(locale, "panel.risk.strategic", "Stratejik Marka Sessizliği"))}</div>
           <div className="v3-panel-sub">
-            Önceden alan ama son 90 gün sessiz · stratejik markalar için
-            saha aksiyon listesi
+            {locale === "en"
+              ? "Previously bought but silent in the last 90 days · field action list for strategic brands"
+              : "Önceden alan ama son 90 gün sessiz · stratejik markalar için saha aksiyon listesi"}
           </div>
         </div>
       </div>
 
       {sorted.length === 0 && (
         <div className="ss-empty">
-          Stratejik marka tanımı yok veya bu dönem için veri bulunamadı.
+          {locale === "en"
+            ? "No strategic brand defined, or no data for this period."
+            : "Stratejik marka tanımı yok veya bu dönem için veri bulunamadı."}
         </div>
       )}
 

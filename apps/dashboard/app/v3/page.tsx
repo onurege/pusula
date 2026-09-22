@@ -10,9 +10,13 @@ import {
 } from "lucide-react";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { getTenantConfig } from "@/lib/tenant";
-import { getContentMap, t } from "@/lib/content";
+import { getContentMap } from "@/lib/content";
+import { getLocale, t as translate } from "@/lib/i18n";
 
-export const metadata = { title: "V3 Özet · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${translate(locale, "v3.landing.metaTitle", "V3 Özet")} · Insider` };
+}
 
 /**
  * V3 landing — dashboard'lara tek tık erişim. Her kart:
@@ -22,17 +26,32 @@ export const metadata = { title: "V3 Özet · Insider" };
  *
  * Wietnauer'ın 7-madde isterinde tek tek dashboard sayfası açma talebine
  * karşılık tasarlandı.
+ *
+ * i18n: demo TR/EN toggle bu ekranı kapsar (bkz. `lib/i18n.ts`). İçerik
+ * override sistemi kazanır — admin panelinden özelleştirilmiş bir metin
+ * varsa locale'den bağımsız aynen gösterilir; yoksa TR varsayılan/EN
+ * karşılığı `resolve()` ile seçilir.
  */
-export default function V3LandingPage() {
+export default async function V3LandingPage() {
   const tenant = getTenantConfig();
   const content = getContentMap();
+  const locale = await getLocale();
+
+  const resolve = (key: string, trDefault: string): string => {
+    const override = content[key];
+    return override != null && override !== "" ? override : translate(locale, key, trDefault);
+  };
 
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="V3 · Özet"
-        title={`${tenant.displayName} — ${t(content, "page.ozet.title", "Yönetim Paneli")}`}
-        description="Sekiz dashboard, sekiz soru: yönetici özeti, satış performansı, müşteri segmenti, marka katkısı, stok tükenme, saha operasyonu, müşteri sağlığı ve ticari yatırım. Her kart kendi sayfasında açılır."
+        locale={locale}
+        eyebrow={resolve("v3.landing.eyebrow", "V3 · Özet")}
+        title={`${tenant.displayName} — ${resolve("page.ozet.title", "Yönetim Paneli")}`}
+        description={resolve(
+          "v3.landing.desc",
+          "Sekiz dashboard, sekiz soru: yönetici özeti, satış performansı, müşteri segmenti, marka katkısı, stok tükenme, saha operasyonu, müşteri sağlığı ve ticari yatırım. Her kart kendi sayfasında açılır.",
+        )}
       />
 
       <div className="v3-card-grid">
@@ -42,13 +61,13 @@ export default function V3LandingPage() {
             <div className="v3-card-icon" style={{ color: c.accent }}>
               <c.icon size={22} strokeWidth={1.7} />
             </div>
-            <div className="v3-card-title">{c.title}</div>
-            <div className="v3-card-desc">{c.desc}</div>
+            <div className="v3-card-title">{resolve(`v3.landing.card.${c.key}.title`, c.title)}</div>
+            <div className="v3-card-desc">{resolve(`v3.landing.card.${c.key}.desc`, c.desc)}</div>
             <div className="v3-card-foot">
               {c.ready ? (
-                <span className="v3-card-badge ready">Hazır</span>
+                <span className="v3-card-badge ready">{resolve("v3.landing.badge.ready", "Hazır")}</span>
               ) : (
-                <span className="v3-card-badge soon">Hazırlanıyor</span>
+                <span className="v3-card-badge soon">{resolve("v3.landing.badge.soon", "Hazırlanıyor")}</span>
               )}
               <span className="v3-card-arrow">→</span>
             </div>
@@ -148,6 +167,7 @@ export default function V3LandingPage() {
 const NAV_CARDS = [
   {
     no: "01",
+    key: "yonetim",
     href: "/v3/yonetim-kurulu",
     title: "Yönetim Kurulu",
     desc: "Top 10/20/50 müşteri, marka katkıları, iskonto KPI. CEO sabah görünümü.",
@@ -157,6 +177,7 @@ const NAV_CARDS = [
   },
   {
     no: "02",
+    key: "satis",
     href: "/v3/satis-performans",
     title: "Satış Performans",
     desc: "Distribütör/ekip/temsilci, drop size, aktif + yeni müşteri kazanımı.",
@@ -166,6 +187,7 @@ const NAV_CARDS = [
   },
   {
     no: "03",
+    key: "segment",
     href: "/v3/musteri-segmentasyon",
     title: "Müşteri Segmentasyon",
     desc: "3 ayrı segment boyutu yan yana — kanal × ciro × iskonto cross.",
@@ -175,6 +197,7 @@ const NAV_CARDS = [
   },
   {
     no: "04",
+    key: "marka",
     href: "/v3/marka-sku",
     title: "Marka & SKU",
     desc: "Marka penetrasyonu, Top 5 SKU, stratejik marka özel zoom panelleri.",
@@ -184,6 +207,7 @@ const NAV_CARDS = [
   },
   {
     no: "05",
+    key: "stok",
     href: "/v3/stok-tukenme",
     title: "Stok Tükenme",
     desc: "SKU bazında kalan gün, tahmini tükenme tarihi ve miktar bazlı 90g devir.",
@@ -193,6 +217,7 @@ const NAV_CARDS = [
   },
   {
     no: "06",
+    key: "saha",
     href: "/v3/saha-operasyon",
     title: "Saha Operasyon",
     desc: "Günlük/haftalık ziyaret trendleri, kapsama, sipariş dönüşümü.",
@@ -202,6 +227,7 @@ const NAV_CARDS = [
   },
   {
     no: "07",
+    key: "risk",
     href: "/v3/aktivasyon-risk",
     title: "Aktivasyon & Risk",
     desc: "Pasifleşen müşteri, stratejik marka sessizliği, yeniden kazanım.",
@@ -211,6 +237,7 @@ const NAV_CARDS = [
   },
   {
     no: "08",
+    key: "iskonto",
     href: "/v3/ticari-yatirim",
     title: "Ticari Yatırım & İskonto",
     desc: "İskonto harcaması, marka × etkinlik, müşteri/segment ROI.",

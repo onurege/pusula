@@ -22,6 +22,15 @@ const ETIKET_META: Record<
   bagimli: { label: "iskonto bağımlı", color: "#dc2626" },
 };
 
+const ETIKET_META_EN: Record<
+  CustomerRow["etiket"],
+  { label: string; color: string }
+> = {
+  premium: { label: "premium", color: "#16a34a" },
+  saglikli: { label: "healthy", color: "#d97706" },
+  bagimli: { label: "discount dependent", color: "#dc2626" },
+};
+
 /**
  * Panel D — Müşteri ROI Top 20.
  *
@@ -34,25 +43,30 @@ const ETIKET_META: Record<
  *   >25%   → bağımlı
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function IskontoCustomerPanel({
   customers,
+  locale = "tr",
 }: {
   customers: CustomerRow[];
+  locale?: Locale;
 }) {
   if (panelHidden("panel.iskonto.customer")) return null;
   const premiumCount = customers.filter((c) => c.etiket === "premium").length;
   const bagimliCount = customers.filter((c) => c.etiket === "bagimli").length;
   const toplamIskonto = customers.reduce((a, c) => a + c.iskonto, 0);
+  const etiketMeta = locale === "en" ? ETIKET_META_EN : ETIKET_META;
 
   return (
     <div className="cust-panel">
       <div className="cust-head">
         <div>
-          <div className="cust-title">{panelTitle("panel.iskonto.customer", "Müşteri ROI · Top 20")}</div>
+          <div className="cust-title">{panelTitle("panel.iskonto.customer", t(locale, "panel.iskonto.customer", "Müşteri ROI · Top 20"))}</div>
           <div className="cust-sub">
-            Son 30g · İskonto tutarı DESC · Toplam ₺
-            {formatCompact(toplamIskonto)} iskonto yatırımı
+            {locale === "en"
+              ? `Last 30d · Discount amount DESC · Total ₺${formatCompact(toplamIskonto)} discount investment`
+              : `Son 30g · İskonto tutarı DESC · Toplam ₺${formatCompact(toplamIskonto)} iskonto yatırımı`}
             {premiumCount > 0 && (
               <>
                 {" · "}
@@ -65,7 +79,7 @@ export function IskontoCustomerPanel({
               <>
                 {" · "}
                 <span style={{ color: "#dc2626", fontWeight: 600 }}>
-                  {bagimliCount} bağımlı
+                  {bagimliCount} {locale === "en" ? "dependent" : "bağımlı"}
                 </span>
               </>
             )}
@@ -78,18 +92,18 @@ export function IskontoCustomerPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Müşteri</th>
-              <th>Şehir</th>
-              <th className="num">Brüt</th>
-              <th className="num">İskonto</th>
+              <th>{t(locale, "col.musteri_th", "Müşteri")}</th>
+              <th>{locale === "en" ? "City" : "Şehir"}</th>
+              <th className="num">{locale === "en" ? "Gross" : "Brüt"}</th>
+              <th className="num">{t(locale, "col.iskonto", "İskonto")}</th>
               <th className="num">Net</th>
-              <th className="num">Oran</th>
-              <th>Etiket</th>
+              <th className="num">{t(locale, "col.oran", "Oran")}</th>
+              <th>{locale === "en" ? "Label" : "Etiket"}</th>
             </tr>
           </thead>
           <tbody>
             {customers.map((c) => {
-              const meta = ETIKET_META[c.etiket];
+              const meta = etiketMeta[c.etiket];
               return (
                 <tr key={c.id}>
                   <td className="rank">{c.rank}</td>

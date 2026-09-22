@@ -392,6 +392,10 @@ export type ForesightSignals = {
   riskFlags: RiskFlag[];
 };
 
+/** Foresight brief/actions çıktı dili — `insider_locale` cookie'sinden
+ *  server.ts çözer. Varsayılan "tr" — mevcut davranış AYNEN korunur. */
+export type ForesightLocale = "tr" | "en";
+
 export type ForesightResult = ForesightSignals & {
   brief: string;
   actions: string[];
@@ -411,13 +415,22 @@ export async function runForesight(
   customerId: number,
   customerLabel: string,
   windowDays = 14,
-  options: { forceRefresh?: boolean } = {},
+  options: {
+    forceRefresh?: boolean;
+    /** Gemini çıktı dili — `insider_locale` cookie'sinden server.ts çözer.
+     *  Varsayılan "tr" — mevcut davranış AYNEN korunur. */
+    locale?: ForesightLocale;
+  } = {},
 ): Promise<ForesightResult> {
-  const cacheKey = `${Math.floor(customerId)}:${Math.floor(windowDays)}`;
+  const locale: ForesightLocale = options.locale === "en" ? "en" : "tr";
+  // Locale'i cache key'e ekliyoruz — eski (locale'siz) key formatından farklı
+  // olduğu için doğal bir versiyon ayrımı sağlıyor (TR sonuçları AYNI kalır,
+  // yalnız bir kere yeniden hesaplanır); TR/EN sonuçları birbirini ezmez.
+  const cacheKey = `${Math.floor(customerId)}:${Math.floor(windowDays)}:${locale}`;
   const cached = await withCache<ForesightResult>(
     "foresight",
     cacheKey,
-    () => computeForesight(customerId, customerLabel, windowDays),
+    () => computeForesight(customerId, customerLabel, windowDays, locale),
     { forceRefresh: options.forceRefresh },
   );
   return cached.value;
@@ -427,7 +440,9 @@ async function computeForesight(
   customerId: number,
   customerLabel: string,
   windowDays: number,
+  locale: ForesightLocale = "tr",
 ): Promise<ForesightResult> {
+  const isEn = locale === "en";
   const [events, yoy, dropped, cohort] = await Promise.all([
     getUpcomingEvents(windowDays).catch(() => [] as UpcomingEvent[]),
     getCustomerYoyWindow(customerId, windowDays).catch(() => [] as YoyPurchase[]),
@@ -443,7 +458,9 @@ async function computeForesight(
       urunGrubu: d.urunGrubu,
       baselineCiro: d.baselineCiro,
       daysSinceLast: d.daysSinceLast,
-      message: `${d.urunGrubu} kategorisinden eskiden ${formatTl(d.baselineCiro)} alıyordu, ${d.daysSinceLast ?? "?"} gündür hiç sipariş yok — müşteri başka kanala kaymış olabilir`,
+      message: isEn
+        ? `Used to buy ${formatTl(d.baselineCiro)} of ${d.urunGrubu}, no order in ${d.daysSinceLast ?? "?"} days — customer may have shifted to another channel`
+        : `${d.urunGrubu} kategorisinden eskiden ${formatTl(d.baselineCiro)} alıyordu, ${d.daysSinceLast ?? "?"} gündür hiç sipariş yok — müşteri başka kanala kaymış olabilir`,
     }));
   const signals: ForesightSignals = {
     customerId,
@@ -459,8 +476,9 @@ async function computeForesight(
   if (events.length === 0 && yoy.length === 0 && dropped.length === 0 && cohort.length === 0) {
     return {
       ...signals,
-      brief:
-        "Önümüzdeki 14 günde anlamlı bir foresight sinyali tespit edilmedi. Müşterinin geçmiş satış verisi, segment kıyası ve takvim yeterli sinyal vermedi.",
+      brief: isEn
+        ? "No meaningful foresight signal detected for the next 14 days. The customer's purchase history, segment comparison, and calendar did not provide enough signal."
+        : "Önümüzdeki 14 günde anlamlı bir foresight sinyali tespit edilmedi. Müşterinin geçmiş satış verisi, segment kıyası ve takvim yeterli sinyal vermedi.",
       actions: [],
     };
   }
@@ -468,60 +486,81 @@ async function computeForesight(
   const eventLines = events
     .map(
       (e) =>
-        `- ${e.date} (T+${e.daysAhead}g): ${e.name} [${e.kind}]${
-          e.category_hints?.length ? ` — sıçrayan kategoriler: ${e.category_hints.join(", ")}` : ""
-        }`,
+        isEn
+          ? `- ${e.date} (T+${e.daysAhead}d): ${e.name} [${e.kind}]${
+              e.category_hints?.length ? ` — likely spike categories: ${e.category_hints.join(", ")}` : ""
+            }`
+          : `- ${e.date} (T+${e.daysAhead}g): ${e.name} [${e.kind}]${
+              e.category_hints?.length ? ` — sıçrayan kategoriler: ${e.category_hints.join(", ")}` : ""
+            }`,
     )
     .join("\n");
   const yoyLines = yoy
     .slice(0, 5)
-    .map(
-      (y) =>
-        `- ${y.urunGrubu ?? "(grup yok)"} — geçen yıl bu hafta ${formatTl(y.ciro)} / ${y.miktar} adet`,
+    .map((y) =>
+      isEn
+        ? `- ${y.urunGrubu ?? "(no group)"} — same week last year ${formatTl(y.ciro)} / ${y.miktar} units`
+        : `- ${y.urunGrubu ?? "(grup yok)"} — geçen yıl bu hafta ${formatTl(y.ciro)} / ${y.miktar} adet`,
     )
     .join("\n");
   const droppedLines = dropped
     .slice(0, 5)
-    .map(
-      (d) =>
-        `- ${d.urunGrubu} — eskiden ${formatTl(d.baselineCiro)} alıyordu, son ${
-          d.daysSinceLast ?? "?"
-        } gündür hiç almadı`,
+    .map((d) =>
+      isEn
+        ? `- ${d.urunGrubu} — used to buy ${formatTl(d.baselineCiro)}, no order in the last ${
+            d.daysSinceLast ?? "?"
+          } days`
+        : `- ${d.urunGrubu} — eskiden ${formatTl(d.baselineCiro)} alıyordu, son ${
+            d.daysSinceLast ?? "?"
+          } gündür hiç almadı`,
     )
     .join("\n");
   const cohortLines = cohort
     .slice(0, 5)
-    .map(
-      (c) =>
-        `- ${c.urunGrubu} — aynı segmentteki ${c.cohortTotalBuyers} müşteriden ${c.cohortBuyerCount}'i bu hafta aldı, bu müşteri almadı`,
+    .map((c) =>
+      isEn
+        ? `- ${c.urunGrubu} — ${c.cohortBuyerCount} of ${c.cohortTotalBuyers} customers in the same segment bought this week, this customer did not`
+        : `- ${c.urunGrubu} — aynı segmentteki ${c.cohortTotalBuyers} müşteriden ${c.cohortBuyerCount}'i bu hafta aldı, bu müşteri almadı`,
     )
     .join("\n");
 
   const riskLines = riskFlags.map((r) => `- ${r.message}`).join("\n");
 
   const userPrompt = [
-    `Müşteri: ${customerLabel} (id ${customerId}).`,
-    `Bugün: ${currentDate().toISOString().slice(0, 10)}. Pencere: ${windowDays} gün.`,
+    isEn
+      ? `Customer: ${customerLabel} (id ${customerId}).`
+      : `Müşteri: ${customerLabel} (id ${customerId}).`,
+    isEn
+      ? `Today: ${currentDate().toISOString().slice(0, 10)}. Window: ${windowDays} days.`
+      : `Bugün: ${currentDate().toISOString().slice(0, 10)}. Pencere: ${windowDays} gün.`,
     "",
     riskFlags.length > 0
-      ? "⚠️ YÜKSEK ÖNCELİKLİ RİSK SİNYALLERİ (BRIEF'in İLK CÜMLESİ BUNU AÇIKLAYACAK):"
-      : "(yüksek öncelikli risk yok)",
+      ? isEn
+        ? "⚠️ HIGH-PRIORITY RISK SIGNALS (the FIRST sentence of the BRIEF must explain this):"
+        : "⚠️ YÜKSEK ÖNCELİKLİ RİSK SİNYALLERİ (BRIEF'in İLK CÜMLESİ BUNU AÇIKLAYACAK):"
+      : isEn
+        ? "(no high-priority risk)"
+        : "(yüksek öncelikli risk yok)",
     riskFlags.length > 0 ? riskLines : "",
     "",
-    "ÖNÜMÜZDEKİ TAKVİM:",
-    eventLines || "(önümüzdeki 14 günde özel gün yok)",
+    isEn ? "UPCOMING CALENDAR:" : "ÖNÜMÜZDEKİ TAKVİM:",
+    eventLines || (isEn ? "(no special day in the next 14 days)" : "(önümüzdeki 14 günde özel gün yok)"),
     "",
-    "GEÇEN YIL AYNI HAFTA BU MÜŞTERİ NE ALDIYDI:",
-    yoyLines || "(geçen yıl bu hafta için kayıt bulunamadı)",
+    isEn ? "WHAT THIS CUSTOMER BOUGHT THE SAME WEEK LAST YEAR:" : "GEÇEN YIL AYNI HAFTA BU MÜŞTERİ NE ALDIYDI:",
+    yoyLines || (isEn ? "(no record found for the same week last year)" : "(geçen yıl bu hafta için kayıt bulunamadı)"),
     "",
-    "DÜŞMÜŞ KATEGORİLER (eskiden alıyordu, son 30 günde hiç) — high/medium/low etiketli:",
-    droppedLines || "(düşmüş kategori yok)",
+    isEn
+      ? "DROPPED CATEGORIES (used to buy, none in the last 30 days) — labeled high/medium/low:"
+      : "DÜŞMÜŞ KATEGORİLER (eskiden alıyordu, son 30 günde hiç) — high/medium/low etiketli:",
+    droppedLines || (isEn ? "(no dropped category)" : "(düşmüş kategori yok)"),
     "",
-    "SEGMENT KIYASI (aynı şehir + ciro bandındaki müşteriler bu hafta aldı, bu müşteri almadı):",
-    cohortLines || "(segment sinyali yok)",
+    isEn
+      ? "SEGMENT COMPARISON (customers in the same city + revenue band bought this week, this customer did not):"
+      : "SEGMENT KIYASI (aynı şehir + ciro bandındaki müşteriler bu hafta aldı, bu müşteri almadı):",
+    cohortLines || (isEn ? "(no segment signal)" : "(segment sinyali yok)"),
   ].join("\n");
 
-  const system = [
+  const systemTr = [
     "Sen Univera distribütör satış operasyonu için çalışan bir saha asistanısın.",
     "Sana bir müşteri için 4 sinyal kanalı verildi (takvim, geçen yıl, düşmüş kategoriler, segment).",
     "Sahaya çıkacak satış temsilcisi okuyacak; senin işin OPS dilinde aksiyon yazmak, jenerik öneri DEĞİL.",
@@ -554,6 +593,44 @@ async function computeForesight(
     "- <aksiyon 1>",
     "- <aksiyon 2>",
   ].join("\n");
+
+  // İngilizce karşılığı — yapı/kural birebir paralel. Çıktı format anahtarı
+  // "ACTIONS:" (parseForesightOutput hem AKSİYONLAR hem ACTIONS'ı tanıyor).
+  const systemEn = [
+    "You are a field assistant working for Univera's distributor sales operation.",
+    "You've been given 4 signal channels for a customer (calendar, last year, dropped categories, segment).",
+    "A sales rep going into the field will read this; your job is to write OPS-language actions, NOT generic advice.",
+    "",
+    "BRIEF (2-3 sentences):",
+    "- Build a CAUSE-AND-EFFECT story for this week.",
+    "- Carry over the PRODUCT GROUP names from the signals verbatim (e.g. 'BİSKÜVİ', 'YAĞ', 'ŞARKÜTERİ').",
+    "  DO NOT invent your own categories (generic buckets like 'Staples', 'Snacks' are forbidden).",
+    "- Mention total revenue if available, but cite at least 1 product group name + amount.",
+    "",
+    "ACTIONS (at least 2, at most 3):",
+    "- EACH action must tie to a specific SIGNAL and include the name/number from that signal.",
+    "- Use ACTIVE verbs: 'load', 'visit', 'remind', 'offer', 'show', 'pitch'.",
+    "  FORBIDDEN passive phrasing: 'should be done', 'should be improved', 'should be provided', 'should be considered'.",
+    "- End EACH action with a parenthetical source: '(bought X the same week last year)', '(May 15 payday)', '(dropped category: Y)', '(N% of the segment bought)'.",
+    "- FORBIDDEN generic phrases: 'check stock levels', 'increase visibility', 'develop a campaign', 'build a strategy', 'explore the potential'.",
+    "- At least one action must contain a NUMBER (kg, units, ₺, cases, days).",
+    "",
+    "GOOD action EXAMPLE:",
+    "- Load 4 cases of BİSKÜVİ stock before Friday's payday — same week last year this brought in ₺5,200 in revenue (BİSKÜVİ, same week last year)",
+    "BAD action EXAMPLE (DO NOT WRITE):",
+    "- Stock levels for Staples and Snacks should be checked before payday (Reason: spending potential is increasing)",
+    "",
+    "If there is no strong signal at all, leave the ACTIONS section completely empty — do not make things up.",
+    "",
+    "Output format (MUST be followed exactly):",
+    "BRIEF:",
+    "<2-3 sentences>",
+    "ACTIONS:",
+    "- <action 1>",
+    "- <action 2>",
+  ].join("\n");
+
+  const system = isEn ? systemEn : systemTr;
 
   let llmOut = "";
   try {
@@ -591,8 +668,8 @@ async function computeForesight(
   // Deterministic floor: brief + actions built mechanically from signals.
   // Used either standalone (LLM down/failed) or as a fallback when the LLM
   // output is fluff that doesn't survive the quality gate.
-  const detBrief = buildDeterministicBrief(customerLabel, signals);
-  const detActions = buildDeterministicActions(signals);
+  const detBrief = buildDeterministicBrief(customerLabel, signals, locale);
+  const detActions = buildDeterministicActions(signals, locale);
 
   // Accept LLM brief only if (a) it has at least one signal name AND (b) no
   // banned fluff phrase. Otherwise prefer deterministic.
@@ -613,7 +690,9 @@ async function computeForesight(
 function buildDeterministicBrief(
   customerLabel: string,
   s: ForesightSignals,
+  locale: ForesightLocale = "tr",
 ): string {
+  const isEn = locale === "en";
   const parts: string[] = [];
 
   // Lead with risk if any HIGH urgency dropped category exists. A relationship
@@ -621,7 +700,9 @@ function buildDeterministicBrief(
   const risk = s.riskFlags[0];
   if (risk) {
     parts.push(
-      `${customerLabel}: ${risk.urunGrubu} kategorisinden eskiden ${formatTl(risk.baselineCiro)} alıyordu, ${risk.daysSinceLast ?? "?"} gündür hiç sipariş yok — yüksek öncelikli risk.`,
+      isEn
+        ? `${customerLabel}: used to buy ${formatTl(risk.baselineCiro)} of ${risk.urunGrubu}, no order in ${risk.daysSinceLast ?? "?"} days — high-priority risk.`
+        : `${customerLabel}: ${risk.urunGrubu} kategorisinden eskiden ${formatTl(risk.baselineCiro)} alıyordu, ${risk.daysSinceLast ?? "?"} gündür hiç sipariş yok — yüksek öncelikli risk.`,
     );
   }
 
@@ -630,7 +711,13 @@ function buildDeterministicBrief(
     const evt = topEvents
       .map((e) => `${e.date} ${e.name}`)
       .join(" + ");
-    const prefix = risk ? "Bu arada önümüzdeki 14 günde" : `${customerLabel} için önümüzdeki 14 günde`;
+    const prefix = isEn
+      ? risk
+        ? "Also, in the next 14 days"
+        : `For ${customerLabel}, in the next 14 days`
+      : risk
+        ? "Bu arada önümüzdeki 14 günde"
+        : `${customerLabel} için önümüzdeki 14 günde`;
     parts.push(`${prefix}: ${evt}.`);
   }
 
@@ -640,41 +727,59 @@ function buildDeterministicBrief(
     if (top.length > 0) {
       const topStr = top.map((y) => `${y.urunGrubu} (${formatTl(y.ciro)})`).join(", ");
       parts.push(
-        `Geçen yıl aynı hafta toplam ${formatTl(total)} ciro, en yüksek kalemler: ${topStr}.`,
+        isEn
+          ? `Same week last year, total revenue was ${formatTl(total)}, top items: ${topStr}.`
+          : `Geçen yıl aynı hafta toplam ${formatTl(total)} ciro, en yüksek kalemler: ${topStr}.`,
       );
     } else {
-      parts.push(`Geçen yıl aynı hafta toplam ${formatTl(total)} ciro yapılmıştı.`);
+      parts.push(
+        isEn
+          ? `Same week last year, total revenue was ${formatTl(total)}.`
+          : `Geçen yıl aynı hafta toplam ${formatTl(total)} ciro yapılmıştı.`,
+      );
     }
   }
 
   const d = s.dropped[0];
   if (d) {
     parts.push(
-      `${d.urunGrubu} kategorisi ${d.daysSinceLast ?? "?"} gündür hiç sipariş edilmiyor (eskiden ${formatTl(d.baselineCiro)} alıyordu).`,
+      isEn
+        ? `No order in the ${d.urunGrubu} category for ${d.daysSinceLast ?? "?"} days (used to buy ${formatTl(d.baselineCiro)}).`
+        : `${d.urunGrubu} kategorisi ${d.daysSinceLast ?? "?"} gündür hiç sipariş edilmiyor (eskiden ${formatTl(d.baselineCiro)} alıyordu).`,
     );
   }
 
   const c = s.cohort[0];
   if (c) {
     parts.push(
-      `Aynı segmentten ${c.cohortBuyerCount}/${c.cohortTotalBuyers} müşteri bu hafta ${c.urunGrubu} aldı, bu müşteri almadı.`,
+      isEn
+        ? `${c.cohortBuyerCount}/${c.cohortTotalBuyers} customers in the same segment bought ${c.urunGrubu} this week, this customer did not.`
+        : `Aynı segmentten ${c.cohortBuyerCount}/${c.cohortTotalBuyers} müşteri bu hafta ${c.urunGrubu} aldı, bu müşteri almadı.`,
     );
   }
 
   if (parts.length === 0) {
-    return "Önümüzdeki 14 günde anlamlı bir foresight sinyali yok.";
+    return isEn
+      ? "No meaningful foresight signal for the next 14 days."
+      : "Önümüzdeki 14 günde anlamlı bir foresight sinyali yok.";
   }
   return parts.join(" ");
 }
 
-function buildDeterministicActions(s: ForesightSignals): string[] {
+function buildDeterministicActions(
+  s: ForesightSignals,
+  locale: ForesightLocale = "tr",
+): string[] {
+  const isEn = locale === "en";
   const out: string[] = [];
 
   // 1) HIGH-urgency risk first — relationship at risk trumps event-based picks
   const risk = s.riskFlags[0];
   if (risk) {
     out.push(
-      `Bu hafta ziyaret listesine al ve ${risk.urunGrubu} için neden sipariş gelmediğini sor — ${risk.daysSinceLast ?? "?"} gündür hiç almıyor, eskiden ${formatTl(risk.baselineCiro)} alıyordu (yüksek öncelikli risk)`,
+      isEn
+        ? `Add to this week's visit list and ask why no order has come in for ${risk.urunGrubu} — ${risk.daysSinceLast ?? "?"} days with nothing, used to buy ${formatTl(risk.baselineCiro)} (high-priority risk)`
+        : `Bu hafta ziyaret listesine al ve ${risk.urunGrubu} için neden sipariş gelmediğini sor — ${risk.daysSinceLast ?? "?"} gündür hiç almıyor, eskiden ${formatTl(risk.baselineCiro)} alıyordu (yüksek öncelikli risk)`,
     );
   }
 
@@ -683,17 +788,23 @@ function buildDeterministicActions(s: ForesightSignals): string[] {
   const topYoy = s.yoy.find((y) => y.urunGrubu);
   if (nextEvent && topYoy) {
     out.push(
-      `${nextEvent.date} ${nextEvent.name} öncesi ${topYoy.urunGrubu} kategorisini hatırlat — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
+      isEn
+        ? `Remind about the ${topYoy.urunGrubu} category before ${nextEvent.date} ${nextEvent.name} — same week last year this brought in ${formatTl(topYoy.ciro)} in revenue`
+        : `${nextEvent.date} ${nextEvent.name} öncesi ${topYoy.urunGrubu} kategorisini hatırlat — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
     );
   } else if (topYoy) {
     out.push(
-      `${topYoy.urunGrubu} kategorisinde bu hafta stok teklif et — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
+      isEn
+        ? `Offer stock in the ${topYoy.urunGrubu} category this week — same week last year this brought in ${formatTl(topYoy.ciro)} in revenue`
+        : `${topYoy.urunGrubu} kategorisinde bu hafta stok teklif et — geçen yıl aynı hafta ${formatTl(topYoy.ciro)} ciro buradan gelmişti`,
     );
   } else if (nextEvent) {
     const cats = nextEvent.category_hints?.slice(0, 2).join(", ");
     if (cats) {
       out.push(
-        `${nextEvent.date} ${nextEvent.name} öncesi ${cats} kategorilerinde stok hatırlat (takvim sinyali)`,
+        isEn
+          ? `Remind about stock in ${cats} categories before ${nextEvent.date} ${nextEvent.name} (calendar signal)`
+          : `${nextEvent.date} ${nextEvent.name} öncesi ${cats} kategorilerinde stok hatırlat (takvim sinyali)`,
       );
     }
   }
@@ -703,7 +814,9 @@ function buildDeterministicActions(s: ForesightSignals): string[] {
     const dropped = s.dropped[0];
     if (dropped) {
       out.push(
-        `${dropped.urunGrubu} için yeniden teklif sun — ${dropped.daysSinceLast ?? "?"} gündür hiç almadı, eskiden ${formatTl(dropped.baselineCiro)} alıyordu (düşmüş kategori)`,
+        isEn
+          ? `Pitch ${dropped.urunGrubu} again — no order in ${dropped.daysSinceLast ?? "?"} days, used to buy ${formatTl(dropped.baselineCiro)} (dropped category)`
+          : `${dropped.urunGrubu} için yeniden teklif sun — ${dropped.daysSinceLast ?? "?"} gündür hiç almadı, eskiden ${formatTl(dropped.baselineCiro)} alıyordu (düşmüş kategori)`,
       );
     }
   }
@@ -712,7 +825,9 @@ function buildDeterministicActions(s: ForesightSignals): string[] {
   const cohort = s.cohort[0];
   if (cohort) {
     out.push(
-      `${cohort.urunGrubu} öner — aynı segmentteki ${cohort.cohortBuyerCount}/${cohort.cohortTotalBuyers} müşteri bu hafta aldı, bu hesap almadı (segment kıyası)`,
+      isEn
+        ? `Suggest ${cohort.urunGrubu} — ${cohort.cohortBuyerCount}/${cohort.cohortTotalBuyers} customers in the same segment bought this week, this account did not (segment comparison)`
+        : `${cohort.urunGrubu} öner — aynı segmentteki ${cohort.cohortBuyerCount}/${cohort.cohortTotalBuyers} müşteri bu hafta aldı, bu hesap almadı (segment kıyası)`,
     );
   }
 
@@ -721,11 +836,12 @@ function buildDeterministicActions(s: ForesightSignals): string[] {
 
 function parseForesightOutput(raw: string): { brief: string; actions: string[] } {
   if (!raw) return { brief: "", actions: [] };
-  // Match either AKSIYONLAR or AKSİYONLAR (model writes both ways depending on
-  // whether dotted-I makes it through the tokenizer cleanly).
-  const aksRx = /(AKS[İI]YONLAR):/i;
+  // Match AKSIYONLAR/AKSİYONLAR (TR prompt; model writes both ways depending
+  // on whether dotted-I makes it through the tokenizer cleanly) OR ACTIONS
+  // (EN prompt, see systemEn above).
+  const aksRx = /(AKS[İI]YONLAR|ACTIONS):/i;
   const briefMatch = raw.match(new RegExp(`BRIEF:\\s*([\\s\\S]*?)(?:${aksRx.source}|$)`, "i"));
-  const actionsMatch = raw.match(/AKS[İI]YONLAR:\s*([\s\S]*)$/i);
+  const actionsMatch = raw.match(/(?:AKS[İI]YONLAR|ACTIONS):\s*([\s\S]*)$/i);
   const brief = (briefMatch?.[1] ?? "").trim();
   const actionsBlock = (actionsMatch?.[1] ?? "").trim();
   const actions = actionsBlock

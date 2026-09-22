@@ -12,16 +12,20 @@ import { formatCompact } from "@/components/komuta/format";
  * toplam payı üst-banner'da öne çıkarılır.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function BrandContributionPanel({
   brands,
-  periodLabel = "son 30 gün",
+  periodLabel,
+  locale = "tr",
 }: {
   brands: WietnauerBrandContribution[];
   /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
   periodLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.yonetim.brands")) return null;
+  const period = periodLabel ?? (locale === "en" ? "last 30 days" : "son 30 gün");
   const visible = brands.slice(0, 15);
   const maxCiro = Math.max(1, ...visible.map((b) => b.ciro));
   const stratPayToplam = brands
@@ -33,17 +37,33 @@ export function BrandContributionPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", "Marka Katkıları")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", t(locale, "panel.yonetim.brands", "Marka Katkıları"))}</div>
           <div className="v3-panel-sub">
-            {periodLabel} · Net ciro sıralaması ·{" "}
-            {stratList.length > 0 ? (
+            {locale === "en" ? (
               <>
-                <span className="strat-dot" /> {stratList.length} stratejik
-                marka portföyün <strong>%{stratPayToplam.toFixed(1)}</strong>
-                'sini taşıyor
+                {period} · Ranked by net revenue ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} strategic
+                    brands carry <strong>%{stratPayToplam.toFixed(1)}</strong> of the portfolio
+                  </>
+                ) : (
+                  "no strategic brand defined"
+                )}
               </>
             ) : (
-              "stratejik marka tanımı yok"
+              <>
+                {period} · Net ciro sıralaması ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} stratejik
+                    marka portföyün <strong>%{stratPayToplam.toFixed(1)}</strong>
+                    'sini taşıyor
+                  </>
+                ) : (
+                  "stratejik marka tanımı yok"
+                )}
+              </>
             )}
           </div>
         </div>
@@ -75,13 +95,27 @@ export function BrandContributionPanel({
       </div>
 
       <div className="v3-bars-legend">
-        <span><span className="strat-dot" /> stratejik marka</span>
-        <span className="sep">·</span>
-        <span>net ciro</span>
-        <span className="sep">·</span>
-        <span>portföy payı</span>
-        <span className="sep">·</span>
-        <span>distinct müşteri</span>
+        {locale === "en" ? (
+          <>
+            <span><span className="strat-dot" /> strategic brand</span>
+            <span className="sep">·</span>
+            <span>net revenue</span>
+            <span className="sep">·</span>
+            <span>portfolio share</span>
+            <span className="sep">·</span>
+            <span>distinct customers</span>
+          </>
+        ) : (
+          <>
+            <span><span className="strat-dot" /> stratejik marka</span>
+            <span className="sep">·</span>
+            <span>net ciro</span>
+            <span className="sep">·</span>
+            <span>portföy payı</span>
+            <span className="sep">·</span>
+            <span>distinct müşteri</span>
+          </>
+        )}
       </div>
 
       <style

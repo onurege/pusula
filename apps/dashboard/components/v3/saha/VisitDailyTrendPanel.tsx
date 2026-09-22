@@ -13,13 +13,16 @@ import type { SahaVisitDailyRow, SahaVisitKpi } from "@/lib/api";
  * Header'da son 7g KPI özet 4 mini-card halinde.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function VisitDailyTrendPanel({
   rows,
   kpi,
+  locale = "tr",
 }: {
   rows: SahaVisitDailyRow[];
   kpi: SahaVisitKpi;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.saha.daily")) return null;
   const max = Math.max(1, ...rows.map((r) => r.toplam));
@@ -30,7 +33,7 @@ export function VisitDailyTrendPanel({
     return day === 0 || day === 6;
   };
   const fmtGun = (iso: string) =>
-    new Date(`${iso}T00:00:00`).toLocaleDateString("tr-TR", {
+    new Date(`${iso}T00:00:00`).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
       day: "2-digit",
       month: "short",
     });
@@ -44,34 +47,37 @@ export function VisitDailyTrendPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.saha.daily", "Günlük Ziyaret Trendi")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.daily", t(locale, "panel.saha.daily", "Günlük Ziyaret Trendi"))}</div>
           <div className="v3-panel-sub">
-            Son 30 gün · {toplam30g.toLocaleString("tr-TR")} ziyaret · Rut dışı
-            payı <strong>%{rutDisiPct.toFixed(1)}</strong>
+            {locale === "en" ? (
+              <>Last 30 days · {toplam30g.toLocaleString("tr-TR")} visits · Out-of-route share <strong>%{rutDisiPct.toFixed(1)}</strong></>
+            ) : (
+              <>Son 30 gün · {toplam30g.toLocaleString("tr-TR")} ziyaret · Rut dışı payı <strong>%{rutDisiPct.toFixed(1)}</strong></>
+            )}
           </div>
         </div>
         <div className="v3-panel-legend">
           <span className="lg lg-rut">
-            <span className="dot" style={{ background: "#9FE1CB" }} /> Rut içi
+            <span className="dot" style={{ background: "#9FE1CB" }} /> {locale === "en" ? "In-route" : "Rut içi"}
           </span>
           <span className="lg lg-rd">
-            <span className="dot" style={{ background: "#FAC775" }} /> Rut dışı
+            <span className="dot" style={{ background: "#FAC775" }} /> {locale === "en" ? "Out-of-route" : "Rut dışı"}
           </span>
         </div>
       </div>
 
       <div className="saha-kpi-row">
-        <KpiMini label="Son 7g ziyaret" value={kpi.son7gZiyaret.toLocaleString("tr-TR")} />
+        <KpiMini label={locale === "en" ? "Last 7d visits" : "Son 7g ziyaret"} value={kpi.son7gZiyaret.toLocaleString("tr-TR")} />
         <KpiMini
-          label="Son 7g müşteri"
+          label={locale === "en" ? "Last 7d customers" : "Son 7g müşteri"}
           value={kpi.son7gUniqueMusteri.toLocaleString("tr-TR")}
         />
         <KpiMini
-          label="Aktif temsilci"
+          label={locale === "en" ? "Active reps" : "Aktif temsilci"}
           value={kpi.son7gAktifTemsilci.toLocaleString("tr-TR")}
         />
         <KpiMini
-          label="Sipariş dönüşüm"
+          label={locale === "en" ? "Order conversion" : "Sipariş dönüşüm"}
           value={`%${kpi.son7gDonusumPct.toFixed(1)}`}
           accent
         />
@@ -87,7 +93,11 @@ export function VisitDailyTrendPanel({
             <div
               key={r.gun}
               className={`saha-bar-col ${we ? "weekend" : ""}`}
-              title={`${fmtGun(r.gun)} — ${r.toplam} ziyaret (rut içi: ${r.rutIci}, rut dışı: ${r.rutDisi})`}
+              title={
+                locale === "en"
+                  ? `${fmtGun(r.gun)} — ${r.toplam} visits (in-route: ${r.rutIci}, out-of-route: ${r.rutDisi})`
+                  : `${fmtGun(r.gun)} — ${r.toplam} ziyaret (rut içi: ${r.rutIci}, rut dışı: ${r.rutDisi})`
+              }
             >
               <div className="saha-bar-stack">
                 <div

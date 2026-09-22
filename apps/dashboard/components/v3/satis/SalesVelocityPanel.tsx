@@ -1,6 +1,7 @@
 import type { SatisDistRow } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * md27: Nokta Başına Satış Hızı = ciro / aktif nokta (aktif müşteri).
@@ -26,6 +27,7 @@ type Props = {
   volumeShort?: string;
   /** Seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
   rangeLabel?: string;
+  locale?: Locale;
 };
 
 /**
@@ -34,15 +36,18 @@ type Props = {
  * ≥5 müşteri filtresi yok, tüm scope'lu distribütörler dahil (zaten
  * distLeaderboard rank'lı & scope uygulanmış geliyor).
  */
-export function SalesVelocityPanel({ rows, unit = "tl", volumeShort, rangeLabel = "Son 30g" }: Props) {
+export function SalesVelocityPanel({ rows, unit = "tl", volumeShort, rangeLabel = "Son 30g", locale = "tr" }: Props) {
   if (panelHidden("panel.satis.hiz")) return null;
+  const title = panelTitle("panel.satis.hiz", t(locale, "panel.satis.velocity", "Nokta Başına Satış Hızı"));
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">
-          {panelTitle("panel.satis.hiz", "Nokta Başına Satış Hızı")}
-        </div>
-        <p>{rangeLabel} içinde fatura kaydı bulunamadı.</p>
+        <div className="v3-panel-title">{title}</div>
+        <p>
+          {locale === "en"
+            ? `No invoice records found in ${rangeLabel}.`
+            : `${rangeLabel} içinde fatura kaydı bulunamadı.`}
+        </p>
       </div>
     );
   }
@@ -59,11 +64,11 @@ export function SalesVelocityPanel({ rows, unit = "tl", volumeShort, rangeLabel 
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">
-            {panelTitle("panel.satis.hiz", "Nokta Başına Satış Hızı")}
-          </div>
+          <div className="v3-panel-title">{title}</div>
           <div className="v3-panel-sub">
-            {rangeLabel} · {useVolume ? `hacim (${volumeShort})` : "ciro"} / aktif nokta (aktif müşteri) · Top {top.length}
+            {locale === "en"
+              ? `${rangeLabel} · ${useVolume ? `volume (${volumeShort})` : "revenue"} / active outlet (active customer) · Top ${top.length}`
+              : `${rangeLabel} · ${useVolume ? `hacim (${volumeShort})` : "ciro"} / aktif nokta (aktif müşteri) · Top ${top.length}`}
           </div>
         </div>
       </div>
@@ -87,7 +92,7 @@ export function SalesVelocityPanel({ rows, unit = "tl", volumeShort, rangeLabel 
                 {useVolume ? `${formatCompact(r.hiz)} ${volumeShort}` : `₺${formatCompact(r.hiz)}`}
               </span>
               <span className="bar-cust">
-                {r.musteriSayi.toLocaleString("tr-TR")} nokta
+                {r.musteriSayi.toLocaleString("tr-TR")} {locale === "en" ? "outlets" : "nokta"}
               </span>
             </div>
           </div>

@@ -8,10 +8,12 @@ import { RiskTierPanel } from "@/components/v3/aktivasyon/RiskTierPanel";
 import { RecoveryPanel } from "@/components/v3/aktivasyon/RecoveryPanel";
 import { AktivasyonDistSelect } from "@/components/v3/aktivasyon/AktivasyonDistSelect";
 import type { AktivasyonSnapshot } from "@/components/v3/aktivasyon/types";
+import { getLocale, t } from "@/lib/i18n";
 
-export const metadata = {
-  title: "Müşteri Aktivasyon & Risk · V3 · Insider",
-};
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.risk.title", "Müşteri Aktivasyon & Risk")} · V3 · Insider` };
+}
 
 type Props = {
   searchParams: Promise<{ distId?: string }>;
@@ -33,6 +35,7 @@ type Props = {
  */
 export default async function V3AktivasyonRiskPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
   const distId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
@@ -60,42 +63,51 @@ export default async function V3AktivasyonRiskPage({ searchParams }: Props) {
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 06"
-        title="Müşteri Aktivasyon & Risk"
+        locale={locale}
+        eyebrow={t(locale, "page.risk.eyebrow", "Dashboard 06")}
+        title={t(locale, "page.risk.title", "Müşteri Aktivasyon & Risk")}
         contentKey="page.risk.title"
         descKey="page.risk.desc"
         description={
-          selectedDist
-            ? `${selectedDist.ad} — son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Saha ekibi için aksiyon listesi.`
-            : `${tenant.displayName} tüm portföyde son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`
+          locale === "en"
+            ? selectedDist
+              ? `${selectedDist.ad} — active/silent split over the last 90 days, strategic brand silence, and risk-score-based win-back targets. Action list for the field team.`
+              : `${tenant.displayName} across the full portfolio — active/silent split over the last 90 days, strategic brand silence, and risk-score-based win-back targets. Pick a distributor from the dropdown to focus on one.`
+            : selectedDist
+              ? `${selectedDist.ad} — son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Saha ekibi için aksiyon listesi.`
+              : `${tenant.displayName} tüm portföyde son 90 günde aktif/sessiz ayrımı, stratejik marka sessizliği ve risk skoru bazlı yeniden kazanım hedefleri. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`
         }
-        dataNote="TBLMSDFATURA · 90/180g pencere · TBLMUSTERIGRUPKIRILIM müşteri grup kırılımı · map_customers risk_tier_v2"
+        dataNote={
+          locale === "en"
+            ? "TBLMSDFATURA · 90/180d window · TBLMUSTERIGRUPKIRILIM customer-group breakdown · map_customers risk_tier_v2"
+            : "TBLMSDFATURA · 90/180g pencere · TBLMUSTERIGRUPKIRILIM müşteri grup kırılımı · map_customers risk_tier_v2"
+        }
         generatedAt={snap?.generatedAt}
       />
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.risk.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.risk.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
 
       {snap && (
-        <AktivasyonDistSelect distributors={distributors} selectedDistId={distId} />
+        <AktivasyonDistSelect distributors={distributors} selectedDistId={distId} locale={locale} />
       )}
 
       {snap && (
         <div className="v3-content-grid">
           <div className="col-left">
-            <ActiveCustomersPanel data={snap.active} />
-            <SilentCustomersPanel items={snap.silent} />
+            <ActiveCustomersPanel data={snap.active} locale={locale} />
+            <SilentCustomersPanel items={snap.silent} locale={locale} />
           </div>
           <div className="col-right">
-            <RiskTierPanel buckets={snap.riskTiers} />
-            <StrategicSilencePanel items={snap.strategicSilence} />
-            <RecoveryPanel items={snap.recovery} />
+            <RiskTierPanel buckets={snap.riskTiers} locale={locale} />
+            <StrategicSilencePanel items={snap.strategicSilence} locale={locale} />
+            <RecoveryPanel items={snap.recovery} locale={locale} />
           </div>
         </div>
       )}

@@ -12,15 +12,18 @@ import { formatCompact } from "@/components/komuta/format";
  * Liste: distribütör × yeni müşteri Top 15.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function NewCustomersPanel({
   items,
   totalYeniMusteri,
   totalYeniCiro,
+  locale = "tr",
 }: {
   items: NewCustomerRow[];
   totalYeniMusteri: number;
   totalYeniCiro: number;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.satis.new")) return null;
   const maxYeni = Math.max(1, ...items.map((i) => i.yeniMusteriSayi));
@@ -29,34 +32,40 @@ export function NewCustomersPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.satis.new", "Yeni Müşteri Kazanımı")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.satis.new", t(locale, "panel.satis.new", "Yeni Müşteri Kazanımı"))}</div>
           <div className="v3-panel-sub">
-            Son 90g · ilk faturası bu pencerede kesilmiş müşteriler
+            {locale === "en"
+              ? "Last 90d · customers whose first invoice fell in this window"
+              : "Son 90g · ilk faturası bu pencerede kesilmiş müşteriler"}
           </div>
         </div>
       </div>
 
       <div className="kpi-row">
         <div className="kpi-tile">
-          <div className="kpi-label">Toplam Yeni Müşteri</div>
+          <div className="kpi-label">{locale === "en" ? "Total New Customers" : "Toplam Yeni Müşteri"}</div>
           <div className="kpi-val">
             {totalYeniMusteri.toLocaleString("tr-TR")}
           </div>
-          <div className="kpi-sub">son 90g</div>
+          <div className="kpi-sub">{locale === "en" ? "last 90d" : "son 90g"}</div>
         </div>
         <div className="kpi-tile">
-          <div className="kpi-label">Yeni Müşteri Cirosu</div>
+          <div className="kpi-label">{locale === "en" ? "New Customer Revenue" : "Yeni Müşteri Cirosu"}</div>
           <div className="kpi-val">₺{formatCompact(totalYeniCiro)}</div>
-          <div className="kpi-sub">son 90g net</div>
+          <div className="kpi-sub">{locale === "en" ? "last 90d net" : "son 90g net"}</div>
         </div>
       </div>
 
       {items.length === 0 ? (
-        <p className="empty">Bu pencerede yeni müşteri kazanılmamış.</p>
+        <p className="empty">{locale === "en" ? "No new customers acquired in this window." : "Bu pencerede yeni müşteri kazanılmamış."}</p>
       ) : (
         <div className="v3-bars">
           <div className="bars-head">
-            <span>Distribütör × Yeni Müşteri (Top {items.length})</span>
+            <span>
+              {locale === "en"
+                ? `Distributor × New Customers (Top ${items.length})`
+                : `Distribütör × Yeni Müşteri (Top ${items.length})`}
+            </span>
           </div>
           {items.map((r) => (
             <div key={r.distId} className="bar-row">

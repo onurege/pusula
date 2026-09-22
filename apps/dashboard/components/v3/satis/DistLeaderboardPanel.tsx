@@ -1,6 +1,7 @@
 import type { SatisDistRow } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
 import { DeltaBadge } from "./DeltaBadge";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * Distribütör Leaderboard — tüm distribütörler son 30g ciro ile sıralanmış.
@@ -9,12 +10,18 @@ import { DeltaBadge } from "./DeltaBadge";
  *
  * Server-side render — sıralama backend'de yapılır, burada sadece görselleme.
  */
-export function DistLeaderboardPanel({ rows }: { rows: SatisDistRow[] }) {
+export function DistLeaderboardPanel({
+  rows,
+  locale = "tr",
+}: {
+  rows: SatisDistRow[];
+  locale?: Locale;
+}) {
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">Distribütör Leaderboard</div>
-        <p>Son 30g'de fatura kaydı bulunamadı.</p>
+        <div className="v3-panel-title">{t(locale, "panel.satis.distlb", "Distribütör Leaderboard")}</div>
+        <p>{t(locale, "panel.satis.distlb_empty", "Son 30g'de fatura kaydı bulunamadı.")}</p>
       </div>
     );
   }
@@ -23,9 +30,9 @@ export function DistLeaderboardPanel({ rows }: { rows: SatisDistRow[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Distribütör Leaderboard</div>
+          <div className="v3-panel-title">{t(locale, "panel.satis.distlb", "Distribütör Leaderboard")}</div>
           <div className="v3-panel-sub">
-            Son 30g net ciro · {rows.length} distribütör · vs önceki 30g delta
+            {t(locale, "panel.satis.distlb_sub", "Son 30g net ciro · {n} distribütör · vs önceki 30g delta", { n: rows.length })}
           </div>
         </div>
       </div>
@@ -35,13 +42,13 @@ export function DistLeaderboardPanel({ rows }: { rows: SatisDistRow[] }) {
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Distribütör</th>
-              <th>Bölge</th>
-              <th className="num">Ciro (30g)</th>
-              <th className="num">Müşteri</th>
-              <th className="num">Fatura</th>
-              <th className="num">Ort. Sepet</th>
-              <th className="num">Δ</th>
+              <th>{t(locale, "col.distributor", "Distribütör")}</th>
+              <th>{t(locale, "col.bolge", "Bölge")}</th>
+              <th className="num">{t(locale, "col.ciro_30g", "Ciro (30g)")}</th>
+              <th className="num">{t(locale, "col.musteri", "Müşteri")}</th>
+              <th className="num">{t(locale, "col.fatura", "Fatura")}</th>
+              <th className="num">{t(locale, "col.ort_sepet", "Ort. Sepet")}</th>
+              <th className="num">{t(locale, "col.delta", "Δ")}</th>
             </tr>
           </thead>
           <tbody>
@@ -61,7 +68,7 @@ export function DistLeaderboardPanel({ rows }: { rows: SatisDistRow[] }) {
                 </td>
                 <td className="num">₺{formatCompact(r.ortSepet)}</td>
                 <td className="num">
-                  <DeltaBadge pct={r.deltaPct} hasPrev={r.prevCiro > 0} />
+                  <DeltaBadge pct={r.deltaPct} hasPrev={r.prevCiro > 0} locale={locale} />
                 </td>
               </tr>
             ))}

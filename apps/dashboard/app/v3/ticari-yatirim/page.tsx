@@ -8,8 +8,12 @@ import { IskontoMonthlyTrendPanel } from "@/components/v3/iskonto/IskontoMonthly
 import { IskontoBrandPanel } from "@/components/v3/iskonto/IskontoBrandPanel";
 import { IskontoCustomerPanel } from "@/components/v3/iskonto/IskontoCustomerPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
+import { getLocale, t } from "@/lib/i18n";
 
-export const metadata = { title: "Ticari Yatırım & İskonto · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.iskonto.title", "Ticari Yatırım & İskonto")} · V3 · Insider` };
+}
 
 /**
  * V3 Dashboard #7 — Ticari Yatırım & İskonto.
@@ -95,6 +99,7 @@ type Props = {
 
 export default async function V3TicariYatirimPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
 
   const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
@@ -129,17 +134,25 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 07"
-        title="Ticari Yatırım & İskonto"
+        locale={locale}
+        eyebrow={t(locale, "page.iskonto.eyebrow", "Dashboard 07")}
+        title={t(locale, "page.iskonto.title", "Ticari Yatırım & İskonto")}
         contentKey="page.iskonto.title"
         descKey="page.iskonto.desc"
         description={
-          rangeLabel
-            ? `${tenant.displayName} için ${rangeLabel} aralığında iskonto yatırımı: ` +
-              "brüt → iskonto → net akışı, marka & müşteri & segment ROI'leri."
-            : `${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
-              "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
-              "Sağlıklı iskonto = küçük yatırım, büyük büyüme."
+          locale === "en"
+            ? rangeLabel
+              ? `Discount investment for ${tenant.displayName} in the ${rangeLabel} range: ` +
+                "gross → discount → net flow, brand & customer & segment ROIs."
+              : `Discount investment for ${tenant.displayName}, end to end: ` +
+                "gross → discount → net flow, 12-month trend, brand & customer & segment ROIs. " +
+                "Healthy discount = small investment, large growth."
+            : rangeLabel
+              ? `${tenant.displayName} için ${rangeLabel} aralığında iskonto yatırımı: ` +
+                "brüt → iskonto → net akışı, marka & müşteri & segment ROI'leri."
+              : `${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
+                "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
+                "Sağlıklı iskonto = küçük yatırım, büyük büyüme."
         }
         dataNote="TBLMSDFATURA · DBLISKONTOTUTARI + TBLMSDBELGEDETAY · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
@@ -154,13 +167,14 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
         dateFrom={dateFrom}
         dateTo={dateTo}
         showDateRange={false}
+        locale={locale}
       />
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.iskonto.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.iskonto.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -174,16 +188,17 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
             iskontoOraniPct={snap.overall.iskontoOraniPct}
             faturaCount={snap.overall.faturaCount}
             aktifMusteriCount={snap.overall.aktifMusteriCount}
+            locale={locale}
           />
 
-          <IskontoMonthlyTrendPanel points={snap.monthly} />
+          <IskontoMonthlyTrendPanel points={snap.monthly} locale={locale} />
 
           <div className="iskonto-twocol">
-            <IskontoBrandPanel brands={snap.brands} />
-            <IskontoSegmentPanel segments={snap.segments} />
+            <IskontoBrandPanel brands={snap.brands} locale={locale} />
+            <IskontoSegmentPanel segments={snap.segments} locale={locale} />
           </div>
 
-          <IskontoCustomerPanel customers={snap.topCustomers} />
+          <IskontoCustomerPanel customers={snap.topCustomers} locale={locale} />
         </div>
       )}
 

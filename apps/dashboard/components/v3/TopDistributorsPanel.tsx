@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { WietnauerTopDistributor } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
 import { useContent } from "@/components/content-provider";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Limit = 10 | 20 | 0; // 0 = Tümü
 
@@ -18,14 +19,17 @@ type Limit = 10 | 20 | 0; // 0 = Tümü
  */
 export function TopDistributorsPanel({
   distributors,
-  periodLabel = "son 30 gün",
+  periodLabel,
+  locale = "tr",
 }: {
   distributors: WietnauerTopDistributor[];
   /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
   periodLabel?: string;
+  locale?: Locale;
 }) {
   const { t, isHidden } = useContent();
   const [limit, setLimit] = useState<Limit>(10);
+  const period = periodLabel ?? (locale === "en" ? "last 30 days" : "son 30 gün");
   const visible = limit === 0 ? distributors : distributors.slice(0, limit);
   const cumulative = visible.reduce((a, d) => a + d.payPct, 0);
 
@@ -35,10 +39,21 @@ export function TopDistributorsPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{t("panel.yonetim.topdist.title", "Top Distribütör Analizi")}</div>
+          <div className="v3-panel-title">
+            {t("panel.yonetim.topdist.title", translate(locale, "panel.yonetim.topdist", "Top Distribütör Analizi"))}
+          </div>
           <div className="v3-panel-sub">
-            {periodLabel} net ciro · İlk {visible.length} distribütör toplam cironun
-            <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor
+            {locale === "en" ? (
+              <>
+                {period} net revenue · Top {visible.length} distributors carry
+                <strong> %{cumulative.toFixed(1)}</strong> of total revenue
+              </>
+            ) : (
+              <>
+                {period} net ciro · İlk {visible.length} distribütör toplam cironun
+                <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor
+              </>
+            )}
           </div>
         </div>
         <div className="v3-toggle">
@@ -50,7 +65,7 @@ export function TopDistributorsPanel({
               className={limit === n ? "active" : ""}
               aria-pressed={limit === n}
             >
-              {n === 0 ? "Tümü" : `Top ${n}`}
+              {n === 0 ? (locale === "en" ? "All" : "Tümü") : `Top ${n}`}
             </button>
           ))}
         </div>
@@ -61,13 +76,13 @@ export function TopDistributorsPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Distribütör</th>
-              <th>Bölge</th>
-              <th className="num">Ciro (30g)</th>
-              <th className="num">Aktif Müşteri</th>
+              <th>{translate(locale, "col.distributor", "Distribütör")}</th>
+              <th>{translate(locale, "col.bolge", "Bölge")}</th>
+              <th className="num">{locale === "en" ? "Revenue (30d)" : "Ciro (30g)"}</th>
+              <th className="num">{locale === "en" ? "Active Customers" : "Aktif Müşteri"}</th>
               <th className="num">FKMS</th>
-              <th className="num">Kapsam</th>
-              <th className="num">Pay</th>
+              <th className="num">{translate(locale, "col.kapsama", "Kapsam")}</th>
+              <th className="num">{translate(locale, "col.pay", "Pay")}</th>
             </tr>
           </thead>
           <tbody>

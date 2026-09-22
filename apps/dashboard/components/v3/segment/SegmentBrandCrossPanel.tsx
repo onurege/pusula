@@ -35,15 +35,18 @@ function truncate(s: string, n: number): string {
 }
 
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function SegmentBrandCrossPanel({
   data,
+  locale = "tr",
 }: {
   data: {
     tipler: string[];
     markalar: string[];
     cells: SegmentBrandCell[];
   };
+  locale?: Locale;
 }) {
   if (panelHidden("panel.segment.cross")) return null;
   const { tipler, markalar, cells } = data;
@@ -72,15 +75,24 @@ export function SegmentBrandCrossPanel({
   return (
     <div className="v3-panel cross-panel">
       <div className="cross-head">
-        <div className="cross-title">{panelTitle("panel.segment.cross", "Müşteri Tipi × Marka")}</div>
+        <div className="cross-title">{panelTitle("panel.segment.cross", t(locale, "panel.segment.cross", "Müşteri Tipi × Marka"))}</div>
         <div className="cross-sub">
-          Son 30g ciro payı (%) · {tipler.length}×{markalar.length} grid · stratejik markalar
-          {" "}<span className="strat-dot" /> noktalı
+          {locale === "en" ? (
+            <>
+              Last 30d revenue share (%) · {tipler.length}×{markalar.length} grid · strategic brands
+              {" "}<span className="strat-dot" /> marked with a dot
+            </>
+          ) : (
+            <>
+              Son 30g ciro payı (%) · {tipler.length}×{markalar.length} grid · stratejik markalar
+              {" "}<span className="strat-dot" /> noktalı
+            </>
+          )}
         </div>
       </div>
 
       {!hasData ? (
-        <div className="cross-empty">Cross-segment verisi alınamadı.</div>
+        <div className="cross-empty">{t(locale, "seg.cross.empty", "Cross-segment verisi alınamadı.")}</div>
       ) : (
         <div
           className="x-grid"
@@ -89,14 +101,14 @@ export function SegmentBrandCrossPanel({
           }}
         >
           {/* Başlık satırı */}
-          <div className="x-head">Müşteri Tipi</div>
+          <div className="x-head">{t(locale, "seg.cross.col_musteritipi", "Müşteri Tipi")}</div>
           {markalar.map((m) => (
             <div key={m} className="x-head" title={m}>
               {stratejikMarkalar.has(m) && <span className="strat-dot" />}
               {truncate(m, 12)}
             </div>
           ))}
-          <div className="x-head right">Tip Ort.</div>
+          <div className="x-head right">{t(locale, "seg.cross.col_tipavg", "Tip Ort.")}</div>
 
           {/* Veri satırları */}
           {tipler.map((tip) => {

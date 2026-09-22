@@ -22,8 +22,9 @@ export type MusteriGrupSegmentRow = {
 };
 
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function MusteriGrupPanel({ rows }: { rows: MusteriGrupSegmentRow[] }) {
+export function MusteriGrupPanel({ rows, locale = "tr" }: { rows: MusteriGrupSegmentRow[]; locale?: Locale }) {
   if (panelHidden("panel.segment.musterigrubu")) return null;
   const maxCiro = Math.max(1, ...rows.map((r) => r.ciro));
   const toplamMusteri = rows.reduce((a, r) => a + r.musteriSayi, 0);
@@ -31,15 +32,17 @@ export function MusteriGrupPanel({ rows }: { rows: MusteriGrupSegmentRow[] }) {
   return (
     <div className="v3-panel seg-panel">
       <div className="seg-head">
-        <div className="seg-title">{panelTitle("panel.segment.musterigrubu", "Müşteri Grubu")}</div>
+        <div className="seg-title">{panelTitle("panel.segment.musterigrubu", t(locale, "panel.segment.musterigrubu", "Müşteri Grubu"))}</div>
         <div className="seg-sub">
-          Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM) · {rows.length} kırılım · {toplamMusteri.toLocaleString("tr-TR")} müşteri
+          {locale === "en"
+            ? `Customer Group Breakdown (TBLMUSTERIGRUPKIRILIM) · ${rows.length} breakdowns · ${toplamMusteri.toLocaleString("tr-TR")} customers`
+            : `Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM) · ${rows.length} kırılım · ${toplamMusteri.toLocaleString("tr-TR")} müşteri`}
         </div>
       </div>
 
       <div className="seg-list">
         {rows.length === 0 && (
-          <div className="seg-empty">Henüz veri yok</div>
+          <div className="seg-empty">{t(locale, "seg.empty", "Henüz veri yok")}</div>
         )}
         {rows.map((r) => (
           <div key={r.kod} className="seg-row">
@@ -52,13 +55,13 @@ export function MusteriGrupPanel({ rows }: { rows: MusteriGrupSegmentRow[] }) {
                 style={{ width: `${(r.ciro / maxCiro) * 100}%` }}
               />
               <div className="seg-row-meta">
-                <span className="num">{r.musteriSayi.toLocaleString("tr-TR")} müşteri</span>
+                <span className="num">{r.musteriSayi.toLocaleString("tr-TR")} {locale === "en" ? "customers" : "müşteri"}</span>
                 <span className="sep">·</span>
                 <span className="num">₺{formatCompact(r.ciro)}</span>
                 <span className="sep">·</span>
                 <span className="pay">%{r.payPct.toFixed(1)}</span>
                 <span className="sep">·</span>
-                <span className="disc">isk. %{r.ortIskontoOraniPct.toFixed(1)}</span>
+                <span className="disc">{locale === "en" ? "disc." : "isk."} %{r.ortIskontoOraniPct.toFixed(1)}</span>
               </div>
             </div>
           </div>

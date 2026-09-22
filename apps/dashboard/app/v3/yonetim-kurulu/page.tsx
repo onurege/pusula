@@ -8,6 +8,7 @@ import { TopDistributorsPanel } from "@/components/v3/TopDistributorsPanel";
 import { BrandContributionPanel } from "@/components/v3/BrandContributionPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
 import { formatCompact } from "@/components/komuta/format";
+import { getLocale, t } from "@/lib/i18n";
 
 // Sadece segment dilimine ihtiyacımız var — ticari-yatirim sayfasındaki tam
 // IskontoSnapshot tipinin alt kümesi. Endpoint aynı, ödediğin bedel cache hit.
@@ -27,7 +28,10 @@ type IskontoSegmentsSlice = {
   ekGrupSegments: IskontoSegmentRowSlice[];
 };
 
-export const metadata = { title: "Yönetim Kurulu · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.yonetim.title", "Yönetim Kurulu")} · V3 · Insider` };
+}
 
 /**
  * V3 Dashboard #1 — Yönetim Kurulu.
@@ -52,6 +56,7 @@ type Props = {
 
 export default async function V3YonetimKuruluPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
@@ -85,17 +90,23 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
 
   // Seçili dönemin insan-okur etiketi — panel alt-başlıklarına da geçiriyoruz
   // (bkz. TopDistributorsPanel/BrandContributionPanel "Son 30 gün" yerine).
-  const periodLabel = donemLabel(donem, dateFrom, dateTo);
+  const periodLabel = donemLabel(donem, dateFrom, dateTo, locale);
   // Sayfa açıklaması: snapshot varsa gerçek toplamlarla, yoksa generic fallback.
-  const pageDescription = snap
-    ? `${tenant.displayName} portföy sağlığı ${periodLabel} verisiyle: ₺${formatCompact(toplamCiro)} net ciro, ${aktifMusteri.toLocaleString("tr-TR")} aktif müşteri; top ${top10Count} distribütör toplam cironun %${top10Pay.toFixed(1)}'ini, ${stratCount} stratejik marka ise %${stratPay.toFixed(1)}'ini taşıyor.`
-    : `${tenant.displayName} portföy sağlığı tek ekranda — Top müşteri konsantrasyonu, marka katkıları ve iskonto yatırım oranı ${periodLabel} net ciro üzerinden.`;
+  const pageDescription =
+    locale === "en"
+      ? snap
+        ? `${tenant.displayName} portfolio health with ${periodLabel} data: ₺${formatCompact(toplamCiro)} net revenue, ${aktifMusteri.toLocaleString("tr-TR")} active customers; top ${top10Count} distributors carry %${top10Pay.toFixed(1)} of total revenue, and ${stratCount} strategic brands carry %${stratPay.toFixed(1)}.`
+        : `${tenant.displayName} portfolio health in one screen — Top customer concentration, brand contributions, and discount investment rate over ${periodLabel} net revenue.`
+      : snap
+        ? `${tenant.displayName} portföy sağlığı ${periodLabel} verisiyle: ₺${formatCompact(toplamCiro)} net ciro, ${aktifMusteri.toLocaleString("tr-TR")} aktif müşteri; top ${top10Count} distribütör toplam cironun %${top10Pay.toFixed(1)}'ini, ${stratCount} stratejik marka ise %${stratPay.toFixed(1)}'ini taşıyor.`
+        : `${tenant.displayName} portföy sağlığı tek ekranda — Top müşteri konsantrasyonu, marka katkıları ve iskonto yatırım oranı ${periodLabel} net ciro üzerinden.`;
 
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 01"
-        title="Yönetim Kurulu"
+        locale={locale}
+        eyebrow={t(locale, "page.yonetim.eyebrow", "Dashboard 01")}
+        title={t(locale, "page.yonetim.title", "Yönetim Kurulu")}
         contentKey="page.yonetim.title"
         descKey="page.yonetim.desc"
         description={pageDescription}
@@ -107,9 +118,9 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.yonetim.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.yonetim.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -120,31 +131,31 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
           <div className="v3-kpi-grid">
             {!panelHidden("kpi.yonetim.ciro") && (
             <KpiTile
-              label={cs("kpi.yonetim.ciro", "Toplam Net Ciro")}
+              label={cs("kpi.yonetim.ciro", t(locale, "kpi.yonetim.ciro", "Toplam Net Ciro"))}
               value={`₺${formatCompact(toplamCiro)}`}
-              sub={donemLabel(donem, dateFrom, dateTo)}
+              sub={periodLabel}
             />
           )}
             {!panelHidden("kpi.yonetim.aktif") && (
             <KpiTile
-              label={cs("kpi.yonetim.aktif", "Aktif Müşteri")}
+              label={cs("kpi.yonetim.aktif", t(locale, "kpi.yonetim.aktif", "Aktif Müşteri"))}
               value={aktifMusteri.toLocaleString("tr-TR")}
-              sub={`${toplamFatura.toLocaleString("tr-TR")} fatura`}
+              sub={`${toplamFatura.toLocaleString("tr-TR")} ${locale === "en" ? "invoices" : "fatura"}`}
             />
           )}
             {!panelHidden("kpi.yonetim.konsantrasyon") && (
             <KpiTile
-              label={cs("kpi.yonetim.konsantrasyon", "Top 10 Konsantrasyon")}
+              label={cs("kpi.yonetim.konsantrasyon", t(locale, "kpi.yonetim.konsantrasyon", "Top 10 Konsantrasyon"))}
               value={`%${top10Pay.toFixed(1)}`}
-              sub={`ilk ${top10Count} distribütörün payı`}
+              sub={locale === "en" ? `share of the top ${top10Count} distributors` : `ilk ${top10Count} distribütörün payı`}
               tone={top10Pay > 50 ? "warn" : "neutral"}
             />
           )}
             {!panelHidden("kpi.yonetim.stratejik") && (
             <KpiTile
-              label={cs("kpi.yonetim.stratejik", "Stratejik Marka Payı")}
+              label={cs("kpi.yonetim.stratejik", t(locale, "kpi.yonetim.stratejik", "Stratejik Marka Payı"))}
               value={`%${stratPay.toFixed(1)}`}
-              sub={`${stratCount} marka takipte`}
+              sub={locale === "en" ? `${stratCount} brands tracked` : `${stratCount} marka takipte`}
               tone="accent"
             />
           )}
@@ -152,8 +163,8 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
 
           {/* Üst içerik: 2 sütun (Marka katkıları + Top Distribütör) */}
           <div className="v3-content-grid">
-            <BrandContributionPanel brands={snap.brands} periodLabel={periodLabel} />
-            <TopDistributorsPanel distributors={snap.topDistributors} periodLabel={periodLabel} />
+            <BrandContributionPanel brands={snap.brands} periodLabel={periodLabel} locale={locale} />
+            <TopDistributorsPanel distributors={snap.topDistributors} periodLabel={periodLabel} locale={locale} />
           </div>
 
           {/* Alt içerik: Segment Kırılımı — İKİ boyut ayrı ayrı:
@@ -165,15 +176,17 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
                 {iskonto.segments.length > 0 && (
                   <IskontoSegmentPanel
                     segments={iskonto.segments}
-                    title="Müşteri Grup Kırılımı"
-                    dimensionLabel="Müşteri grup kırılımı"
+                    title={locale === "en" ? "Customer Group Breakdown" : "Müşteri Grup Kırılımı"}
+                    dimensionLabel={locale === "en" ? "Customer group breakdown" : "Müşteri grup kırılımı"}
+                    locale={locale}
                   />
                 )}
                 {iskonto.ekGrupSegments.length > 0 && (
                   <IskontoSegmentPanel
                     segments={iskonto.ekGrupSegments}
-                    title="Müşteri Ek Grup"
-                    dimensionLabel="Müşteri ek grup (ilk 5 + Diğer)"
+                    title={locale === "en" ? "Customer Sub-Group" : "Müşteri Ek Grup"}
+                    dimensionLabel={locale === "en" ? "Customer sub-group (top 5 + Other)" : "Müşteri ek grup (ilk 5 + Diğer)"}
+                    locale={locale}
                   />
                 )}
               </div>

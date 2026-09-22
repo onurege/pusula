@@ -11,8 +11,12 @@ import { formatCompact } from "@/components/komuta/format";
 import { StokDistSelect } from "@/components/v3/stok/StokDistSelect";
 import { StokSkuTable } from "@/components/v3/stok/StokSkuTable";
 import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
+import { getLocale, t, type Locale } from "@/lib/i18n";
 
-export const metadata = { title: "Stok Tükenme · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.stok.title", "Stok Tükenme")} · V3 · Insider` };
+}
 
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -22,6 +26,7 @@ type Props = {
 
 export default async function V3StokTukenmePage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
   const distId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
@@ -60,17 +65,25 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 08"
-        title="Stok Tükenme"
+        locale={locale}
+        eyebrow={t(locale, "page.stok.eyebrow", "Dashboard 08")}
+        title={t(locale, "page.stok.title", "Stok Tükenme")}
         contentKey="page.stok.title"
         descKey="page.stok.desc"
         description={
-          (snap?.distFilter
-            ? `${snap.distFilter.distName}${snap.distFilter.region ? ` (${snap.distFilter.region})` : ""} — SKU stoklarının kaç gün yeteceğini, tahmini tükenme tarihini ve miktar bazlı 90 günlük devir hızını gösterir.`
-            : `${tenant.displayName} tüm distribütörler — SKU stoklarının kaç gün yeteceğini, tahmini tükenme tarihini ve miktar bazlı 90 günlük devir hızını gösterir. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`) +
-          (snap?.demandRange.custom
-            ? ` Talep/satış hızı penceresi: ${formatDate(snap.demandRange.from!)} – ${formatDate(snap.demandRange.to!)} (${snap.demandRange.days} gün). Stok bakiyesi bu aralıktan bağımsız, anlıktır.`
-            : "")
+          locale === "en"
+            ? (snap?.distFilter
+                ? `${snap.distFilter.distName}${snap.distFilter.region ? ` (${snap.distFilter.region})` : ""} — shows how many days of stock remain per SKU, the projected stockout date, and 90-day volume-based turnover.`
+                : `${tenant.displayName} all distributors — shows how many days of stock remain per SKU, the projected stockout date, and 90-day volume-based turnover. Pick a distributor from the dropdown to focus on one.`) +
+              (snap?.demandRange.custom
+                ? ` Demand/sales velocity window: ${formatDate(snap.demandRange.from!, locale)} – ${formatDate(snap.demandRange.to!, locale)} (${snap.demandRange.days} days). Stock balance is instantaneous, independent of this range.`
+                : "")
+            : (snap?.distFilter
+                ? `${snap.distFilter.distName}${snap.distFilter.region ? ` (${snap.distFilter.region})` : ""} — SKU stoklarının kaç gün yeteceğini, tahmini tükenme tarihini ve miktar bazlı 90 günlük devir hızını gösterir.`
+                : `${tenant.displayName} tüm distribütörler — SKU stoklarının kaç gün yeteceğini, tahmini tükenme tarihini ve miktar bazlı 90 günlük devir hızını gösterir. Belirli bir distribütöre odaklanmak için dropdown'dan seç.`) +
+              (snap?.demandRange.custom
+                ? ` Talep/satış hızı penceresi: ${formatDate(snap.demandRange.from!)} – ${formatDate(snap.demandRange.to!)} (${snap.demandRange.days} gün). Stok bakiyesi bu aralıktan bağımsız, anlıktır.`
+                : "")
         }
         dataNote="TBLMSDBELGEDETAY · TBLMSDFATURA · TBLMSDDEPOHAREKET · TBLURUN · TBLDIST × TBLDISTEKGRUP · LNGSTOKTIP · DBLMIKTAR"
         generatedAt={snap?.generatedAt}
@@ -78,9 +91,9 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.stok.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.stok.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -90,47 +103,60 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
           <StokDistSelect
             distributors={snap.distributors}
             selectedDistId={snap.distFilter?.distId ?? null}
+            locale={locale}
           />
           {/* md2: global dönem filtresi (StokDateRange yerine — preset + serbest). */}
           <GlobalDonemFilter />
           <div className="stok-kpi-grid">
             {!panelHidden("kpi.stok.kritik") && (
             <KpiTile
-              label={cs("kpi.stok.kritik", "Kritik + Risk")}
+              label={cs("kpi.stok.kritik", t(locale, "kpi.stok.kritik", "Kritik + Risk"))}
               value={criticalPlusRisk.toLocaleString("tr-TR")}
               sub={
-                snap.totals.lowConfidenceSkuCount > 0
-                  ? `%${criticalShare.toFixed(1)} · ${snap.totals.lowConfidenceSkuCount} düşük güven`
-                  : `%${criticalShare.toFixed(1)} · 0-14 gün`
+                locale === "en"
+                  ? snap.totals.lowConfidenceSkuCount > 0
+                    ? `%${criticalShare.toFixed(1)} · ${snap.totals.lowConfidenceSkuCount} low confidence`
+                    : `%${criticalShare.toFixed(1)} · 0-14 days`
+                  : snap.totals.lowConfidenceSkuCount > 0
+                    ? `%${criticalShare.toFixed(1)} · ${snap.totals.lowConfidenceSkuCount} düşük güven`
+                    : `%${criticalShare.toFixed(1)} · 0-14 gün`
               }
               tone={criticalPlusRisk > 0 ? "bad" : "good"}
             />
           )}
             {!panelHidden("kpi.stok.tukenme") && (
             <KpiTile
-              label={cs("kpi.stok.tukenme", "İlk Tükenme")}
-              value={nextStockout ? formatDate(nextStockout) : "-"}
-              sub="tahmini tarih"
+              label={cs("kpi.stok.tukenme", t(locale, "kpi.stok.tukenme", "İlk Tükenme"))}
+              value={nextStockout ? formatDate(nextStockout, locale) : "-"}
+              sub={locale === "en" ? "projected date" : "tahmini tarih"}
               tone={nextStockout ? "bad" : "neutral"}
             />
           )}
             {!panelHidden("kpi.stok.pozitif") && (
             <KpiTile
-              label={cs("kpi.stok.pozitif", "Pozitif Stok SKU")}
+              label={cs("kpi.stok.pozitif", t(locale, "kpi.stok.pozitif", "Pozitif Stok SKU"))}
               value={snap.totals.positiveStockSkuCount.toLocaleString("tr-TR")}
               sub={
-                snap.distFilter
-                  ? `${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU içinde`
-                  : `${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU×dist içinde`
+                locale === "en"
+                  ? snap.distFilter
+                    ? `of ${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKUs`
+                    : `of ${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU×dist`
+                  : snap.distFilter
+                    ? `${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU içinde`
+                    : `${snap.totals.activeSkuCount.toLocaleString("tr-TR")} SKU×dist içinde`
               }
             />
           )}
             {/* md39: "Yoldaki Miktar" KPI kaldırıldı. */}
             {!panelHidden("kpi.stok.devir") && (
             <KpiTile
-              label={cs("kpi.stok.devir", "Devir Hesaplanan")}
+              label={cs("kpi.stok.devir", t(locale, "kpi.stok.devir", "Devir Hesaplanan"))}
               value={snap.totals.turnoverComputableSkuCount.toLocaleString("tr-TR")}
-              sub={`${snap.windowDays}g devir · ${snap.totals.lowConfidenceRatePct.toFixed(1)}% düşük güven`}
+              sub={
+                locale === "en"
+                  ? `${snap.windowDays}d turnover · ${snap.totals.lowConfidenceRatePct.toFixed(1)}% low confidence`
+                  : `${snap.windowDays}g devir · ${snap.totals.lowConfidenceRatePct.toFixed(1)}% düşük güven`
+              }
               tone="accent"
             />
           )}
@@ -140,11 +166,12 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
             <StockoutTable
               key={snap.distFilter?.distId ?? "all"}
               rows={snap.items}
+              locale={locale}
             />
-            <QualityPanel snap={snap} />
+            <QualityPanel snap={snap} locale={locale} />
           </div>
 
-          <BrandRiskTable rows={snap.brandSummary} />
+          <BrandRiskTable rows={snap.brandSummary} locale={locale} />
         </>
       )}
 
@@ -415,24 +442,26 @@ function KpiTile({
   );
 }
 
-function StockoutTable({ rows }: { rows: WietnauerStockSkuRow[] }) {
+function StockoutTable({ rows, locale }: { rows: WietnauerStockSkuRow[]; locale: Locale }) {
   if (panelHidden("panel.stok.stockout")) return null;
   return (
     <section className="stok-panel">
       <div className="stok-panel-head">
         <div>
-          <div className="stok-panel-title">{panelTitle("panel.stok.stockout", "İlk Bitecek SKU'lar")}</div>
+          <div className="stok-panel-title">{panelTitle("panel.stok.stockout", t(locale, "panel.stok.stockout", "İlk Bitecek SKU'lar"))}</div>
           <div className="stok-panel-meta">
-            Risk sırası · kalan gün · tahmini tükenme · {rows.length.toLocaleString("tr-TR")} SKU (tümü, sayfalanmış)
+            {locale === "en"
+              ? `Risk order · days remaining · projected stockout · ${rows.length.toLocaleString("tr-TR")} SKUs (all, paginated)`
+              : `Risk sırası · kalan gün · tahmini tükenme · ${rows.length.toLocaleString("tr-TR")} SKU (tümü, sayfalanmış)`}
           </div>
         </div>
       </div>
-      <StokSkuTable rows={rows} />
+      <StokSkuTable rows={rows} locale={locale} />
     </section>
   );
 }
 
-function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
+function BrandRiskTable({ rows, locale }: { rows: WietnauerStockBrandSummary[]; locale: Locale }) {
   if (panelHidden("panel.stok.brandrisk")) return null;
   // Statik alt-metin yerine gerçek marka özetinden türetilmiş sayılar.
   const totalCriticalPlusRisk = rows.reduce((sum, r) => sum + r.criticalCount + r.riskCount, 0);
@@ -440,9 +469,11 @@ function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
     <section className="stok-panel">
       <div className="stok-panel-head">
         <div>
-          <div className="stok-panel-title">{panelTitle("panel.stok.brandrisk", "Marka Bazında Stok Riski")}</div>
+          <div className="stok-panel-title">{panelTitle("panel.stok.brandrisk", t(locale, "panel.stok.brandrisk", "Marka Bazında Stok Riski"))}</div>
           <div className="stok-panel-meta">
-            {rows.length.toLocaleString("tr-TR")} marka · {totalCriticalPlusRisk.toLocaleString("tr-TR")} kritik+risk SKU
+            {locale === "en"
+              ? `${rows.length.toLocaleString("tr-TR")} brands · ${totalCriticalPlusRisk.toLocaleString("tr-TR")} critical+risk SKUs`
+              : `${rows.length.toLocaleString("tr-TR")} marka · ${totalCriticalPlusRisk.toLocaleString("tr-TR")} kritik+risk SKU`}
           </div>
         </div>
       </div>
@@ -450,15 +481,15 @@ function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
         <table className="stok-table">
           <thead>
             <tr>
-              <th>Marka</th>
-              <th className="num">SKU</th>
-              <th className="num">Kritik</th>
-              <th className="num">Risk</th>
-              <th className="num">İzle</th>
-              <th className="num">Sağlıklı</th>
-              <th className="num">Stok</th>
-              <th className="num">90g Satış</th>
-              <th className="num">Ort. Kalan</th>
+              <th>{t(locale, "col.marka", "Marka")}</th>
+              <th className="num">{t(locale, "col.sku", "SKU")}</th>
+              <th className="num">{t(locale, "col.kritik", "Kritik")}</th>
+              <th className="num">{t(locale, "col.risk", "Risk")}</th>
+              <th className="num">{t(locale, "col.izle", "İzle")}</th>
+              <th className="num">{t(locale, "col.saglikli", "Sağlıklı")}</th>
+              <th className="num">{t(locale, "col.stok", "Stok")}</th>
+              <th className="num">{t(locale, "col.satis90g", "90g Satış")}</th>
+              <th className="num">{t(locale, "col.ort_kalan", "Ort. Kalan")}</th>
             </tr>
           </thead>
           <tbody>
@@ -474,7 +505,7 @@ function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
                 <td className="num">{row.healthyCount.toLocaleString("tr-TR")}</td>
                 <td className="num">{formatQty(row.totalOnHandQty)}</td>
                 <td className="num">{formatQty(row.totalSoldQty90d)}</td>
-                <td className="num">{formatDays(row.avgDaysLeft)}</td>
+                <td className="num">{formatDays(row.avgDaysLeft, locale)}</td>
               </tr>
             ))}
           </tbody>
@@ -484,7 +515,7 @@ function BrandRiskTable({ rows }: { rows: WietnauerStockBrandSummary[] }) {
   );
 }
 
-function QualityPanel({ snap }: { snap: WietnauerStockSnapshot }) {
+function QualityPanel({ snap, locale }: { snap: WietnauerStockSnapshot; locale: Locale }) {
   if (panelHidden("panel.stok.quality")) return null;
   // Statik alt-metin yerine gerçek snapshot sayılarından türetilmiş özet:
   // sinyal taşıyan SKU oranı ve lead time tanımlı SKU oranı.
@@ -495,22 +526,26 @@ function QualityPanel({ snap }: { snap: WietnauerStockSnapshot }) {
     <aside className="stok-panel">
       <div className="stok-panel-head">
         <div>
-          <div className="stok-panel-title">{panelTitle("panel.stok.quality", "Veri Güveni")}</div>
+          <div className="stok-panel-title">{panelTitle("panel.stok.quality", t(locale, "panel.stok.quality", "Veri Güveni"))}</div>
           <div className="stok-panel-meta">
             {total > 0
-              ? `%${signalPct.toFixed(0)} sinyal taşıyan · %${leadTimePct.toFixed(0)} lead time tanımlı (${total.toLocaleString("tr-TR")} SKU)`
-              : "Stok türetimi ve devir hesap kalitesi"}
+              ? locale === "en"
+                ? `%${signalPct.toFixed(0)} with signal · %${leadTimePct.toFixed(0)} lead time configured (${total.toLocaleString("tr-TR")} SKUs)`
+                : `%${signalPct.toFixed(0)} sinyal taşıyan · %${leadTimePct.toFixed(0)} lead time tanımlı (${total.toLocaleString("tr-TR")} SKU)`
+              : locale === "en"
+                ? "Stock derivation and turnover calculation quality"
+                : "Stok türetimi ve devir hesap kalitesi"}
           </div>
         </div>
       </div>
       <div className="quality-grid">
-        <QualityRow label="Stok hareket sinyali olan SKU" value={snap.quality.stockSignalSkuCount} />
-        <QualityRow label="Sıfır stok görünen SKU" value={snap.quality.zeroStockSkuCount} />
-        <QualityRow label="Negatif stok görünen SKU" value={snap.quality.negativeStockSkuCount} />
-        <QualityRow label="Devir için güvenilmez SKU" value={snap.quality.turnoverUnreliableSkuCount} />
-        <QualityRow label="Açık sipariş sinyali olan SKU" value={snap.quality.incomingOrderSkuCount} />
-        <QualityRow label="Lead time tanımlı SKU" value={snap.quality.leadTimeConfiguredSkuCount} />
-        <QualityRow label="90g satış görmeyen SKU" value={snap.totals.noDemandSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.signal", "Stok hareket sinyali olan SKU")} value={snap.quality.stockSignalSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.zero", "Sıfır stok görünen SKU")} value={snap.quality.zeroStockSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.negative", "Negatif stok görünen SKU")} value={snap.quality.negativeStockSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.unreliable", "Devir için güvenilmez SKU")} value={snap.quality.turnoverUnreliableSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.incoming", "Açık sipariş sinyali olan SKU")} value={snap.quality.incomingOrderSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.leadtime", "Lead time tanımlı SKU")} value={snap.quality.leadTimeConfiguredSkuCount} />
+        <QualityRow label={t(locale, "stok.quality.nodemand", "90g satış görmeyen SKU")} value={snap.totals.noDemandSkuCount} />
       </div>
     </aside>
   );
@@ -525,10 +560,11 @@ function QualityRow({ label, value }: { label: string; value: number }) {
   );
 }
 
-function formatDays(days: number | null): string {
+function formatDays(days: number | null, locale: Locale = "tr"): string {
   if (days == null || !Number.isFinite(days)) return "-";
-  if (days < 1) return "<1 gün";
-  return `${days < 10 ? days.toFixed(1) : Math.round(days).toLocaleString("tr-TR")} gün`;
+  const unit = locale === "en" ? "d" : "gün";
+  if (days < 1) return `<1 ${unit}`;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days).toLocaleString("tr-TR")} ${unit}`;
 }
 
 function formatQty(value: number): string {
@@ -538,8 +574,8 @@ function formatQty(value: number): string {
   });
 }
 
-function formatDate(isoDate: string): string {
-  return new Date(`${isoDate}T12:00:00`).toLocaleDateString("tr-TR", {
+function formatDate(isoDate: string, locale: Locale = "tr"): string {
+  return new Date(`${isoDate}T12:00:00`).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
     day: "2-digit",
     month: "short",
   });

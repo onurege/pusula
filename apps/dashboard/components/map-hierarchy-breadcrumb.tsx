@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { ChevronRight, Globe2, Layers, MapPin, Store } from "lucide-react";
 import { useMemo } from "react";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   // URL durumundan gelen filtreler — her biri opsiyonel
@@ -20,6 +21,7 @@ type Props = {
    * navbar'ın V1/V2 sürüm geçişi takılır.
    */
   basePath?: string;
+  locale?: Locale;
 };
 
 /**
@@ -39,6 +41,7 @@ export function MapHierarchyBreadcrumb({
   distributorName,
   customerCount,
   basePath = "/map",
+  locale = "tr",
 }: Props) {
   const levels = useMemo(() => {
     const items: Array<{
@@ -48,7 +51,7 @@ export function MapHierarchyBreadcrumb({
       muted?: boolean;
     }> = [
       {
-        label: "Türkiye",
+        label: translate(locale, "map.breadcrumb.turkey", "Türkiye"),
         icon: <Globe2 size={11} />,
         href: viewMode === "region" || region || sehir || bolge || distKod ? basePath : null,
       },
@@ -56,7 +59,7 @@ export function MapHierarchyBreadcrumb({
 
     if (viewMode === "region" && !region && !sehir && !bolge) {
       items.push({
-        label: "Bölge görünümü",
+        label: translate(locale, "map.breadcrumb.region_view", "Bölge görünümü"),
         icon: <Layers size={11} />,
         href: null,
       });
@@ -80,7 +83,7 @@ export function MapHierarchyBreadcrumb({
       // City view'dayken arada "Şehirler" labeli göster
       if (viewMode === "city" && !sehir) {
         items.push({
-          label: "Şehirler",
+          label: translate(locale, "map.breadcrumb.cities", "Şehirler"),
           icon: <MapPin size={11} />,
           href: null,
         });
@@ -121,7 +124,7 @@ export function MapHierarchyBreadcrumb({
     }
 
     return items;
-  }, [viewMode, region, sehir, bolge, distKod, distributorName, basePath]);
+  }, [viewMode, region, sehir, bolge, distKod, distributorName, basePath, locale]);
 
   return (
     <div className="mhb-wrap">
@@ -147,7 +150,9 @@ export function MapHierarchyBreadcrumb({
       </ol>
       {typeof customerCount === "number" && (
         <span className="mhb-count">
-          {customerCount.toLocaleString("tr-TR")} müşteri
+          {translate(locale, "map.breadcrumb.customer_count", "{count} müşteri", {
+            count: customerCount.toLocaleString(locale === "en" ? "en-US" : "tr-TR"),
+          })}
         </span>
       )}
 

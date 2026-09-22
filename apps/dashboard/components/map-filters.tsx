@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { Filter, Loader2, Search, X } from "lucide-react";
 import type { MapCustomer, MapFacets } from "@/lib/api";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   facets: MapFacets;
@@ -14,6 +15,7 @@ type Props = {
    * V2'den V1'e atlamamak için her drill-down aynı path'e push'lar.
    */
   basePath?: string;
+  locale?: Locale;
 };
 
 export const FLY_TO_EVENT = "enroute:fly-to";
@@ -22,7 +24,7 @@ export type FlyToDetail = {
   customer: MapCustomer;
 };
 
-export function MapFilters({ facets, customers, count, basePath = "/map" }: Props) {
+export function MapFilters({ facets, customers, count, basePath = "/map", locale = "tr" }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
@@ -114,7 +116,7 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted font-semibold">
           <Filter size={11} />
-          Filtreler
+          {translate(locale, "map.filters.title", "Filtreler")}
         </div>
         {hasFilter && (
           <button
@@ -122,13 +124,13 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
             onClick={reset}
             className="inline-flex items-center gap-1 text-[11px] text-muted hover:text-fg transition-colors"
           >
-            <X size={11} /> Temizle
+            <X size={11} /> {translate(locale, "map.filters.clear", "Temizle")}
           </button>
         )}
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Arama</label>
+        <label className={labelCls}>{translate(locale, "map.filters.search", "Arama")}</label>
         <div className="relative">
           <Search
             size={13}
@@ -138,7 +140,7 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
             type="text"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Ünvan, müşteri kodu veya takip kodu…"
+            placeholder={translate(locale, "map.filters.search_placeholder", "Ünvan, müşteri kodu veya takip kodu…")}
             className={inputCls + " pl-8"}
           />
         </div>
@@ -161,9 +163,9 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
                   </div>
                   {(c.musteriKodu || c.takipKodu) && (
                     <div className="text-[10px] text-muted-2 truncate mt-0.5 font-mono">
-                      {c.musteriKodu ? `Kod: ${c.musteriKodu}` : ""}
+                      {c.musteriKodu ? `${translate(locale, "map.filters.code", "Kod")}: ${c.musteriKodu}` : ""}
                       {c.musteriKodu && c.takipKodu ? " · " : ""}
-                      {c.takipKodu ? `Takip: ${c.takipKodu}` : ""}
+                      {c.takipKodu ? `${translate(locale, "map.filters.tracking_code", "Takip")}: ${c.takipKodu}` : ""}
                     </div>
                   )}
                 </button>
@@ -172,19 +174,19 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
           </ul>
         )}
         {q.trim().length >= 2 && hits.length === 0 && (
-          <div className="text-[11px] text-muted italic">Eşleşme yok.</div>
+          <div className="text-[11px] text-muted italic">{translate(locale, "map.filters.no_match", "Eşleşme yok.")}</div>
         )}
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Şehir</label>
+        <label className={labelCls}>{translate(locale, "map.filters.city", "Şehir")}</label>
         <select
           value={sehir}
           onChange={(e) => update({ sehir: e.target.value })}
           disabled={isPending}
           className={inputCls}
         >
-          <option value="">Tüm şehirler</option>
+          <option value="">{translate(locale, "map.filters.all_cities", "Tüm şehirler")}</option>
           {facets.cities.map((c) => (
             <option key={c} value={c}>{c}</option>
           ))}
@@ -192,14 +194,14 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Distribütör</label>
+        <label className={labelCls}>{translate(locale, "map.filters.distributor", "Distribütör")}</label>
         <select
           value={distKod}
           onChange={(e) => update({ distKod: e.target.value })}
           disabled={isPending}
           className={inputCls}
         >
-          <option value="">Tüm distribütörler</option>
+          <option value="">{translate(locale, "map.filters.all_distributors", "Tüm distribütörler")}</option>
           {facets.distributors.map((d) => (
             <option key={d.lngKod} value={String(d.lngKod)}>
               {d.ad}
@@ -209,21 +211,23 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Satış aktivitesi ({activityDays} gün)</label>
+        <label className={labelCls}>
+          {translate(locale, "map.filters.sales_activity", "Satış aktivitesi ({days} gün)", { days: activityDays })}
+        </label>
         <select
           value={salesFilter}
           onChange={(e) => update({ salesFilter: e.target.value })}
           disabled={isPending}
           className={inputCls}
         >
-          <option value="">Tümü</option>
-          <option value="with">Sadece satışı olanlar</option>
-          <option value="without">Sadece sessiz müşteriler</option>
+          <option value="">{translate(locale, "komuta.all", "Tümü")}</option>
+          <option value="with">{translate(locale, "map.filters.with_sales", "Sadece satışı olanlar")}</option>
+          <option value="without">{translate(locale, "map.filters.without_sales", "Sadece sessiz müşteriler")}</option>
         </select>
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Risk seviyesi</label>
+        <label className={labelCls}>{translate(locale, "map.filters.risk_level", "Risk seviyesi")}</label>
         <select
           value={tier}
           // tier seçilince eski `riskTier` URL param'ı da temizlensin —
@@ -234,28 +238,28 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
           disabled={isPending}
           className={inputCls}
         >
-          <option value="">Tümü</option>
-          <option value="critical">Kritik (75-100)</option>
-          <option value="risk">Riskli (55-74)</option>
-          <option value="watch">İzlemede (30-54)</option>
-          <option value="healthy">Sağlıklı (0-29)</option>
-          <option value="unknown">Yetersiz veri</option>
+          <option value="">{translate(locale, "komuta.all", "Tümü")}</option>
+          <option value="critical">{translate(locale, "map.risk.critical", "Kritik")} (75-100)</option>
+          <option value="risk">{translate(locale, "map.risk.risky", "Riskli")} (55-74)</option>
+          <option value="watch">{translate(locale, "map.risk.watch", "İzlemede")} (30-54)</option>
+          <option value="healthy">{translate(locale, "map.risk.healthy", "Sağlıklı")} (0-29)</option>
+          <option value="unknown">{translate(locale, "map.filters.insufficient_data", "Yetersiz veri")}</option>
         </select>
       </div>
 
       <div className="space-y-1.5">
-        <label className={labelCls}>Ziyaretsiz süre</label>
+        <label className={labelCls}>{translate(locale, "map.filters.days_since_visit", "Ziyaretsiz süre")}</label>
         <select
           value={minDaysSinceVisit}
           onChange={(e) => update({ minDaysSinceVisit: e.target.value })}
           disabled={isPending}
           className={inputCls}
         >
-          <option value="">Süre fark etmez</option>
-          <option value="30">30+ gündür ziyaretsiz</option>
-          <option value="60">60+ gündür ziyaretsiz</option>
-          <option value="90">90+ gündür ziyaretsiz</option>
-          <option value="180">180+ gündür ziyaretsiz</option>
+          <option value="">{translate(locale, "map.filters.duration_any", "Süre fark etmez")}</option>
+          <option value="30">{translate(locale, "map.filters.days_since_visit_n", "{n}+ gündür ziyaretsiz", { n: 30 })}</option>
+          <option value="60">{translate(locale, "map.filters.days_since_visit_n", "{n}+ gündür ziyaretsiz", { n: 60 })}</option>
+          <option value="90">{translate(locale, "map.filters.days_since_visit_n", "{n}+ gündür ziyaretsiz", { n: 90 })}</option>
+          <option value="180">{translate(locale, "map.filters.days_since_visit_n", "{n}+ gündür ziyaretsiz", { n: 180 })}</option>
         </select>
       </div>
 
@@ -263,20 +267,22 @@ export function MapFilters({ facets, customers, count, basePath = "/map" }: Prop
         {isPending ? (
           <span className="flex items-center gap-2 text-muted">
             <Loader2 size={12} className="animate-spin text-accent" />
-            Yükleniyor…
+            {translate(locale, "map.filters.loading", "Yükleniyor…")}
           </span>
         ) : (
           <div className="space-y-1">
             <div className="flex items-baseline justify-between">
-              <span className="text-muted">Görüntülenen</span>
+              <span className="text-muted">{translate(locale, "map.filters.shown", "Görüntülenen")}</span>
               <span className="text-fg font-semibold tabular-nums">
-                {count.toLocaleString("tr-TR")}
+                {count.toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
               </span>
             </div>
             <div className="flex items-baseline justify-between">
-              <span className="text-muted">Ciro (son {activityDays}g)</span>
+              <span className="text-muted">
+                {translate(locale, "map.filters.revenue_last_n", "Ciro (son {days}g)", { days: activityDays })}
+              </span>
               <span className="text-fg font-semibold tabular-nums">
-                {Math.round(totalActivityCiro).toLocaleString("tr-TR")} ₺
+                {Math.round(totalActivityCiro).toLocaleString(locale === "en" ? "en-US" : "tr-TR")} ₺
               </span>
             </div>
           </div>

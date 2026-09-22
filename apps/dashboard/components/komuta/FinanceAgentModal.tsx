@@ -21,6 +21,7 @@ import {
   type FinanceFactor,
 } from "@/lib/api";
 import { addAction as addWeeklyAction } from "@/components/weekly-actions/store";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   region: string | null;
@@ -29,6 +30,7 @@ type Props = {
    *  kalır; manuel picker akışında undefined gelir. */
   productGroup?: string;
   onClose: () => void;
+  locale?: Locale;
 };
 
 /**
@@ -37,7 +39,7 @@ type Props = {
  * Açıldığında /api/komuta/finance/:region çağırır; Gemini'den dönen
  * markdown'ı + yapılandırılmış kırılım tablolarını gösterir.
  */
-export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
+export function FinanceAgentModal({ region, productGroup, onClose, locale = "tr" }: Props) {
   const [data, setData] = useState<FinanceAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,11 +79,11 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
       })
       .catch((e: unknown) => {
         if (mountedRef.current) {
-          setError(e instanceof Error ? e.message : "Bilinmeyen hata.");
+          setError(e instanceof Error ? e.message : translate(locale, "komuta.fa.unknown_error", "Bilinmeyen hata."));
           setLoading(false);
         }
       });
-  }, [region, productGroup, refreshNonce]);
+  }, [region, productGroup, refreshNonce, locale]);
 
   // ESC ile kapatma
   useEffect(() => {
@@ -97,7 +99,8 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
   if (typeof document === "undefined") return null;
 
   const fmt = (n: number) => {
-    if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} Mr ₺`;
+    const suffixBillion = locale === "en" ? "Bn" : "Mr";
+    if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} ${suffixBillion} ₺`;
     if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} M ₺`;
     if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)} K ₺`;
     return `${n.toFixed(0)} ₺`;
@@ -122,13 +125,18 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
 
   const handleAddToWeekly = () => {
     if (!region || addedToWeekly) return;
-    const text = `${region} bölgesindeki finans anomalisi için kök neden analizi tamamlandı; riskli müşteriler haritada incelensin.`;
+    const text = translate(
+      locale,
+      "komuta.fa.weekly_action_text",
+      "{region} bölgesindeki finans anomalisi için kök neden analizi tamamlandı; riskli müşteriler haritada incelensin.",
+      { region },
+    );
     addWeeklyAction({
       text,
       source: "finance",
       region,
       ...(productGroup ? { productGroup } : {}),
-      reason: "Finans Agentı kök neden analizi",
+      reason: translate(locale, "komuta.fa.weekly_action_reason", "Finans Agentı kök neden analizi"),
     });
     setAddedToWeekly(true);
   };
@@ -138,11 +146,11 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
       <div className="fa-modal" onClick={(e) => e.stopPropagation()}>
         <header className="fa-header">
           <div>
-            <div className="fa-eyebrow">💼 Finans Agentı · Bölge Analizi</div>
+            <div className="fa-eyebrow">💼 {translate(locale, "komuta.fa.eyebrow", "Finans Agentı · Bölge Analizi")}</div>
             <h2 className="fa-title">{region}</h2>
             {productGroup && (
               <div className="fa-subcontext">
-                Ürün grubu: <strong>{productGroup}</strong>
+                {translate(locale, "komuta.fa.product_group_label", "Ürün grubu")}: <strong>{productGroup}</strong>
               </div>
             )}
           </div>
@@ -152,9 +160,9 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
               className="fa-btn-ghost"
               onClick={() => setRefreshNonce((n) => n + 1)}
               disabled={loading}
-              title="Yeniden analiz et"
+              title={translate(locale, "komuta.fa.reanalyze_hint", "Yeniden analiz et")}
             >
-              ↻ Yenile
+              ↻ {translate(locale, "komuta.fa.refresh", "Yenile")}
             </button>
             <button type="button" className="fa-btn-close" onClick={onClose}>
               ×
@@ -167,15 +175,18 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
             <div className="fa-loading">
               <div className="fa-spinner" />
               <div>
-                Finans agentı çalışıyor — bölge verisi decompose ediliyor, ardından
-                Gemini ile yorum üretilecek...
+                {translate(
+                  locale,
+                  "komuta.fa.loading",
+                  "Finans agentı çalışıyor — bölge verisi decompose ediliyor, ardından Gemini ile yorum üretilecek...",
+                )}
               </div>
             </div>
           )}
 
           {error && (
             <div className="fa-error">
-              <strong>Analiz alınamadı:</strong> {error}
+              <strong>{translate(locale, "komuta.fa.error_title", "Analiz alınamadı:")}</strong> {error}
             </div>
           )}
 
@@ -187,23 +198,27 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                 region={region}
                 fmt={fmt}
                 pct={pct}
+                locale={locale}
               />
 
               {/* Slim KPI strip — 4 tile (eski 6'dan indirildi).
                   Story zaten hero'da; burada destekleyici rakamlar. */}
               <div className="fa-kpi-row fa-kpi-row-slim">
                 <div className="fa-kpi">
-                  <div className="fa-kpi-label">Son 30g{productGroup ? ` · ${productGroup}` : ""}</div>
+                  <div className="fa-kpi-label">
+                    {translate(locale, "komuta.fa.kpi.last30", "Son 30g")}
+                    {productGroup ? ` · ${productGroup}` : ""}
+                  </div>
                   <div className="fa-kpi-val">{fmt(data.facts.buDonem)}</div>
-                  <div className="fa-kpi-base">net ciro</div>
+                  <div className="fa-kpi-base">{translate(locale, "komuta.fa.kpi.net_revenue", "net ciro")}</div>
                 </div>
                 <div className="fa-kpi">
-                  <div className="fa-kpi-label">Geçen yıl 30g</div>
+                  <div className="fa-kpi-label">{translate(locale, "komuta.fa.kpi.last_year_30", "Geçen yıl 30g")}</div>
                   <div className="fa-kpi-val muted">{fmt(data.facts.gecenYil)}</div>
-                  <div className="fa-kpi-base">aynı pencere</div>
+                  <div className="fa-kpi-base">{translate(locale, "komuta.fa.kpi.same_window", "aynı pencere")}</div>
                 </div>
                 <div className="fa-kpi">
-                  <div className="fa-kpi-label">Aktif müşteri</div>
+                  <div className="fa-kpi-label">{translate(locale, "komuta.fa.kpi.active_customers", "Aktif müşteri")}</div>
                   <div className="fa-kpi-val">
                     {data.facts.customers.aktifBu}
                     <span className="fa-kpi-sub">
@@ -211,43 +226,60 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                       / {data.facts.customers.aktifGecen}
                     </span>
                   </div>
-                  <div className="fa-kpi-base">bu / geçen yıl</div>
+                  <div className="fa-kpi-base">{translate(locale, "komuta.fa.kpi.this_vs_last_year", "bu / geçen yıl")}</div>
                 </div>
                 <div className="fa-kpi">
-                  <div className="fa-kpi-label">Kayıp müşteri</div>
+                  <div className="fa-kpi-label">{translate(locale, "komuta.fa.kpi.lost_customers", "Kayıp müşteri")}</div>
                   <div className="fa-kpi-val neg">
                     {data.facts.customers.kaybedilen}
                   </div>
-                  <div className="fa-kpi-base">geçen yıl alıp bu yıl almayan</div>
+                  <div className="fa-kpi-base">
+                    {translate(locale, "komuta.fa.kpi.lost_customers_base", "geçen yıl alıp bu yıl almayan")}
+                  </div>
                 </div>
               </div>
 
               {/* Decomposition — 3 grafik (bar chart bu vs geçen yıl) */}
               <div className="fa-charts">
                 <FactorBars
-                  title="Distribütör Kırılımı"
-                  subtitle="Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺"
+                  title={translate(locale, "komuta.fa.chart.dist_title", "Distribütör Kırılımı")}
+                  subtitle={translate(
+                    locale,
+                    "komuta.fa.chart.subtitle",
+                    "Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺",
+                  )}
                   factors={data.facts.distFactors.slice(0, 6)}
                   fmt={fmt}
                   pct={pct}
+                  locale={locale}
                 />
                 <FactorBars
-                  title="Müşteri Grubu Kırılımı"
-                  subtitle="Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺"
+                  title={translate(locale, "komuta.fa.chart.channel_title", "Müşteri Grubu Kırılımı")}
+                  subtitle={translate(
+                    locale,
+                    "komuta.fa.chart.subtitle",
+                    "Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺",
+                  )}
                   factors={data.facts.channelFactors.slice(0, 6)}
                   fmt={fmt}
                   pct={pct}
+                  locale={locale}
                 />
                 <FactorBars
                   title={
                     productGroup
-                      ? `SKU Kırılımı (${productGroup})`
-                      : "Ürün Grubu Kırılımı"
+                      ? translate(locale, "komuta.fa.chart.sku_title", "SKU Kırılımı ({group})", { group: productGroup })
+                      : translate(locale, "komuta.fa.chart.product_group_title", "Ürün Grubu Kırılımı")
                   }
-                  subtitle="Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺"
+                  subtitle={translate(
+                    locale,
+                    "komuta.fa.chart.subtitle",
+                    "Son 30g (yeşil büyüyen · kırmızı düşen) vs Geçen yıl aynı 30g (gri) · ciro ₺",
+                  )}
                   factors={data.facts.productFactors.slice(0, 6)}
                   fmt={fmt}
                   pct={pct}
+                  locale={locale}
                 />
               </div>
 
@@ -255,9 +287,9 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                   Grafik bilgisi yeterli; isteyen detaylı yorumu açar. */}
               <details className="fa-ai-details">
                 <summary className="fa-ai-summary">
-                  💼 Gemini detaylı analiz
+                  💼 {translate(locale, "komuta.fa.ai_details_summary", "Gemini detaylı analiz")}
                   <span className="fa-ai-summary-hint">
-                    finans diliyle özet / kök neden / aksiyon
+                    {translate(locale, "komuta.fa.ai_details_hint", "finans diliyle özet / kök neden / aksiyon")}
                   </span>
                 </summary>
                 <div className="fa-ai-content">
@@ -274,7 +306,7 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                   href={mapHref}
                   className="flex-1 min-w-[240px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg text-[12.5px] font-semibold text-white no-underline shadow-md shadow-accent/25 bg-gradient-to-br from-accent to-accent-hover hover:from-[#818cf8] hover:to-[#4338ca] transition-colors"
                 >
-                  🗺️ Haritada riskli müşterileri göster
+                  🗺️ {translate(locale, "komuta.fa.map_cta", "Haritada riskli müşterileri göster")}
                 </Link>
                 <button
                   type="button"
@@ -282,8 +314,8 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                   disabled={addedToWeekly}
                   aria-label={
                     addedToWeekly
-                      ? "Bu analiz haftalık aksiyon listesine eklendi"
-                      : "Bu analizi haftalık aksiyon listesine ekle"
+                      ? translate(locale, "komuta.fa.added_aria", "Bu analiz haftalık aksiyon listesine eklendi")
+                      : translate(locale, "komuta.fa.add_aria", "Bu analizi haftalık aksiyon listesine ekle")
                   }
                   className={
                     "flex-1 min-w-[240px] inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg text-[12.5px] font-semibold border transition-colors " +
@@ -292,12 +324,15 @@ export function FinanceAgentModal({ region, productGroup, onClose }: Props) {
                       : "bg-surface text-accent border-accent/40 hover:bg-accent-soft")
                   }
                 >
-                  {addedToWeekly ? "✓ Eklendi" : "📋 Aksiyona ekle"}
+                  {addedToWeekly
+                    ? translate(locale, "komuta.fa.added_label", "✓ Eklendi")
+                    : translate(locale, "komuta.fa.add_label", "📋 Aksiyona ekle")}
                 </button>
               </div>
 
               <div className="fa-footer">
-                Üretildi: {new Date(data.generatedAt).toLocaleString("tr-TR")}
+                {translate(locale, "komuta.fa.generated_at", "Üretildi")}:{" "}
+                {new Date(data.generatedAt).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
               </div>
             </>
           )}
@@ -749,19 +784,21 @@ function FactorBars({
   factors,
   fmt,
   pct,
+  locale = "tr",
 }: {
   title: string;
   subtitle?: string;
   factors: FinanceFactor[];
   fmt: (n: number) => string;
   pct: (n: number | null) => string;
+  locale?: Locale;
 }) {
   if (factors.length === 0) {
     return (
       <div className="fb-card">
         <div className="fb-title">{title}</div>
         {subtitle && <div className="fb-subtitle">{subtitle}</div>}
-        <div className="fb-empty">Veri yok</div>
+        <div className="fb-empty">{translate(locale, "komuta.fa.no_data", "Veri yok")}</div>
         <style jsx>{factorBarsCss}</style>
       </div>
     );
@@ -834,7 +871,10 @@ function FactorBars({
               }}
               formatter={(value, name) => {
                 const v = Number(value);
-                const label = name === "bu" ? "Son 30g" : "Geçen yıl 30g";
+                const label =
+                  name === "bu"
+                    ? translate(locale, "komuta.fa.kpi.last30", "Son 30g")
+                    : translate(locale, "komuta.fa.chart.last_year_30", "Geçen yıl 30g");
                 return [fmt(v), label];
               }}
               labelFormatter={(label, payload) => {
@@ -1135,13 +1175,27 @@ function FinanceSection({ heading, body }: { heading: string; body: string }) {
   );
 }
 
+/**
+ * Bölüm başlığından ikon seçer. Gemini yanıtı locale=tr'de Türkçe, locale=en'de
+ * İngilizce dönebilir (ayrı bir backend workstream Gemini prompt'unu locale'e
+ * göre değiştiriyor) — bu yüzden anahtar kelime eşleşmesi HER İKİ dilde de
+ * tolerant olmalı. Prompt'un kendisine burada dokunulmuyor, sadece bu
+ * heuristic parser genişletiliyor.
+ */
 function sectionIcon(heading: string): string {
   const h = heading.toLocaleLowerCase("tr");
-  if (h.includes("özet") || h.includes("ozet")) return "📊";
-  if (h.includes("kök") || h.includes("kok") || h.includes("neden")) return "🔍";
-  if (h.includes("aksiyon") || h.includes("öneri") || h.includes("oneri"))
+  if (h.includes("özet") || h.includes("ozet") || h.includes("summary")) return "📊";
+  if (h.includes("kök") || h.includes("kok") || h.includes("neden") || h.includes("root") || h.includes("cause"))
+    return "🔍";
+  if (
+    h.includes("aksiyon") ||
+    h.includes("öneri") ||
+    h.includes("oneri") ||
+    h.includes("action") ||
+    h.includes("recommendation")
+  )
     return "🎯";
-  if (h.includes("uyarı") || h.includes("uyari") || h.includes("risk"))
+  if (h.includes("uyarı") || h.includes("uyari") || h.includes("risk") || h.includes("warning"))
     return "⚠️";
   return "·";
 }
@@ -1189,11 +1243,13 @@ function HeroSentence({
   region,
   fmt,
   pct,
+  locale = "tr",
 }: {
   facts: FinanceFacts;
   region: string;
   fmt: (n: number) => string;
   pct: (n: number | null) => string;
+  locale?: Locale;
 }) {
   const isNeg = facts.delta < 0;
   const isFlat = Math.abs(facts.delta) < 1000 || Math.abs(facts.yoyPct ?? 0) < 1;
@@ -1205,16 +1261,18 @@ function HeroSentence({
   // En büyük etkiyi bul — distFactors / channelFactors / productFactors'ın
   // hepsinden mutlak delta'sı en büyük olan
   type Driver = { kind: string; ad: string; delta: number; yoyPct: number | null };
-  const productKind = facts.productGroup ? "SKU" : "ürün grubu";
+  const productKind = facts.productGroup
+    ? "SKU"
+    : translate(locale, "komuta.fa.kind.product_group", "ürün grubu");
   const allDrivers: Driver[] = [
     ...facts.distFactors.map((f) => ({
-      kind: "distribütör",
+      kind: translate(locale, "komuta.fa.kind.distributor", "distribütör"),
       ad: f.ad,
       delta: f.delta,
       yoyPct: f.yoyPct,
     })),
     ...facts.channelFactors.map((f) => ({
-      kind: "müşteri grubu",
+      kind: translate(locale, "komuta.fa.kind.customer_group", "müşteri grubu"),
       ad: f.ad,
       delta: f.delta,
       yoyPct: f.yoyPct,
@@ -1230,10 +1288,16 @@ function HeroSentence({
   const sameDirection = allDrivers
     .filter((d) => Math.abs(d.delta) > 0 && (isNeg ? d.delta < 0 : d.delta > 0))
     .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
-  const trendWord = isFlat ? "yatay seyretti" : isNeg ? "düştü" : "büyüdü";
+  const trendWord = isFlat
+    ? translate(locale, "komuta.fa.trend.flat", "yatay seyretti")
+    : isNeg
+      ? translate(locale, "komuta.fa.trend.down", "düştü")
+      : translate(locale, "komuta.fa.trend.up", "büyüdü");
   const scopeText = facts.productGroup
-    ? `bölgesinde ${facts.productGroup} ürün grubu cirosu`
-    : `bölgesi cirosu`;
+    ? translate(locale, "komuta.fa.scope.with_product", " bölgesinde {group} ürün grubu cirosu", {
+        group: facts.productGroup,
+      })
+    : translate(locale, "komuta.fa.scope.plain", " bölgesi cirosu");
 
   return (
     <div
@@ -1268,8 +1332,13 @@ function HeroSentence({
           color: "var(--color-fg)",
         }}
       >
-        <strong>{region}</strong> {scopeText}, son 30 günde geçen yıl aynı 30
-        güne göre{" "}
+        <strong>{region}</strong>
+        {scopeText}
+        {locale === "en" ? (
+          <> over the last 30 days, compared to the same 30 days last year,{" "}</>
+        ) : (
+          <>, son 30 günde geçen yıl aynı 30 güne göre{" "}</>
+        )}
         <strong style={{ color, fontVariantNumeric: "tabular-nums" }}>
           {pct(facts.yoyPct)}
         </strong>{" "}
@@ -1281,14 +1350,24 @@ function HeroSentence({
             fontWeight: 500,
           }}
         >
-          ({facts.delta >= 0 ? "+" : ""}
-          {fmt(facts.delta)} mutlak — {fmt(facts.buDonem)} vs{" "}
-          {fmt(facts.gecenYil)})
+          {locale === "en" ? (
+            <>
+              ({facts.delta >= 0 ? "+" : ""}
+              {fmt(facts.delta)} absolute — {fmt(facts.buDonem)} vs{" "}
+              {fmt(facts.gecenYil)})
+            </>
+          ) : (
+            <>
+              ({facts.delta >= 0 ? "+" : ""}
+              {fmt(facts.delta)} mutlak — {fmt(facts.buDonem)} vs{" "}
+              {fmt(facts.gecenYil)})
+            </>
+          )}
         </span>
         {sameDirection ? (
           <>
             {". "}
-            Ana etken{" "}
+            {locale === "en" ? "Main driver: " : "Ana etken "}
             <strong>{sameDirection.ad}</strong> {sameDirection.kind}{" "}
             <span
               style={{
@@ -1304,13 +1383,13 @@ function HeroSentence({
               style={{ color: "var(--color-muted)", fontWeight: 500 }}
             >
               {" "}
-              · detaylar aşağıdaki grafiklerde.
+              {translate(locale, "komuta.fa.details_below", "· detaylar aşağıdaki grafiklerde.")}
             </span>
           </>
         ) : (
           <span style={{ color: "var(--color-muted)", fontWeight: 500 }}>
             {" "}
-            · detaylar aşağıdaki grafiklerde.
+            {translate(locale, "komuta.fa.details_below", "· detaylar aşağıdaki grafiklerde.")}
           </span>
         )}
       </div>

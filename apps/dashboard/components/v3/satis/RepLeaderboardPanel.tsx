@@ -1,6 +1,7 @@
 import type { SatisRepRow } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
 import { DeltaBadge } from "./DeltaBadge";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * Satış Temsilcisi Leaderboard — Top 20 temsilci son 30g ciro ile
@@ -12,17 +13,24 @@ import { panelTitle, panelHidden } from "@/lib/content";
 export function RepLeaderboardPanel({
   rows,
   rangeLabel = "Son 30g",
+  locale = "tr",
 }: {
   rows: SatisRepRow[];
   /** md21 — seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
   rangeLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.satis.rep")) return null;
+  const title = panelTitle("panel.satis.rep", t(locale, "panel.satis.rep", "Satış Temsilcisi Leaderboard"));
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">{panelTitle("panel.satis.rep", "Satış Temsilcisi Leaderboard")}</div>
-        <p>{rangeLabel} içinde temsilci atamalı fatura bulunamadı.</p>
+        <div className="v3-panel-title">{title}</div>
+        <p>
+          {locale === "en"
+            ? `No rep-assigned invoices found in ${rangeLabel}.`
+            : `${rangeLabel} içinde temsilci atamalı fatura bulunamadı.`}
+        </p>
       </div>
     );
   }
@@ -31,9 +39,11 @@ export function RepLeaderboardPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.satis.rep", "Satış Temsilcisi Leaderboard")}</div>
+          <div className="v3-panel-title">{title}</div>
           <div className="v3-panel-sub">
-            {rangeLabel} net ciro · Top {rows.length} · vs önceki dönem delta
+            {locale === "en"
+              ? `${rangeLabel} net revenue · Top ${rows.length} · delta vs. previous period`
+              : `${rangeLabel} net ciro · Top ${rows.length} · vs önceki dönem delta`}
           </div>
         </div>
       </div>
@@ -43,13 +53,13 @@ export function RepLeaderboardPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Temsilci</th>
-              <th>Distribütör</th>
-              <th>Bölge</th>
-              <th className="num">Ciro</th>
-              <th className="num">Müşteri</th>
-              <th className="num">Ort. Sepet</th>
-              <th className="num">Δ</th>
+              <th>{t(locale, "col.temsilci", "Temsilci")}</th>
+              <th>{t(locale, "col.distributor", "Distribütör")}</th>
+              <th>{t(locale, "col.bolge", "Bölge")}</th>
+              <th className="num">{t(locale, "col.ciro", "Ciro")}</th>
+              <th className="num">{t(locale, "col.musteri", "Müşteri")}</th>
+              <th className="num">{t(locale, "col.ort_sepet", "Ort. Sepet")}</th>
+              <th className="num">{t(locale, "col.delta", "Δ")}</th>
             </tr>
           </thead>
           <tbody>
@@ -67,7 +77,7 @@ export function RepLeaderboardPanel({
                 </td>
                 <td className="num">₺{formatCompact(r.ortSepet)}</td>
                 <td className="num">
-                  <DeltaBadge pct={r.deltaPct} hasPrev={r.prevCiro > 0} />
+                  <DeltaBadge pct={r.deltaPct} hasPrev={r.prevCiro > 0} locale={locale} />
                 </td>
               </tr>
             ))}

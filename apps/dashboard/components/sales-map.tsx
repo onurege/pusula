@@ -13,13 +13,14 @@ import type {
 } from "@/lib/api";
 import { trendColor } from "@/components/komuta/trend-colors";
 import { CustomerModal } from "./customer-modal";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 /**
  * GeoJSON property'sinden composite Risk Score'u geri kurar. MapLibre
  * feature properties string|number|null tuttuğu için tam objeyi JSON-string
  * olarak serialize edip burada parse ediyoruz.
  */
-function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRiskScore {
+function parseRiskScoreJson(raw: string | number | null | undefined, locale: Locale = "tr"): CustomerRiskScore {
   const fallback: CustomerRiskScore = {
     score: null,
     tier: "unknown",
@@ -29,7 +30,7 @@ function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRi
       payment: null,
       engagement: null,
     },
-    reasons: ["Risk skoru bu müşteri için henüz yüklenmedi."],
+    reasons: [translate(locale, "map.risk_score_not_loaded", "Risk skoru bu müşteri için henüz yüklenmedi.")],
   };
   if (typeof raw !== "string" || raw.length === 0) return fallback;
   try {
@@ -105,6 +106,7 @@ type Props = {
    *  (son 30g vs geçen yıl aynı 30g). Müşteri-bazlı agregasyon değil. */
   cities?: MapCityYoY[];
   viewMode?: "customer" | "region" | "city";
+  locale?: Locale;
 };
 
 export default function SalesMap({
@@ -112,6 +114,7 @@ export default function SalesMap({
   regions = [],
   cities = [],
   viewMode = "customer",
+  locale = "tr",
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
@@ -551,7 +554,7 @@ export default function SalesMap({
         activityDays: Number(p.activityDays ?? 30),
         activityCiro: Number(p.activityCiro ?? p.ciro30 ?? 0),
         riskTier: ((p.riskTier as string) || "low") as MapCustomer["riskTier"],
-        riskScore: parseRiskScoreJson(p.riskScoreJson),
+        riskScore: parseRiskScoreJson(p.riskScoreJson, locale),
       };
       setSelected(c);
     });
@@ -607,7 +610,7 @@ export default function SalesMap({
         // map kaldırılmış olabilir — yut
       }
     };
-  }, [geojson, viewMode, mapReady]);
+  }, [geojson, viewMode, mapReady, locale]);
 
   // Region katmanı — viewMode === "region" iken TR il polygon'larını fill
   // ile renkler. Aynı klasik bölgenin il'leri aynı renge boyanır →
@@ -1236,15 +1239,15 @@ export default function SalesMap({
         const hd = props.k_hasData ?? 0;
         let sub: string;
         if (hd === 0) {
-          sub = "bayisiz";
+          sub = translate(locale, "map.province.no_distributor", "bayisiz");
         } else if (hd === 1) {
           // Müşteri var, 30g satış yok → eğer önceki yıl satış varsa -%100
           sub = props.k_ciroPrev && props.k_ciroPrev > 0
-            ? "satış durdu"
-            : "satış yok";
+            ? translate(locale, "map.province.sales_stopped", "satış durdu")
+            : translate(locale, "map.province.no_sales", "satış yok");
         } else {
           sub = dp == null
-            ? "yeni satış" // ciro > 0 ama ciroPrev = 0 → yeni başlamış
+            ? translate(locale, "map.province.new_sales", "yeni satış") // ciro > 0 ama ciroPrev = 0 → yeni başlamış
             : `${dp >= 0 ? "+" : ""}%${dp.toFixed(0)} YoY`;
         }
         centroidFeatures.push({
@@ -1402,7 +1405,7 @@ export default function SalesMap({
       }
     };
     // citiesKey city dataları değiştiğinde effect'i yeniden tetikler.
-  }, [viewMode, mapReady, regionFilter, citiesKey]);
+  }, [viewMode, mapReady, regionFilter, citiesKey, locale]);
 
   return (
     <>
@@ -1411,7 +1414,7 @@ export default function SalesMap({
       <div ref={containerRef} className="w-full h-full" />
 
       {selected && (
-        <CustomerModal customer={selected} onClose={() => setSelected(null)} />
+        <CustomerModal customer={selected} onClose={() => setSelected(null)} locale={locale} />
       )}
     </>
   );

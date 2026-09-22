@@ -8,6 +8,7 @@ import { downloadCsv } from "@/lib/csv";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CustomerModal } from "@/components/customer-modal";
+import { useLocale } from "@/components/locale/LocaleProvider";
 
 type SortKey = "default" | "unvan" | "sehir" | "visit" | "sale" | "ciro" | "risk";
 type SortDir = "asc" | "desc";
@@ -35,6 +36,7 @@ export function VisitGapList({
 }) {
   const router = useRouter();
   const params = useSearchParams();
+  const { locale } = useLocale();
   const [q, setQ] = useState("");
   const [city, setCity] = useState("");
   const [selected, setSelected] = useState<MapCustomer | null>(null);
@@ -310,7 +312,7 @@ export function VisitGapList({
       </div>
 
       {selected && (
-        <CustomerModal customer={selected} onClose={() => setSelected(null)} />
+        <CustomerModal customer={selected} onClose={() => setSelected(null)} locale={locale} />
       )}
     </div>
   );

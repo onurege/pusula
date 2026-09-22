@@ -1,3 +1,5 @@
+import { t, type Locale } from "@/lib/i18n";
+
 /**
  * Yüzde değişim rozeti — pozitif yeşil, negatif kırmızı, nötr gri.
  *
@@ -8,12 +10,14 @@
 export function DeltaBadge({
   pct,
   hasPrev,
+  locale = "tr",
 }: {
   pct: number;
   hasPrev: boolean;
+  locale?: Locale;
 }) {
   if (!hasPrev) {
-    return <span className="delta-badge new">yeni</span>;
+    return <span className="delta-badge new">{t(locale, "delta.new", "yeni")}</span>;
   }
   const isPos = pct > 0;
   const isNeg = pct < 0;
@@ -25,7 +29,7 @@ export function DeltaBadge({
     <span
       className="delta-badge"
       style={{ color }}
-      title={`Önceki 30 güne göre %${pct.toFixed(2)} değişim`}
+      title={t(locale, "delta.title", "Önceki 30 güne göre %{pct} değişim", { pct: pct.toFixed(2) })}
     >
       {text}
       <style

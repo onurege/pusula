@@ -20,19 +20,23 @@ type SegmentRow = {
  * Yatay bar — bar uzunluğu iskonto oranı %, renk tier.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function IskontoSegmentPanel({
   segments,
   title,
-  dimensionLabel = "Müşteri grup kırılımı",
+  dimensionLabel,
+  locale = "tr",
 }: {
   segments: SegmentRow[];
   /** Panel başlığı — verilmezse content-map/"Segment Kırılımı". */
   title?: string;
   /** Alt-metindeki boyut adı (ör. "Müşteri ek grup"). */
   dimensionLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.iskonto.segment")) return null;
+  const dimLabel = dimensionLabel ?? (locale === "en" ? "Customer group breakdown" : "Müşteri grup kırılımı");
   // Bar referansı: maksimum oran (en az 25%) — görsel kıyas için
   const maxOran = Math.max(25, ...segments.map((s) => s.iskontoOraniPct));
 
@@ -56,13 +60,17 @@ export function IskontoSegmentPanel({
     <div className="seg-panel">
       <div className="seg-head">
         <div>
-          <div className="seg-title">{title ?? panelTitle("panel.iskonto.segment", "Segment Kırılımı")}</div>
+          <div className="seg-title">{title ?? panelTitle("panel.iskonto.segment", t(locale, "panel.iskonto.segment", "Segment Kırılımı"))}</div>
           <div className="seg-sub">
-            Son 30g · {dimensionLabel} × ortalama iskonto oranı
-            {toplamMusteri > 0 && <> · {toplamMusteri.toLocaleString("tr-TR")} müşteri</>}
+            {locale === "en" ? (
+              <>Last 30d · {dimLabel} × average discount rate</>
+            ) : (
+              <>Son 30g · {dimLabel} × ortalama iskonto oranı</>
+            )}
+            {toplamMusteri > 0 && <> · {toplamMusteri.toLocaleString("tr-TR")} {locale === "en" ? "customers" : "müşteri"}</>}
             {enYuksekOranSeg && (
               <>
-                {" · en yüksek oran: "}
+                {locale === "en" ? " · highest rate: " : " · en yüksek oran: "}
                 <span style={{ color: enYuksekOranColor, fontWeight: 600 }}>
                   {enYuksekOranSeg.segment} (%{enYuksekOranSeg.iskontoOraniPct.toFixed(1)})
                 </span>
@@ -86,8 +94,9 @@ export function IskontoSegmentPanel({
               <div className="seg-label" title={s.segment}>
                 <span className="seg-name">{s.segment}</span>
                 <span className="seg-meta">
-                  {s.musteriSayi.toLocaleString("tr-TR")} müşteri ·{" "}
-                  {s.faturaSayisi.toLocaleString("tr-TR")} fatura
+                  {locale === "en"
+                    ? `${s.musteriSayi.toLocaleString("tr-TR")} customers · ${s.faturaSayisi.toLocaleString("tr-TR")} invoices`
+                    : `${s.musteriSayi.toLocaleString("tr-TR")} müşteri · ${s.faturaSayisi.toLocaleString("tr-TR")} fatura`}
                 </span>
               </div>
               <div className="seg-bar-wrap">
@@ -103,11 +112,11 @@ export function IskontoSegmentPanel({
               </div>
               <div className="seg-money">
                 <div className="seg-money-row">
-                  <span className="m-label">Brüt</span>
+                  <span className="m-label">{locale === "en" ? "Gross" : "Brüt"}</span>
                   <span className="m-val">₺{formatCompact(s.brut)}</span>
                 </div>
                 <div className="seg-money-row">
-                  <span className="m-label">İskonto</span>
+                  <span className="m-label">{t(locale, "col.iskonto", "İskonto")}</span>
                   <span className="m-val muted">₺{formatCompact(s.iskonto)}</span>
                 </div>
                 <div className="seg-money-row">

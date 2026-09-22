@@ -8,13 +8,16 @@ import type { TopSkuRow } from "./types";
  * gösterilir; stratejik marka SKU'ları accent vurgusu alır.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, localizeRowLabel, type Locale } from "@/lib/i18n";
 
 export function TopSkusPanel({
   rows,
   periodLabel = "Son 30g",
+  locale = "tr",
 }: {
   rows: TopSkuRow[];
   periodLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.marka.topsku")) return null;
   // "Diğer" ve dip toplam satırları pay yüzdesi toplamına dahil edilmez.
@@ -25,10 +28,13 @@ export function TopSkusPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.marka.topsku", "Top 10 SKU")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.topsku", t(locale, "panel.marka.topsku", "Top 10 SKU"))}</div>
           <div className="v3-panel-sub">
-            {periodLabel} net ciro · İlk 10 ürün portföyün
-            <strong> %{top10Pay.toFixed(1)}</strong>'ini taşıyor
+            {locale === "en" ? (
+              <>{periodLabel} net revenue · Top 10 products carry<strong> %{top10Pay.toFixed(1)}</strong> of the portfolio</>
+            ) : (
+              <>{periodLabel} net ciro · İlk 10 ürün portföyün<strong> %{top10Pay.toFixed(1)}</strong>'ini taşıyor</>
+            )}
           </div>
         </div>
       </div>
@@ -38,19 +44,19 @@ export function TopSkusPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>SKU</th>
-              <th>Marka</th>
-              <th className="num">Ciro (30g)</th>
-              <th className="num">Miktar</th>
-              <th className="num">Müşteri</th>
-              <th className="num">Pay</th>
+              <th>{t(locale, "col.sku", "SKU")}</th>
+              <th>{t(locale, "col.marka", "Marka")}</th>
+              <th className="num">{locale === "en" ? "Revenue (30d)" : "Ciro (30g)"}</th>
+              <th className="num">{locale === "en" ? "Quantity" : "Miktar"}</th>
+              <th className="num">{t(locale, "col.musteri", "Müşteri")}</th>
+              <th className="num">{t(locale, "col.pay", "Pay")}</th>
             </tr>
           </thead>
           <tbody>
             {skuRows.length === 0 ? (
               <tr>
                 <td colSpan={7} className="empty">
-                  Son 30 günde SKU verisi yok.
+                  {locale === "en" ? "No SKU data in the last 30 days." : "Son 30 günde SKU verisi yok."}
                 </td>
               </tr>
             ) : (
@@ -61,13 +67,17 @@ export function TopSkusPanel({
                   <tr key={r.urunKod} className={rowClass}>
                     <td className="rank">{special ? "" : r.rank}</td>
                     <td className="ad" title={r.ad}>
-                      {r.ad.length > 60 ? r.ad.slice(0, 57) + "…" : r.ad}
+                      {special
+                        ? localizeRowLabel(r.ad, locale)
+                        : r.ad.length > 60
+                          ? r.ad.slice(0, 57) + "…"
+                          : r.ad}
                     </td>
                     <td>
                       {special ? null : (
                         <span
                           className={`brand-chip ${r.isStratejik ? "strat" : ""}`}
-                          title={r.isStratejik ? "Stratejik marka" : undefined}
+                          title={r.isStratejik ? (locale === "en" ? "Strategic brand" : "Stratejik marka") : undefined}
                         >
                           {r.isStratejik && <span className="strat-dot" />}
                           {r.marka || "—"}

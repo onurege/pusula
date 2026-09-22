@@ -108,6 +108,11 @@ export type KomutaKpiCard = {
   deltaSub?: string;
 };
 
+/** Cockpit KPI şeridi çıktı dili — `insider_locale` cookie'sinden server.ts
+ *  çözer. Varsayılan "tr" — mevcut davranış AYNEN korunur. `ay` (ay kısaltma)
+ *  alanları BUNDAN ETKİLENMEZ, frontend ayrı localize ediyor. */
+export type KomutaLocale = "tr" | "en";
+
 /** Bir bölge içindeki bir şehrin (il) YoY kırılımı — Komuta haritası
  *  drill-down'unda kullanılır. */
 export type KomutaCityBreakdown = {
@@ -306,6 +311,7 @@ async function fetchKpis(
   unit: ValueUnit,
   distClause: string,
   grupCat: string | null = null,
+  locale: KomutaLocale = "tr",
 ): Promise<KomutaKpiCard[]> {
   // Son 30 gün vs önceki 30 gün karşılaştırma için tek seferde 4 metriği döner.
   // SQL unit'ten bağımsız — hem ciro (TL) hem miktar (9LE) her zaman hesaplanır.
@@ -474,11 +480,21 @@ async function fetchKpis(
   // md6: KPI şeridinin İLK kartı her zaman Hacim (70cl). İkinci kart TL modda
   // Net Ciro, 9LE modda toplam fatura. Birim etiketi tenant'tan (wietnauer "70cl").
   const volShort = getTenantConfig().volume.short;
+  const isEn = locale === "en";
+  // Sayılar/₺/birim token'ları (70cl, 9L) AYNI kalır — yalnız kelimeler
+  // değişir. Demo tenant'ın "ad" (adet) kısaltması EN'de "units" olur;
+  // diğer tenant'ların birim kısaltmaları (örn. wietnauer "70cl") olduğu
+  // gibi kalır (zaten dile bağlı değil).
+  const volShortDisplay = isEn && volShort === "ad" ? "units" : volShort;
+  /** TR/EN metin seçici — kısa kullanım için. */
+  const t = (tr: string, en: string) => (isEn ? en : tr);
 
   return [
     {
       id: "hacim",
-      label: `Toplam Hacim (${volShort}) · 30 gün`,
+      label: isEn
+        ? `Total Volume (${volShortDisplay}) · 30d`
+        : `Toplam Hacim (${volShort}) · 30 gün`,
       value: sonAdet,
       format: "count",
       unit: volShort,
@@ -488,14 +504,16 @@ async function fetchKpis(
           : (null as never),
       deltaSub:
         oncekiAdet > 0
-          ? `vs önceki 30g (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShort})`
-          : "geçmiş veri yok",
+          ? isEn
+            ? `vs prev 30d (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShortDisplay})`
+            : `vs önceki 30g (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShort})`
+          : t("geçmiş veri yok", "no prior data"),
     },
     // İkinci KPI — TL modda Net Ciro, 9LE modda toplam fatura (hacim yukarıda).
     isVolume
       ? {
           id: "fatura",
-          label: "Toplam Fatura · 30 gün",
+          label: t("Toplam Fatura · 30 gün", "Total Invoices · 30d"),
           value: sonFatura,
           format: "count" as const,
           delta:
@@ -504,11 +522,13 @@ async function fetchKpis(
                   Number(r.onceki_fatura)) *
                 100
               : (null as never),
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura`,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura`,
         }
       : {
           id: "ciro",
-          label: "Toplam Net Ciro · 30 gün",
+          label: t("Toplam Net Ciro · 30 gün", "Total Net Revenue · 30d"),
           value: sonCiro,
           format: "compact" as const,
           unit: "₺",
@@ -518,46 +538,55 @@ async function fetchKpis(
               : (null as never),
           deltaSub:
             oncekiCiro > 0
-              ? `vs önceki 30g (${formatCompact(oncekiCiro)} ₺)`
-              : "geçmiş veri yok",
+              ? isEn
+                ? `vs prev 30d (${formatCompact(oncekiCiro)} ₺)`
+                : `vs önceki 30g (${formatCompact(oncekiCiro)} ₺)`
+              : t("geçmiş veri yok", "no prior data"),
         },
     {
       id: "top_marka",
-      label: "Top Marka Payı · 30 gün",
+      label: t("Top Marka Payı · 30 gün", "Top Brand Share · 30d"),
       value: topGrupPct,
       format: "percent",
       // Görsel tutarlılık için top grup'un proportional fatura cirosunu
       // göster (detay tabanı yerine fatura tabanı): son ciro × pay yüzdesi.
+      // Marka adı (r.top_grup_ad) veri değeri — çevrilmez, TR/EN aynı.
       deltaSub: `${(r.top_grup_ad as string) ?? "—"} (${formatCompact(sonCiro * (topGrupPct / 100))} ₺)`,
     },
     {
       id: "musteri",
-      label: "Aktif Satış Noktası · 30 gün",
+      label: t("Aktif Satış Noktası · 30 gün", "Active Outlets · 30d"),
       value: sonMusteri,
       format: "count",
       delta: oncekiMusteri > 0
         ? ((sonMusteri - oncekiMusteri) / oncekiMusteri) * 100
         : null as never,
       deltaSub: oncekiMusteri > 0
-        ? `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs önceki 30g`
-        : "geçmiş veri yok",
+        ? isEn
+          ? `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs prev 30d`
+          : `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs önceki 30g`
+        : t("geçmiş veri yok", "no prior data"),
     },
     isVolume
       ? {
           id: "sepet",
-          label: "Fatura başına 9L · 30 gün",
+          label: t("Fatura başına 9L · 30 gün", "9L per Invoice · 30d"),
           value: sonFatura > 0 ? Math.round((sonAdet / sonFatura) * 10) / 10 : 0,
           format: "count" as const,
           unit: "9L",
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices basis`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
         }
       : {
           id: "sepet",
-          label: "Ortalama Sepet · 30 gün",
+          label: t("Ortalama Sepet · 30 gün", "Avg. Basket · 30d"),
           value: Math.round(sepet),
           format: "currency" as const,
           unit: "₺",
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices basis`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
         },
   ];
 }
@@ -2125,9 +2154,13 @@ export async function getKomutaSnapshot(
      *  DETAY satırlarından (d.DBLNETFIYAT) kesin hesaplanır; alt paneller
      *  kategoriyi İÇEREN faturalarla (EXISTS semi-join) invoice-scoped sınırlanır. */
     urunGrup?: string | null;
+    /** Cockpit KPI şeridi çıktı dili — `insider_locale` cookie'sinden
+     *  server.ts çözer. Varsayılan "tr" — mevcut davranış AYNEN korunur. */
+    locale?: KomutaLocale;
   } = {},
 ): Promise<KomutaSnapshot> {
   const unit: ValueUnit = options.unit === "9le" ? "9le" : "tl";
+  const locale: KomutaLocale = options.locale === "en" ? "en" : "tr";
 
   // Scope hesabı — wietnauer-satis.ts ile aynı desen: distId varsa tek dist,
   // yoksa allowedDistKods (dist scope) ya da null (merkez, filtresiz).
@@ -2193,12 +2226,15 @@ export async function getKomutaSnapshot(
   // Faz 3 (md16 Top8+Diğer+Toplam matrix, md34 yeni customerTypeBrand alanı).
   // v9: md2 Ürün Grubu (Kategori) filtresi — KPI line-level + alt panel EXISTS.
   // v10: ÖTV-net görünümü kaldırıldı (cacheKey'den "otv/gross" segmenti çıktı).
-  const CACHE_VERSION = "v10";
+  // v11: locale desteği — KPI kartlarının TR/EN label/deltaSub metni artık
+  //     cache key'e dahil (aksi halde biri diğerinin dilini görürdü).
+  const CACHE_VERSION = "v11";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
     unit,
     scopeKey,
+    locale,
   ].join("-");
   const cached = await withCache<KomutaSnapshot>(
     CACHE_DOMAIN,
@@ -2228,7 +2264,7 @@ export async function getKomutaSnapshot(
         customerTypeBrand,
       ] = await Promise.all([
         // KPI: kategori aktifse line-level (base distClause + grupCat detay filtresi).
-        fetchKpis(unit, distClause, grupCat).catch((e) => {
+        fetchKpis(unit, distClause, grupCat, locale).catch((e) => {
           console.error("[komuta kpis]", e);
           return [] as KomutaKpiCard[];
         }),
@@ -2326,6 +2362,7 @@ export async function getKomutaSnapshot(
       unit: options.unit,
       allowedDistKods: options.allowedDistKods,
       distId: options.distId,
+      locale: options.locale,
     });
   }
   // NOT: Eski "brief boşsa forceRefresh ile retry et" bloğu KALDIRILDI. Brief

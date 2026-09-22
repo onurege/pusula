@@ -2,6 +2,8 @@
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
+import { useLocale } from "@/components/locale/LocaleProvider";
+import { t } from "@/lib/i18n";
 
 /**
  * md2 — Global Dönem Filtresi (ortak, tüm V3 ekranlarında aynı).
@@ -15,14 +17,14 @@ import { useState, useTransition } from "react";
 
 const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
-type Preset = { key: string; label: string };
+type Preset = { key: string; trLabel: string };
 const PRESETS: Preset[] = [
-  { key: "son30g", label: "Son 30g" },
-  { key: "mtd", label: "Bu Ay" },
-  { key: "ytd", label: "Bu Yıl" },
-  { key: "q1", label: "Ç1" },
-  { key: "q2", label: "Ç2" },
-  { key: "q3", label: "Ç3" },
+  { key: "son30g", trLabel: "Son 30g" },
+  { key: "mtd", trLabel: "Bu Ay" },
+  { key: "ytd", trLabel: "Bu Yıl" },
+  { key: "q1", trLabel: "Ç1" },
+  { key: "q2", trLabel: "Ç2" },
+  { key: "q3", trLabel: "Ç3" },
 ];
 
 export function GlobalDonemFilter() {
@@ -30,6 +32,7 @@ export function GlobalDonemFilter() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const { locale } = useLocale();
 
   const spFrom = searchParams?.get("from") ?? "";
   const spTo = searchParams?.get("to") ?? "";
@@ -76,7 +79,7 @@ export function GlobalDonemFilter() {
 
   return (
     <div className="donem-filter">
-      <span className="lbl">Dönem</span>
+      <span className="lbl">{t(locale, "donem.label", "Dönem")}</span>
       <div className="chips">
         {PRESETS.map((pr) => (
           <button
@@ -86,7 +89,7 @@ export function GlobalDonemFilter() {
             onClick={() => selectPreset(pr.key)}
             disabled={isPending}
           >
-            {pr.label}
+            {t(locale, `donem.${pr.key}`, pr.trLabel)}
           </button>
         ))}
         <button
@@ -95,7 +98,7 @@ export function GlobalDonemFilter() {
           onClick={() => setSerbestOpen((v) => !v)}
           disabled={isPending}
         >
-          Serbest
+          {t(locale, "donem.serbest", "Serbest")}
         </button>
       </div>
 
@@ -108,7 +111,7 @@ export function GlobalDonemFilter() {
             onChange={(e) => setFrom(e.target.value)}
             disabled={isPending}
             className="inp"
-            aria-label="Başlangıç tarihi"
+            aria-label={t(locale, "donem.from_aria", "Başlangıç tarihi")}
           />
           <span className="sep">–</span>
           <input
@@ -118,7 +121,7 @@ export function GlobalDonemFilter() {
             onChange={(e) => setTo(e.target.value)}
             disabled={isPending}
             className="inp"
-            aria-label="Bitiş tarihi"
+            aria-label={t(locale, "donem.to_aria", "Bitiş tarihi")}
           />
           <button
             type="button"
@@ -126,12 +129,14 @@ export function GlobalDonemFilter() {
             onClick={applySerbest}
             disabled={isPending || !canApply}
           >
-            Uygula
+            {t(locale, "donem.apply", "Uygula")}
           </button>
-          {invalidRange && <span className="err">Başlangıç, bitişten sonra olamaz.</span>}
+          {invalidRange && (
+            <span className="err">{t(locale, "donem.err_range", "Başlangıç, bitişten sonra olamaz.")}</span>
+          )}
         </div>
       )}
-      {isPending && <span className="loading">yükleniyor…</span>}
+      {isPending && <span className="loading">{t(locale, "donem.loading", "yükleniyor…")}</span>}
 
       <style
         dangerouslySetInnerHTML={{

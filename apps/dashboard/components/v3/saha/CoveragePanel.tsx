@@ -12,11 +12,14 @@ import type { WietnauerSahaSnapshot } from "@/lib/api";
  * kırılımı olmayan müşteriler "(Tanımsız)" altında.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function CoveragePanel({
   coverage,
+  locale = "tr",
 }: {
   coverage: WietnauerSahaSnapshot["coverage"];
+  locale?: Locale;
 }) {
   if (panelHidden("panel.saha.coverage")) return null;
   const pct = Math.max(0, Math.min(100, coverage.kapsamaPct));
@@ -37,13 +40,21 @@ export function CoveragePanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.saha.coverage", "Aktif Müşteri Kapsama")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.coverage", t(locale, "panel.saha.coverage", "Aktif Müşteri Kapsama"))}</div>
           <div className="v3-panel-sub">
-            Son 30g'de ziyaret edilen / son 90g'de aktif (fatura kesilmiş)
-            müşteri · müşteri grup kırılımına göre{" "}
-            {coverage.segments.length > 0
-              ? `(${coverage.segments.length} kırılım)`
-              : ""}
+            {locale === "en" ? (
+              <>
+                Visited in the last 30d / active (invoiced) in the last 90d
+                customers · by customer group breakdown{" "}
+                {coverage.segments.length > 0 ? `(${coverage.segments.length} breakdowns)` : ""}
+              </>
+            ) : (
+              <>
+                Son 30g&apos;de ziyaret edilen / son 90g&apos;de aktif (fatura kesilmiş)
+                müşteri · müşteri grup kırılımına göre{" "}
+                {coverage.segments.length > 0 ? `(${coverage.segments.length} kırılım)` : ""}
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -87,7 +98,7 @@ export function CoveragePanel({
               className="cov-donut-sub"
               style={{ fill: "var(--color-muted)" }}
             >
-              kapsama
+              {locale === "en" ? "coverage" : "kapsama"}
             </text>
           </svg>
           <div className="cov-totals">
@@ -95,23 +106,23 @@ export function CoveragePanel({
               <span className="num">
                 {coverage.totalZiyaretEdilen.toLocaleString("tr-TR")}
               </span>
-              <span className="lbl">ziyaret edilen (30g)</span>
+              <span className="lbl">{locale === "en" ? "visited (30d)" : "ziyaret edilen (30g)"}</span>
             </div>
             <div>
               <span className="num">
                 {coverage.totalAktif.toLocaleString("tr-TR")}
               </span>
-              <span className="lbl">aktif portföy (90g)</span>
+              <span className="lbl">{locale === "en" ? "active portfolio (90d)" : "aktif portföy (90g)"}</span>
             </div>
           </div>
         </div>
 
         <div className="cov-segments">
           <div className="cov-seg-head">
-            <span>Müşteri Grup Kırılımı</span>
-            <span className="num">Aktif</span>
-            <span className="num">Ziyaret</span>
-            <span className="num">Kapsama</span>
+            <span>{locale === "en" ? "Customer Group Breakdown" : "Müşteri Grup Kırılımı"}</span>
+            <span className="num">{locale === "en" ? "Active" : "Aktif"}</span>
+            <span className="num">{t(locale, "col.ziyaret", "Ziyaret")}</span>
+            <span className="num">{t(locale, "col.kapsama", "Kapsama")}</span>
           </div>
           {coverage.segments.map((s) => (
             <div key={s.segment} className="cov-seg-row">
@@ -146,7 +157,7 @@ export function CoveragePanel({
             </div>
           ))}
           {coverage.segments.length === 0 && (
-            <div className="cov-empty">Grup kırılımı verisi yok.</div>
+            <div className="cov-empty">{locale === "en" ? "No group breakdown data." : "Grup kırılımı verisi yok."}</div>
           )}
         </div>
       </div>

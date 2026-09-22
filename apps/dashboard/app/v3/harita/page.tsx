@@ -1,6 +1,10 @@
 import { MapPageBody } from "@/components/map-page-body";
+import { getLocale, t } from "@/lib/i18n";
 
-export const metadata = { title: "Harita · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "nav.harita", "Harita")} · V3 · Insider` };
+}
 
 /**
  * V3 Satış Haritası — V1 /map ve V2 /v2/harita ile aynı içerik, sadece

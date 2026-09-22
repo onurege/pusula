@@ -18,9 +18,12 @@ import {
 } from "lucide-react";
 import { cn } from "./cn";
 import { ThemeToggle } from "@/components/theme/ThemeToggle";
+import { LocaleToggle } from "@/components/locale/LocaleToggle";
+import { useLocale } from "@/components/locale/LocaleProvider";
 import { useTenant } from "@/components/tenant-provider";
 import { useAuth } from "@/components/auth/auth-context";
 import { useContent } from "@/components/content-provider";
+import { t as localeText } from "@/lib/i18n";
 import { canSeeScreen, screenIdForHref } from "@/lib/screens";
 
 // V3 nav href → içerik override anahtarı (admin panelinden düzenlenir).
@@ -57,9 +60,13 @@ const itemsV3 = [
 function UserChip() {
   const { user, loading } = useAuth();
   const { logout } = useAuth();
+  const { locale } = useLocale();
   if (loading || !user) return null;
   const name = user.displayName?.trim() || user.username;
-  const roleLabel = user.role === "merkez" ? "Merkez" : "Distribütör";
+  const roleLabel =
+    user.role === "merkez"
+      ? localeText(locale, "navbar.role_merkez", "Merkez")
+      : localeText(locale, "navbar.role_distributor", "Distribütör");
   return (
     <div className="ml-1 flex items-center gap-2">
       <div className="hidden sm:flex flex-col items-end leading-tight">
@@ -69,7 +76,7 @@ function UserChip() {
       <button
         type="button"
         onClick={() => void logout()}
-        title="Çıkış yap"
+        title={localeText(locale, "navbar.logout", "Çıkış yap")}
         className="flex items-center justify-center size-9 rounded-md text-muted hover:text-fg hover:bg-surface-2 transition-colors"
       >
         <LogOut size={15} strokeWidth={2} />
@@ -84,8 +91,16 @@ export function Navbar() {
   const isLogin = pathname === "/login" || pathname.startsWith("/login/");
   // Tenant config — logo/ürün adı + demo nav kısıtları tenant-özel.
   const tenant = useTenant();
-  const { t } = useContent();
+  const { t, map: contentMap } = useContent();
+  const { locale } = useLocale();
   const { user } = useAuth();
+  // Nav etiketi çözümü: tenant admin override'ı varsa o kazanır (kasıtlı
+  // özelleştirme), yoksa locale'e göre TR varsayılan / küratörlü EN.
+  const navLabel = (key: string, trDefault: string): string => {
+    const override = key ? contentMap[key] : undefined;
+    if (override != null && override !== "") return override;
+    return localeText(locale, key, trDefault);
+  };
   // Admin paneli: merkez rolü (hem demo hem wietnauer merkez kullanıcıları).
   const canAdmin = user?.isAdmin === true;
   // Tenant'ın gizlediği nav href'lerini çıkar (ör. demo).
@@ -130,14 +145,14 @@ export function Navbar() {
                   key={href}
                   href={href}
                   className={cn(
-                    "flex items-center gap-1.5 px-3 h-9 rounded-md text-sm transition-colors",
+                    "flex items-center gap-1.5 px-3 h-9 rounded-md text-sm transition-colors shrink-0 whitespace-nowrap",
                     active
                       ? "bg-[var(--color-accent-soft)] text-accent font-medium"
                       : "text-muted hover:text-fg hover:bg-surface-2",
                   )}
                 >
                   <Icon size={15} strokeWidth={2} />
-                  {t(V3_NAV_CK[href] ?? "", label)}
+                  {navLabel(V3_NAV_CK[href] ?? "", label)}
                 </Link>
               );
             })}
@@ -161,6 +176,7 @@ export function Navbar() {
           )}
           {/* "Veriyi Yenile" kaldırıldı — ağır yenileme yalnızca admin panelinde
               (kullanıcılar datayı yormasın). Bkz. /admin. */}
+          <LocaleToggle />
           {!tenant.ui?.forceLightTheme && <ThemeToggle />}
           <UserChip />
         </div>

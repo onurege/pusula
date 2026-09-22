@@ -17,8 +17,9 @@ export type EkGrupSegmentRow = {
 };
 
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function EkGrupPanel({ rows }: { rows: EkGrupSegmentRow[] }) {
+export function EkGrupPanel({ rows, locale = "tr" }: { rows: EkGrupSegmentRow[]; locale?: Locale }) {
   if (panelHidden("panel.segment.ekgrup")) return null;
   const visible = rows.slice(0, 12);
   const maxCiro = Math.max(1, ...visible.map((r) => r.ciro));
@@ -26,16 +27,20 @@ export function EkGrupPanel({ rows }: { rows: EkGrupSegmentRow[] }) {
   return (
     <div className="v3-panel seg-panel">
       <div className="seg-head">
-        <div className="seg-title">{panelTitle("panel.segment.ekgrup", "Müşteri Ek Grubu")}</div>
+        <div className="seg-title">{panelTitle("panel.segment.ekgrup", t(locale, "panel.segment.ekgrup", "Müşteri Ek Grubu"))}</div>
         <div className="seg-sub">
-          Bayilik formatı · {rows.length} grup
-          {rows.length > 12 ? ` · top ${visible.length} gösterimde` : ""}
+          {locale === "en" ? `Dealer format · ${rows.length} groups` : `Bayilik formatı · ${rows.length} grup`}
+          {rows.length > 12
+            ? locale === "en"
+              ? ` · top ${visible.length} shown`
+              : ` · top ${visible.length} gösterimde`
+            : ""}
         </div>
       </div>
 
       <div className="seg-list">
         {visible.length === 0 && (
-          <div className="seg-empty">Henüz tanımlı ek grup yok</div>
+          <div className="seg-empty">{t(locale, "seg.empty_ekgrup", "Henüz tanımlı ek grup yok")}</div>
         )}
         {visible.map((r) => {
           const aktifTone =
@@ -62,7 +67,7 @@ export function EkGrupPanel({ rows }: { rows: EkGrupSegmentRow[] }) {
                   <span className="pay">%{r.payPct.toFixed(1)}</span>
                   <span className="sep">·</span>
                   <span className={`active-pill ${aktifTone}`}>
-                    aktif %{r.aktifMusteriOraniPct.toFixed(0)}
+                    {locale === "en" ? "active" : "aktif"} %{r.aktifMusteriOraniPct.toFixed(0)}
                   </span>
                 </div>
               </div>

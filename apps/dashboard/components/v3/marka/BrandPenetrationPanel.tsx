@@ -12,15 +12,18 @@ import type { BrandPenetrationRow } from "./types";
  * üstte.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, localizeRowLabel, type Locale } from "@/lib/i18n";
 
 export function BrandPenetrationPanel({
   rows,
   aktifMusteriToplam,
   periodLabel = "Son 30g",
+  locale = "tr",
 }: {
   rows: BrandPenetrationRow[];
   aktifMusteriToplam: number;
   periodLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.marka.penetration")) return null;
   // Core zaten Top 15 + "Diğer" + referans toplam döndürüyor — ekstra slice YOK.
@@ -32,18 +35,30 @@ export function BrandPenetrationPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.marka.penetration", "Marka Penetrasyonu")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.penetration", t(locale, "panel.marka.penetration", "Marka Penetrasyonu"))}</div>
           <div className="v3-panel-sub">
-            {periodLabel} aktif portföy:{" "}
-            <strong>{aktifMusteriToplam.toLocaleString("tr-TR")}</strong>{" "}
-            müşteri · Markaların portföye yayılım oranı
+            {locale === "en" ? (
+              <>
+                {periodLabel} active portfolio:{" "}
+                <strong>{aktifMusteriToplam.toLocaleString("tr-TR")}</strong>{" "}
+                customers · Brand spread across the portfolio
+              </>
+            ) : (
+              <>
+                {periodLabel} aktif portföy:{" "}
+                <strong>{aktifMusteriToplam.toLocaleString("tr-TR")}</strong>{" "}
+                müşteri · Markaların portföye yayılım oranı
+              </>
+            )}
           </div>
         </div>
       </div>
 
       <div className="pen-bars">
         {!hasData && (
-          <div className="empty">Son 30 günde marka penetrasyon verisi yok.</div>
+          <div className="empty">
+            {locale === "en" ? "No brand penetration data in the last 30 days." : "Son 30 günde marka penetrasyon verisi yok."}
+          </div>
         )}
         {hasData &&
           rows.map((r) => {
@@ -53,7 +68,7 @@ export function BrandPenetrationPanel({
                 <div className="pen-name" title={r.marka}>
                   {!r.isOther && !r.isTotal && r.isStratejik && <span className="strat-dot" />}
                   {!r.isOther && !r.isTotal && <span className="pen-rank">#{r.rank}</span>}
-                  {r.marka}
+                  {localizeRowLabel(r.marka, locale)}
                 </div>
                 <div className="pen-track">
                   {!r.isTotal && (

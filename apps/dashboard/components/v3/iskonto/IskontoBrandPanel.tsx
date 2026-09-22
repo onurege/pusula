@@ -26,8 +26,9 @@ type BrandRow = {
  * yoY rengi: >0 yeşil, <0 kırmızı, null gri.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function IskontoBrandPanel({ brands }: { brands: BrandRow[] }) {
+export function IskontoBrandPanel({ brands, locale = "tr" }: { brands: BrandRow[]; locale?: Locale }) {
   if (panelHidden("panel.iskonto.brand")) return null;
   const stratList = brands.filter((b) => b.isStratejik);
 
@@ -35,13 +36,15 @@ export function IskontoBrandPanel({ brands }: { brands: BrandRow[] }) {
     <div className="brand-panel">
       <div className="brand-head">
         <div>
-          <div className="brand-title">{panelTitle("panel.iskonto.brand", "Marka × İskonto Etkinliği")}</div>
+          <div className="brand-title">{panelTitle("panel.iskonto.brand", t(locale, "panel.iskonto.brand", "Marka × İskonto Etkinliği"))}</div>
           <div className="brand-sub">
-            Son 30g · Top 15 marka · Detay seviyesi (brüt = birim × miktar)
+            {locale === "en"
+              ? "Last 30d · Top 15 brands · Detail level (gross = unit × quantity)"
+              : "Son 30g · Top 15 marka · Detay seviyesi (brüt = birim × miktar)"}
             {stratList.length > 0 && (
               <>
                 {" · "}
-                <span className="strat-dot" /> {stratList.length} stratejik
+                <span className="strat-dot" /> {stratList.length} {locale === "en" ? "strategic" : "stratejik"}
               </>
             )}
           </div>
@@ -53,11 +56,11 @@ export function IskontoBrandPanel({ brands }: { brands: BrandRow[] }) {
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Marka</th>
-              <th className="num">Brüt</th>
-              <th className="num">İskonto</th>
-              <th className="num">Net</th>
-              <th className="num">Oran</th>
+              <th>{t(locale, "col.marka", "Marka")}</th>
+              <th className="num">{locale === "en" ? "Gross" : "Brüt"}</th>
+              <th className="num">{t(locale, "col.iskonto", "İskonto")}</th>
+              <th className="num">{locale === "en" ? "Net" : "Net"}</th>
+              <th className="num">{t(locale, "col.oran", "Oran")}</th>
               <th className="num">YoY Net</th>
             </tr>
           </thead>
@@ -101,11 +104,23 @@ export function IskontoBrandPanel({ brands }: { brands: BrandRow[] }) {
       </div>
 
       <div className="brand-legend">
-        <span style={{ color: "#16a34a" }}>● sağlıklı &lt;15%</span>
-        <span className="sep">·</span>
-        <span style={{ color: "#d97706" }}>● nötr 15–25%</span>
-        <span className="sep">·</span>
-        <span style={{ color: "#dc2626" }}>● uyarı &gt;25%</span>
+        {locale === "en" ? (
+          <>
+            <span style={{ color: "#16a34a" }}>● healthy &lt;15%</span>
+            <span className="sep">·</span>
+            <span style={{ color: "#d97706" }}>● neutral 15–25%</span>
+            <span className="sep">·</span>
+            <span style={{ color: "#dc2626" }}>● warning &gt;25%</span>
+          </>
+        ) : (
+          <>
+            <span style={{ color: "#16a34a" }}>● sağlıklı &lt;15%</span>
+            <span className="sep">·</span>
+            <span style={{ color: "#d97706" }}>● nötr 15–25%</span>
+            <span className="sep">·</span>
+            <span style={{ color: "#dc2626" }}>● uyarı &gt;25%</span>
+          </>
+        )}
       </div>
 
       <style

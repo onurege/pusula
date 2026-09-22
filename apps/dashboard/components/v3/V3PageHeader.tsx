@@ -1,4 +1,5 @@
 import { getContentMap, t } from "@/lib/content";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 /**
  * V3 sayfaları için ortak header bandı. Eyebrow + büyük başlık + alt-açıklama
@@ -7,6 +8,9 @@ import { getContentMap, t } from "@/lib/content";
  *
  * `contentKey` / `descKey` verilirse başlık/açıklama admin panelinden düzenlenen
  * override'la çözülür (yoksa gelen title/description varsayılan kalır).
+ *
+ * Server component — çağıran v3 sayfaları zaten `getLocale()` ile locale'i
+ * çözüyor; burada tekrar cookie okumak yerine prop olarak alınır.
  */
 export function V3PageHeader({
   eyebrow,
@@ -16,6 +20,7 @@ export function V3PageHeader({
   generatedAt,
   contentKey,
   descKey,
+  locale = "tr",
 }: {
   eyebrow: string;
   title: string;
@@ -24,12 +29,13 @@ export function V3PageHeader({
   generatedAt?: string;
   contentKey?: string;
   descKey?: string;
+  locale?: Locale;
 }) {
   const content = getContentMap();
   const resolvedTitle = contentKey ? t(content, contentKey, title) : title;
   const resolvedDescription = descKey ? t(content, descKey, description) : description;
   const ts = generatedAt
-    ? new Date(generatedAt).toLocaleString("tr-TR", {
+    ? new Date(generatedAt).toLocaleString(locale === "en" ? "en-US" : "tr-TR", {
         day: "2-digit",
         month: "short",
         hour: "2-digit",
@@ -49,7 +55,7 @@ export function V3PageHeader({
       {(dataNote || ts) && (
         <aside className="v3-meta">
           {dataNote && <div className="v3-meta-note">{dataNote}</div>}
-          {ts && <div className="v3-meta-ts">son güncelleme · {ts}</div>}
+          {ts && <div className="v3-meta-ts">{translate(locale, "v3.header.updated", "son güncelleme")} · {ts}</div>}
         </aside>
       )}
 

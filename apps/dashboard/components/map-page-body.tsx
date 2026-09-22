@@ -13,6 +13,7 @@ import { ViewModeToggle } from "@/components/view-mode-toggle";
 import { MapHierarchyBreadcrumb } from "@/components/map-hierarchy-breadcrumb";
 import { CityInsights } from "@/components/city-insights";
 import { getTenantConfig } from "@/lib/tenant";
+import { getLocale, t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   searchParams: Record<string, string | string[] | undefined>;
@@ -45,6 +46,7 @@ export async function MapPageBody({
   backLabel,
 }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sehir = typeof sp.sehir === "string" ? sp.sehir : undefined;
   const distKodRaw = typeof sp.distKod === "string" ? sp.distKod : undefined;
   const distKod =
@@ -201,10 +203,10 @@ export async function MapPageBody({
           </Link>
           <div className="h-4 w-px bg-border" />
           <h1 className="text-base font-semibold tracking-tight">
-            Satış Haritası
+            {translate(locale, "map.title", "Satış Haritası")}
           </h1>
           <span className="text-xs text-muted hidden lg:inline truncate">
-            tek tık = analiz · çift tık = bir seviye derine in
+            {translate(locale, "map.hint", "tek tık = analiz · çift tık = bir seviye derine in")}
           </span>
           <div className="h-4 w-px bg-border hidden xl:block" />
           <div className="hidden xl:flex min-w-0">
@@ -216,6 +218,7 @@ export async function MapPageBody({
               distKod={distKod}
               customerCount={data.count}
               basePath={basePath}
+              locale={locale}
             />
           </div>
           {region && (
@@ -237,7 +240,7 @@ export async function MapPageBody({
                   return `${basePath}?${params.toString()}`;
                 })()}
                 className="ml-0.5 text-accent/70 hover:text-accent"
-                title="Bölge görünümüne geri dön"
+                title={translate(locale, "map.back_to_region", "Bölge görünümüne geri dön")}
               >
                 ×
               </Link>
@@ -245,8 +248,8 @@ export async function MapPageBody({
           )}
         </div>
         <div className="flex items-center gap-3">
-          <MapPeriodFilter current={activityDays} />
-          <ViewModeToggle current={viewMode} />
+          <MapPeriodFilter current={activityDays} locale={locale} />
+          <ViewModeToggle current={viewMode} locale={locale} />
           {/* SyncButton kaldırıldı — global "Veriyi Yenile" navbar'da merkezi. */}
         </div>
       </header>
@@ -257,7 +260,7 @@ export async function MapPageBody({
       {viewMode === "city" &&
         region &&
         citiesData.cities.length > 0 && (
-          <CityInsights cities={citiesData.cities} region={region} />
+          <CityInsights cities={citiesData.cities} region={region} locale={locale} />
         )}
 
       {/* City API hatası — bütün illeri "bayisiz" göstermek yanıltıcı.
@@ -265,13 +268,24 @@ export async function MapPageBody({
       {viewMode === "city" && region && citiesError && (
         <div className="border-b border-bad/40 bg-bad/10 px-5 py-3 text-sm">
           <div className="font-semibold text-bad mb-1">
-            ⚠ Şehir bazlı YoY verisi alınamadı
+            ⚠ {translate(locale, "map.city_yoy_error_title", "Şehir bazlı YoY verisi alınamadı")}
           </div>
           <div className="text-xs text-fg-2 mb-1">
-            Harita illeri sönük gösteriliyor ama bu{" "}
-            <strong>"bayisiz" anlamına gelmiyor</strong> — sadece veri
-            çekilemedi. Backend MSSQL bağlantısı kopmuş olabilir (VPN /
-            network).
+            {locale === "en" ? (
+              <>
+                Province shading is dim, but this{" "}
+                <strong>does not mean &quot;no distributor&quot;</strong> — the data simply
+                could not be fetched. The backend MSSQL connection may be down (VPN /
+                network).
+              </>
+            ) : (
+              <>
+                Harita illeri sönük gösteriliyor ama bu{" "}
+                <strong>&quot;bayisiz&quot; anlamına gelmiyor</strong> — sadece veri
+                çekilemedi. Backend MSSQL bağlantısı kopmuş olabilir (VPN /
+                network).
+              </>
+            )}
           </div>
           <code className="text-[11px] text-muted">{citiesError}</code>
         </div>
@@ -283,6 +297,7 @@ export async function MapPageBody({
           customers={data.customers}
           count={data.count}
           basePath={basePath}
+          locale={locale}
         />
 
         <main className="flex-1 relative bg-surface">
@@ -290,7 +305,7 @@ export async function MapPageBody({
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="rounded-lg border border-bad/40 bg-bad/10 px-5 py-4 text-sm max-w-lg">
                 <div className="font-medium text-bad mb-1">
-                  Harita verisi alınamadı
+                  {translate(locale, "map.data_error", "Harita verisi alınamadı")}
                 </div>
                 <code className="text-xs text-muted">{apiError}</code>
               </div>
@@ -299,7 +314,7 @@ export async function MapPageBody({
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="rounded-lg border border-border bg-surface-2 px-5 py-4 text-sm max-w-md text-center">
                 <div className="font-medium text-fg mb-1">
-                  Yerel veritabanı boş
+                  {translate(locale, "map.empty_db", "Yerel veritabanı boş")}
                 </div>
                 <div className="text-muted text-xs">
                   {tenant.labels.mapEmptyDataSource}
@@ -308,7 +323,7 @@ export async function MapPageBody({
             </div>
           ) : data.customers.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center p-8 text-muted text-sm">
-              Bu filtrelerle koordinatlı müşteri yok.
+              {translate(locale, "map.no_customers_for_filters", "Bu filtrelerle koordinatlı müşteri yok.")}
             </div>
           ) : (
             <>
@@ -317,8 +332,9 @@ export async function MapPageBody({
                 regions={regionsData.regions}
                 cities={citiesData.cities}
                 viewMode={viewMode}
+                locale={locale}
               />
-              <MapRiskLegend />
+              <MapRiskLegend locale={locale} />
             </>
           )}
         </main>
@@ -332,17 +348,17 @@ export async function MapPageBody({
  * skoruna (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
  * packages/core/src/map.ts `tierForScore` ile birebir.
  */
-function MapRiskLegend() {
+function MapRiskLegend({ locale }: { locale: Locale }) {
   const items = [
-    { c: "#16a34a", t: "Sağlıklı", r: "skor 0–29" },
-    { c: "#d97706", t: "İzlemede", r: "30–54" },
-    { c: "#ea580c", t: "Riskli", r: "55–74" },
-    { c: "#dc2626", t: "Kritik", r: "75–100" },
-    { c: "#a1a1aa", t: "Bilinmiyor", r: "veri yok" },
+    { c: "#16a34a", t: translate(locale, "map.risk.healthy", "Sağlıklı"), r: translate(locale, "map.risk.score_0_29", "skor 0–29") },
+    { c: "#d97706", t: translate(locale, "map.risk.watch", "İzlemede"), r: "30–54" },
+    { c: "#ea580c", t: translate(locale, "map.risk.risky", "Riskli"), r: "55–74" },
+    { c: "#dc2626", t: translate(locale, "map.risk.critical", "Kritik"), r: "75–100" },
+    { c: "#a1a1aa", t: translate(locale, "map.risk.unknown", "Bilinmiyor"), r: translate(locale, "map.risk.no_data", "veri yok") },
   ];
   return (
     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[5] flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-surface/90 backdrop-blur px-3.5 py-2 shadow-md text-[11px] max-w-[95%]">
-      <span className="font-semibold text-muted mr-1">Kayıp riski:</span>
+      <span className="font-semibold text-muted mr-1">{translate(locale, "map.risk.label", "Kayıp riski")}:</span>
       {items.map((i) => (
         <span key={i.t} className="inline-flex items-center gap-1.5 whitespace-nowrap">
           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: i.c }} />

@@ -74,3 +74,11 @@ export const RISK_TIER_LABELS: Record<string, string> = {
   healthy: "Sağlıklı",
   unknown: "Bilinmiyor",
 };
+
+export const RISK_TIER_LABELS_EN: Record<string, string> = {
+  critical: "Critical",
+  risk: "Risk",
+  watch: "Watch",
+  healthy: "Healthy",
+  unknown: "Unknown",
+};

@@ -9,8 +9,10 @@ import { TenantProvider } from "@/components/tenant-provider";
 import { AuthProvider } from "@/components/auth/auth-context";
 import { ScreenGuard } from "@/components/auth/ScreenGuard";
 import { ContentProvider } from "@/components/content-provider";
+import { LocaleProvider } from "@/components/locale/LocaleProvider";
 import { getTenantConfig, isTenantFullyMissing } from "@/lib/tenant";
 import { getContentMap } from "@/lib/content";
+import { getLocale } from "@/lib/i18n";
 import { PATHNAME_HEADER } from "@/lib/request-pathname";
 
 const inter = Inter({
@@ -62,6 +64,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Mevcut tenant'larda (pernod/wietnauer — REGISTRY'de) bu kontrol her
   // zaman `false` döner ve fs'e bile dokunmaz (`REGISTRY[id]` bulunur) —
   // davranış BİREBİR korunur, aşağıdaki blok hiç çalışmaz (regresyon sıfır).
+  // Locale — tenant/setup durumundan bağımsız, yalnız cookie'ye bakar; her
+  // iki dalda da `<html lang>` doğru değeri alsın diye üstte tek sefer okunur.
+  const locale = await getLocale();
+
   if (isTenantFullyMissing()) {
     // Hangi sayfa istendiğini bilmeden `/setup` DIŞINDAKİ her şeyi oraya
     // yönlendiremeyiz — Server Component'ler pathname'i doğrudan görmez,
@@ -95,7 +101,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     ? THEME_FORCE_LIGHT_SCRIPT
     : THEME_BOOTSTRAP_SCRIPT;
   return (
-    <html lang="tr" className={inter.variable} suppressHydrationWarning>
+    <html lang={locale} className={inter.variable} suppressHydrationWarning>
       <head>
         {/* Theme bootstrap: <head> içinde inline script — browser parse ederken
             ilk paint öncesi çalışır, FOUC olmaz. React tree'nin dışında
@@ -105,20 +111,22 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         />
       </head>
       <body suppressHydrationWarning>
-        <TenantProvider value={tenant}>
-          <ContentProvider map={contentMap}>
-            <AuthProvider>
-              <ScreenGuard />
-              <div className="min-h-dvh">
-                <Navbar />
-                <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
-              </div>
-              {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
-                  erişilebilsin diye layout seviyesinde tek seferlik mount. */}
-              <WeeklyActionsDrawer />
-            </AuthProvider>
-          </ContentProvider>
-        </TenantProvider>
+        <LocaleProvider initialLocale={locale}>
+          <TenantProvider value={tenant}>
+            <ContentProvider map={contentMap}>
+              <AuthProvider>
+                <ScreenGuard />
+                <div className="min-h-dvh">
+                  <Navbar />
+                  <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>
+                </div>
+                {/* Demo journey output — sağ alt floating drawer. Tüm sayfalardan
+                    erişilebilsin diye layout seviyesinde tek seferlik mount. */}
+                <WeeklyActionsDrawer />
+              </AuthProvider>
+            </ContentProvider>
+          </TenantProvider>
+        </LocaleProvider>
       </body>
     </html>
   );

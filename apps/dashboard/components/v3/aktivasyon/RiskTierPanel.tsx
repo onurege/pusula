@@ -1,5 +1,6 @@
-import { RISK_TIER_COLORS, RISK_TIER_LABELS } from "./types";
+import { RISK_TIER_COLORS, RISK_TIER_LABELS, RISK_TIER_LABELS_EN } from "./types";
 import type { RiskTierBucket } from "./types";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * Panel D — Risk Tier Dağılımı.
@@ -10,8 +11,9 @@ import type { RiskTierBucket } from "./types";
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 
-export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
+export function RiskTierPanel({ buckets, locale = "tr" }: { buckets: RiskTierBucket[]; locale?: Locale }) {
   if (panelHidden("panel.risk.tier")) return null;
+  const tierLabels = locale === "en" ? RISK_TIER_LABELS_EN : RISK_TIER_LABELS;
   // Tier display sırası — kötüden iyiye
   const order = ["critical", "risk", "watch", "healthy", "unknown"];
   const sorted = [...buckets].sort(
@@ -38,17 +40,18 @@ export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.risk.tier", "Risk Tier Dağılımı")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.tier", t(locale, "panel.risk.tier", "Risk Tier Dağılımı"))}</div>
           <div className="v3-panel-sub">
-            map_customers.risk_tier_v2 · {toplam.toLocaleString("tr-TR")} müşteri
+            map_customers.risk_tier_v2 · {toplam.toLocaleString("tr-TR")} {locale === "en" ? "customers" : "müşteri"}
           </div>
         </div>
       </div>
 
       {toplam === 0 ? (
         <div className="rt-empty">
-          Risk skorları henüz hesaplanmamış. SQLite mirror'ın senkronize
-          edilmesi gerekiyor.
+          {locale === "en"
+            ? "Risk scores not computed yet. The SQLite mirror needs to be synced."
+            : "Risk skorları henüz hesaplanmamış. SQLite mirror'ın senkronize edilmesi gerekiyor."}
         </div>
       ) : (
         <div className="rt-wrap">
@@ -93,7 +96,7 @@ export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
                 fontSize="9"
                 fill="var(--color-muted)"
               >
-                müşteri
+                {locale === "en" ? "customers" : "müşteri"}
               </text>
             </svg>
           </div>
@@ -105,7 +108,7 @@ export function RiskTierPanel({ buckets }: { buckets: RiskTierBucket[] }) {
                   style={{ background: RISK_TIER_COLORS[b.tier] ?? "#ccc" }}
                 />
                 <span className="rt-label">
-                  {RISK_TIER_LABELS[b.tier] ?? b.tier}
+                  {tierLabels[b.tier] ?? b.tier}
                 </span>
                 <span className="rt-sayi">
                   {b.musteriSayi.toLocaleString("tr-TR")}

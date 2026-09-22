@@ -9,14 +9,22 @@ import { formatCompact } from "@/components/komuta/format";
  * etiketinde gösterilir.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] }) {
+export function AvgOrderTrendPanel({
+  points,
+  locale = "tr",
+}: {
+  points: AvgOrderTrendPoint[];
+  locale?: Locale;
+}) {
   if (panelHidden("panel.satis.avg")) return null;
+  const title = panelTitle("panel.satis.avg", t(locale, "panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi"));
   if (points.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
-        <div className="v3-panel-title">{panelTitle("panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi")}</div>
-        <p>Son 12 ayda fatura kaydı bulunamadı.</p>
+        <div className="v3-panel-title">{title}</div>
+        <p>{locale === "en" ? "No invoice records found in the last 12 months." : "Son 12 ayda fatura kaydı bulunamadı."}</p>
       </div>
     );
   }
@@ -86,13 +94,15 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.satis.avg", "Ortalama Sipariş Büyüklüğü Trendi")}</div>
+          <div className="v3-panel-title">{title}</div>
           <div className="v3-panel-sub">
-            Son {points.length} ay · AVG(net ciro) / fatura
+            {locale === "en"
+              ? `Last ${points.length} months · AVG(net revenue) / invoice`
+              : `Son ${points.length} ay · AVG(net ciro) / fatura`}
             {trendPct !== null && (
               <>
                 {" "}
-                · son 3 ay vs önceki 3 ay{" "}
+                · {locale === "en" ? "last 3mo vs. previous 3mo" : "son 3 ay vs önceki 3 ay"}{" "}
                 <strong style={{ color: trendColor }}>
                   {trendPct > 0 ? "▲" : trendPct < 0 ? "▼" : "▬"}{" "}
                   %{Math.abs(trendPct).toFixed(1)}
@@ -108,7 +118,11 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
           viewBox={`0 0 ${W} ${H}`}
           preserveAspectRatio="none"
           role="img"
-          aria-label="Aylık ortalama sipariş büyüklüğü trend grafiği"
+          aria-label={
+            locale === "en"
+              ? "Monthly average order size trend chart"
+              : "Aylık ortalama sipariş büyüklüğü trend grafiği"
+          }
         >
           {/* Y ekseni grid */}
           {yTicks.map((t, i) => (
@@ -163,7 +177,11 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
                 fill="var(--color-surface)"
                 stroke="var(--color-accent)"
                 strokeWidth={1.5}
-                aria-label={`${p.ay}: ort sepet ${formatCompact(p.ortSepet)} TL, ${p.faturaSayi} fatura`}
+                aria-label={
+                  locale === "en"
+                    ? `${p.ay}: avg basket ${formatCompact(p.ortSepet)} TL, ${p.faturaSayi} invoices`
+                    : `${p.ay}: ort sepet ${formatCompact(p.ortSepet)} TL, ${p.faturaSayi} fatura`
+                }
               />
               {showLabel(i) && (
                 <text
@@ -174,7 +192,7 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
                   fill="var(--color-muted)"
                   fontFamily="inherit"
                 >
-                  {formatAyLabel(p.ay)}
+                  {formatAyLabel(p.ay, locale)}
                 </text>
               )}
             </g>
@@ -199,23 +217,13 @@ export function AvgOrderTrendPanel({ points }: { points: AvgOrderTrendPoint[] })
   );
 }
 
-/** "2026-04" → "Nis '26". TR ay kısaltmaları. */
-export function formatAyLabel(ay: string): string {
+const MONTHS_TR = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"];
+const MONTHS_EN = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** "2026-04" → "Nis '26" (tr) / "Apr '26" (en). */
+export function formatAyLabel(ay: string, locale: Locale = "tr"): string {
   const [yyyy, mm] = ay.split("-");
-  const months = [
-    "Oca",
-    "Şub",
-    "Mar",
-    "Nis",
-    "May",
-    "Haz",
-    "Tem",
-    "Ağu",
-    "Eyl",
-    "Eki",
-    "Kas",
-    "Ara",
-  ];
+  const months = locale === "en" ? MONTHS_EN : MONTHS_TR;
   const idx = Math.max(0, Math.min(11, Number(mm) - 1));
   const yy = yyyy?.slice(2) ?? "";
   return `${months[idx]} '${yy}`;

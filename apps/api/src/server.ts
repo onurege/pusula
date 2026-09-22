@@ -223,6 +223,24 @@ function tokenFromRequest(c: { req: { header: (k: string) => string | undefined 
   return null;
 }
 
+// Dashboard'un `apps/dashboard/lib/i18n.ts` dosyasıyla AYNI cookie adı —
+// demo locale seçimi (navbar). Bu değer burada TEKRAR TANIMLANIR çünkü
+// i18n.ts `next/headers` import ediyor (Next.js'e özgü) ve API paketinden
+// import edilemez; string sabiti kopyalamak, ağır bir bağımlılık eklemekten
+// daha güvenli.
+const LOCALE_COOKIE_NAME = "insider_locale";
+
+/** İstekten demo locale'ini çöz: `insider_locale` cookie'si "en" ise "en",
+ *  aksi halde (yok/başka değer) "tr" — mevcut TR varsayılan davranışı
+ *  DEĞİŞTİRMEZ. `tokenFromRequest` ile aynı cookie-parse deseni. */
+function localeFromRequest(c: { req: { header: (k: string) => string | undefined } }): "tr" | "en" {
+  const cookie = c.req.header("cookie") ?? c.req.header("Cookie");
+  if (!cookie) return "tr";
+  const m = cookie.match(new RegExp(`(?:^|;\\s*)${LOCALE_COOKIE_NAME}=([^;]+)`));
+  if (!m) return "tr";
+  return decodeURIComponent(m[1]!) === "en" ? "en" : "tr";
+}
+
 /**
  * İstekten TenantScope çöz. Oturum yoksa Error("UNAUTHENTICATED") fırlatır —
  * çağıran 401'e çevirir. `selectedDistKod` merkez kullanıcı için drill-down.
@@ -1101,7 +1119,8 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
       ? Math.max(7, Math.min(30, Math.floor(body.windowDays!)))
       : 14;
     const forceRefresh = body.refresh === true || c.req.query("refresh") === "1";
-    const result = await runForesight(id, label, windowDays, { forceRefresh });
+    const locale = localeFromRequest(c);
+    const result = await runForesight(id, label, windowDays, { forceRefresh, locale });
     return c.json(result);
   } catch (err) {
     console.error("[/api/map/customers/:id/foresight] failed:", err);
@@ -1179,6 +1198,7 @@ app.get("/api/komuta", async (c) => {
     const bolge = c.req.query("bolge")?.trim() || null;
     const kanal = c.req.query("kanal")?.trim() || null;
     const urunGrup = c.req.query("urunGrup")?.trim() || null;
+    const locale = localeFromRequest(c);
     const snap = await getKomutaSnapshot({
       forceRefresh,
       reelTL,
@@ -1189,6 +1209,7 @@ app.get("/api/komuta", async (c) => {
       bolge,
       kanal,
       urunGrup,
+      locale,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
@@ -1951,10 +1972,12 @@ app.get("/api/komuta/finance/:region", async (c) => {
     // analiz o ürün grubuyla filtrelenir.
     const productGroup =
       c.req.query("productGroup")?.trim() || undefined;
+    const locale = localeFromRequest(c);
     const analysis = await analyzeRegionAnomaly(region, {
       forceRefresh,
       productGroup,
       allowedDistKods: scope.distKods,
+      locale,
     });
     return c.json(analysis);
   } catch (err) {

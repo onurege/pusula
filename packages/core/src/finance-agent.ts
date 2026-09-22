@@ -527,7 +527,11 @@ async function fetchCustomerStats(
 // Gemini prompt — finans analisti rolü
 // ---------------------------------------------------------------------------
 
-const SYSTEM_INSTRUCTION = `Sen bir finans analistisin (FP&A — Financial Planning & Analysis).
+/** Demo locale — `insider_locale` cookie'sinden çözülür (server.ts).
+ *  "tr" varsayılan davranışı DEĞİŞTİRMEZ; "en" yalnızca opt-in. */
+export type FinanceLocale = "tr" | "en";
+
+const SYSTEM_INSTRUCTION_TR = `Sen bir finans analistisin (FP&A — Financial Planning & Analysis).
 Görevin: bir satış bölgesinin YoY (yıldan yıla) ciro değişimini decompose etmek
 ve KÖKEN nedenlerini belirlemek.
 
@@ -555,7 +559,48 @@ KURALLAR:
 - Para birimi: TL. Büyük rakamları "M" (milyon) veya "Mr" (milyar) ile kısalt.
 - Yüzdeleri "%" işaretiyle ve tek ondalık göster (örn. "-%72.4").`;
 
-function buildUserPrompt(facts: FinanceFacts): string {
+/** İngilizce karşılığı — yapı/bölüm başlıkları TR versiyonuyla birebir
+ *  paralel (dashboard modal parser'ı hem TR hem EN anahtar kelimeleri
+ *  tanıyor; başlıkların netliği daha önemli, kelimesi kelimesine eşleşme
+ *  şart değil). "tr" varsayılan davranışı bu dosyada değişmedi. */
+const SYSTEM_INSTRUCTION_EN = `You are a financial analyst (FP&A — Financial Planning & Analysis).
+Your task: decompose a sales region's YoY (year-over-year) revenue change
+and identify its ROOT causes.
+
+Output format (English, markdown):
+
+## Summary
+A single paragraph, in financial language. Call out the sources of variance
+(mix, volume, distributor loss, customer churn, etc.). No speculation — only
+conclusions drawn from the data.
+
+## Root Causes
+3-5 bullet points. Each bullet:
+- **[Breakdown name]**: -₺X.X M (-Y% YoY) — explanation of the cause.
+
+Order bullets by the absolute size of the delta (worst first).
+
+## Recommended Actions
+2-3 bullet points. Specific, measurable, and something the finance team can
+follow up on (e.g. "In BH ANKARA, 15 of the 23 customers who bought last year
+did not purchase this year — request a root-cause report from the field sales
+manager").
+
+RULES:
+- Do NOT use empty phrases like "explore the potential".
+- Do not speculate — stick to the figures provided.
+- Comments should use financial language (variance, mix, volume) without
+  overdoing the jargon.
+- Currency: TL (Turkish lira). Abbreviate large figures with "M" (million) or
+  "B" (billion).
+- Show percentages with a "%" sign and one decimal place (e.g. "-72.4%").`;
+
+function buildUserPrompt(facts: FinanceFacts, locale: FinanceLocale): string {
+  if (locale === "en") return buildUserPromptEn(facts);
+  return buildUserPromptTr(facts);
+}
+
+function buildUserPromptTr(facts: FinanceFacts): string {
   const fmt = (n: number) => {
     if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} Mr`;
     if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} M`;
@@ -622,6 +667,75 @@ ${prodLines || "  (veri yok)"}
 Yukarıdaki verileri kullanarak finans analizi yap.`;
 }
 
+/** English mirror of `buildUserPromptTr` — framing/labels only; the
+ *  underlying figures (currency amounts, counts, names) stay identical. */
+function buildUserPromptEn(facts: FinanceFacts): string {
+  const fmt = (n: number) => {
+    if (Math.abs(n) >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)} B`;
+    if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(2)} M`;
+    if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(1)} K`;
+    return n.toFixed(0);
+  };
+  const pct = (n: number | null) =>
+    n == null ? "(last year 0)" : `${n > 0 ? "+" : ""}${n.toFixed(1)}%`;
+
+  const distLines = facts.distFactors
+    .slice(0, 8)
+    .map(
+      (f) =>
+        `  - ${f.ad}: current=₺${fmt(f.buDonem)}, last year=₺${fmt(f.gecenYil)}, delta=₺${fmt(f.delta)} (${pct(f.yoyPct)}), contribution=${f.contributionPct.toFixed(1)}%`,
+    )
+    .join("\n");
+
+  const chLines = facts.channelFactors
+    .slice(0, 6)
+    .map(
+      (f) =>
+        `  - ${f.ad}: current=₺${fmt(f.buDonem)}, last year=₺${fmt(f.gecenYil)}, delta=₺${fmt(f.delta)} (${pct(f.yoyPct)}), contribution=${f.contributionPct.toFixed(1)}%`,
+    )
+    .join("\n");
+
+  const prodLines = facts.productFactors
+    .slice(0, 6)
+    .map(
+      (f) =>
+        `  - ${f.ad}: current=₺${fmt(f.buDonem)}, last year=₺${fmt(f.gecenYil)}, delta=₺${fmt(f.delta)} (${pct(f.yoyPct)}), contribution=${f.contributionPct.toFixed(1)}%`,
+    )
+    .join("\n");
+
+  const scopeHeader = facts.productGroup
+    ? `Region: **${facts.region}** · Product group focus: **${facts.productGroup}**
+
+⚠️ This analysis covers ONLY the "${facts.productGroup}" product group's performance in the ${facts.region} region. Do not mention other product groups — they are out of scope. All figures (revenue, customer count, distributor/channel breakdown) are already filtered to this group.`
+    : `Region: **${facts.region}**`;
+
+  const productSectionLabel = facts.productGroup
+    ? `SKU breakdown (within the ${facts.productGroup} product group, by delta size):`
+    : "Product group breakdown:";
+
+  return `${scopeHeader}
+
+Last 30 days revenue: ₺${fmt(facts.buDonem)}
+Same 30-day window last year: ₺${fmt(facts.gecenYil)}
+YoY delta: ₺${fmt(facts.delta)} (${pct(facts.yoyPct)})
+
+Customer count${facts.productGroup ? ` (customers buying the ${facts.productGroup} group)` : ""}:
+  - Active this period: ${facts.customers.aktifBu}
+  - Active last year: ${facts.customers.aktifGecen}
+  - Lost (bought last year, not this year): ${facts.customers.kaybedilen}
+
+Distributor breakdown (by delta size, worst on top)${facts.productGroup ? ` · ${facts.productGroup} only` : ""}:
+${distLines || "  (no data)"}
+
+Customer group breakdown${facts.productGroup ? ` · ${facts.productGroup} only` : ""}:
+${chLines || "  (no data)"}
+
+${productSectionLabel}
+${prodLines || "  (no data)"}
+
+Using the data above, produce the financial analysis.`;
+}
+
 // ---------------------------------------------------------------------------
 // Helper: contributionPct hesaplama (her kırılım için delta / toplam delta)
 // ---------------------------------------------------------------------------
@@ -645,11 +759,15 @@ export async function analyzeRegionAnomaly(
     /** Dist kullanıcının izinli distribütör kodları; null/undefined → merkez
      *  (filtre yok). Sunucu-otoriter — server.ts JWT scope'undan geçirir. */
     allowedDistKods?: number[] | null;
+    /** Gemini çıktı dili — `insider_locale` cookie'sinden server.ts çözer.
+     *  Varsayılan "tr" — mevcut davranış AYNEN korunur. */
+    locale?: FinanceLocale;
   } = {},
 ): Promise<FinanceAnalysis> {
   const cleaned = region.trim();
   if (!cleaned) throw new Error("region parametresi boş.");
   const productGroup = options.productGroup?.trim() || undefined;
+  const locale: FinanceLocale = options.locale === "en" ? "en" : "tr";
 
   // Scope hesabı — komuta/wietnauer ile aynı desen.
   const scope: TenantScope =
@@ -669,12 +787,16 @@ export async function analyzeRegionAnomaly(
   // v5: VYK-03 — non-sargable dg.TXTAD filtresi kaldırıldı, bölge adı→kod
   //     lookup'ı tek seferlik yapılıp d.TXTEKGRUP = kod (sargable) kullanıldı.
   //     Sonuç rakamları AYNI (aynı bölgeye eşleşir); yalnız SQL şekli değişti.
-  const CACHE_VERSION = "v5";
-  // Cache key'e productGroup + scope'u dahil et — aynı bölge için "tüm
-  // gruplar"/"VODKA" ve merkez/dist analizleri ayrı cache satırı olmalı.
+  // v6: locale desteği — TR/EN Gemini çıktısı ayrı cache satırında tutulur
+  //     (aksi halde biri diğerinin dilinde markdown'ını görürdü).
+  const CACHE_VERSION = "v6";
+  // Cache key'e productGroup + scope + locale dahil et — aynı bölge için
+  // "tüm gruplar"/"VODKA", merkez/dist ve TR/EN analizleri ayrı cache satırı
+  // olmalı.
+  const localeKey = locale === "en" ? "en" : "tr";
   const cacheKey = productGroup
-    ? `${CACHE_VERSION}::${cleaned.toUpperCase()}::pg::${productGroup.toUpperCase()}::${scopeKey}`
-    : `${CACHE_VERSION}::${cleaned.toUpperCase()}::${scopeKey}`;
+    ? `${CACHE_VERSION}::${cleaned.toUpperCase()}::pg::${productGroup.toUpperCase()}::${scopeKey}::${localeKey}`
+    : `${CACHE_VERSION}::${cleaned.toUpperCase()}::${scopeKey}::${localeKey}`;
 
   const cached = await withCache<FinanceAnalysis>(
     CACHE_DOMAIN,
@@ -735,16 +857,21 @@ export async function analyzeRegionAnomaly(
         customers,
       };
 
-      // Gemini analiz
+      // Gemini analiz — locale'e göre TR/EN sistem talimatı + kullanıcı prompt'u.
+      const systemInstruction =
+        locale === "en" ? SYSTEM_INSTRUCTION_EN : SYSTEM_INSTRUCTION_TR;
       let markdown = "";
       try {
-        markdown = await generate(SYSTEM_INSTRUCTION, buildUserPrompt(facts), {
+        markdown = await generate(systemInstruction, buildUserPrompt(facts, locale), {
           temperature: 0.15,
           maxOutputTokens: 1600,
         });
       } catch (e) {
         console.error("[finance-agent gemini]", e);
-        markdown = `_AI analiz şu an üretilemedi. Yapılandırılmış veri aşağıda._\n\n**${cleaned}**: YoY ${yoyPct != null ? yoyPct.toFixed(1) : "?"}% (₺${(delta / 1_000_000).toFixed(2)} M değişim)`;
+        markdown =
+          locale === "en"
+            ? `_AI analysis could not be generated right now. The structured data is below._\n\n**${cleaned}**: YoY ${yoyPct != null ? yoyPct.toFixed(1) : "?"}% (₺${(delta / 1_000_000).toFixed(2)} M change)`
+            : `_AI analiz şu an üretilemedi. Yapılandırılmış veri aşağıda._\n\n**${cleaned}**: YoY ${yoyPct != null ? yoyPct.toFixed(1) : "?"}% (₺${(delta / 1_000_000).toFixed(2)} M değişim)`;
       }
 
       return {

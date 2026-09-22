@@ -2,6 +2,7 @@ import { getWietnauerSegment } from "@/lib/api";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { donemLabel } from "@/lib/donem";
+import { getLocale, t } from "@/lib/i18n";
 import {
   MusteriGrupPanel,
   type MusteriGrupSegmentRow,
@@ -24,7 +25,10 @@ import {
   type MusteriIskontoRow,
 } from "@/components/v3/segment/IskontoBreakdownPanel";
 
-export const metadata = { title: "Müşteri Segmentasyon · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.segment.title", "Müşteri Segmentasyon")} · V3 · Insider` };
+}
 
 type SegmentSnapshot = {
   generatedAt: string;
@@ -66,6 +70,7 @@ type Props = {
 };
 
 export default async function V3MusteriSegmentasyonPage({ searchParams }: Props) {
+  const locale = await getLocale();
   const sp = await searchParams;
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
@@ -80,21 +85,27 @@ export default async function V3MusteriSegmentasyonPage({ searchParams }: Props)
 
   // madde 7: statik açıklama yerine snapshot'tan gelen gerçek sayılar
   // (kırılım sayısı, toplam müşteri, ek grup sayısı) — uydurma değer yok.
-  const donemTxt = donemLabel(donem, dateFrom, dateTo);
+  const donemTxt = donemLabel(donem, dateFrom, dateTo, locale);
   const kirilimSayisi = snap?.musteriGrubu.length ?? 0;
   const ekGrupSayisi = snap?.ekGrup.length ?? 0;
   const toplamMusteriSayisi = snap
     ? snap.musteriGrubu.reduce((acc, r) => acc + r.musteriSayi, 0)
     : 0;
-  const description = snap
-    ? `Müşteri Grubu = Müşteri Grup Kırılımı (${kirilimSayisi} kırılım, ${toplamMusteriSayisi.toLocaleString("tr-TR")} müşteri, Prestige/Premium/Standart…); Müşteri Tipi = müşteri grubu (TBLMUSTERIGRUP: OFF/ON TRADE/Turizm…); Ek Grubu (bayilik formatı, ${ekGrupSayisi} grup) — üç ayrı boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`
-    : `Müşteri Grubu (kırılım), Müşteri Tipi (müşteri grubu) ve Ek Grubu (bayilik formatı) — üç bağımsız boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`;
+  const description =
+    locale === "en"
+      ? snap
+        ? `Customer Group = Customer Group Breakdown (${kirilimSayisi} breakdowns, ${toplamMusteriSayisi.toLocaleString("tr-TR")} customers, Prestige/Premium/Standard…); Customer Type = customer group (TBLMUSTERIGRUP: OFF/ON TRADE/Tourism…); Sub-Group (dealer format, ${ekGrupSayisi} groups) — three separate dimensions side by side over ${donemTxt} revenue. Below: Type × Brand heatmap and Sub-Group / outlet discount breakdown.`
+        : `Customer Group (breakdown), Customer Type (customer group), and Sub-Group (dealer format) — three independent dimensions side by side over ${donemTxt} revenue. Below: Type × Brand heatmap and Sub-Group / outlet discount breakdown.`
+      : snap
+        ? `Müşteri Grubu = Müşteri Grup Kırılımı (${kirilimSayisi} kırılım, ${toplamMusteriSayisi.toLocaleString("tr-TR")} müşteri, Prestige/Premium/Standart…); Müşteri Tipi = müşteri grubu (TBLMUSTERIGRUP: OFF/ON TRADE/Turizm…); Ek Grubu (bayilik formatı, ${ekGrupSayisi} grup) — üç ayrı boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`
+        : `Müşteri Grubu (kırılım), Müşteri Tipi (müşteri grubu) ve Ek Grubu (bayilik formatı) — üç bağımsız boyut ${donemTxt} ciro üzerinden yan yana. Altta Tip × Marka heatmap'i ve Ek Grup / nokta bazında iskonto kırılımı.`;
 
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 03"
-        title="Müşteri Segmentasyon"
+        locale={locale}
+        eyebrow={t(locale, "page.segment.eyebrow", "Dashboard 03")}
+        title={t(locale, "page.segment.title", "Müşteri Segmentasyon")}
         contentKey="page.segment.title"
         descKey="page.segment.desc"
         description={description}
@@ -106,9 +117,9 @@ export default async function V3MusteriSegmentasyonPage({ searchParams }: Props)
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.segment.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.segment.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -117,19 +128,19 @@ export default async function V3MusteriSegmentasyonPage({ searchParams }: Props)
         <>
           {/* Üst sıra: 3 bağımsız segment boyutu yan yana (md24). */}
           <div className="seg-triple-grid">
-            <MusteriGrupPanel rows={snap.musteriGrubu} />
-            <EkGrupPanel rows={snap.ekGrup} />
-            <EkSahaPanel rows={snap.ekSaha} />
+            <MusteriGrupPanel rows={snap.musteriGrubu} locale={locale} />
+            <EkGrupPanel rows={snap.ekGrup} locale={locale} />
+            <EkSahaPanel rows={snap.ekSaha} locale={locale} />
           </div>
 
           {/* Alt sıra: tam genişlik cross-segment heatmap. */}
           <div className="seg-cross-wrap">
-            <SegmentBrandCrossPanel data={snap.cross} />
+            <SegmentBrandCrossPanel data={snap.cross} locale={locale} />
           </div>
 
           {/* İskonto kırılımı: Ek Grup / nokta (müşteri) bazında (md35). */}
           <div className="seg-cross-wrap">
-            <IskontoBreakdownPanel ekGrup={snap.ekGrupIskonto} musteri={snap.musteriIskonto} />
+            <IskontoBreakdownPanel ekGrup={snap.ekGrupIskonto} musteri={snap.musteriIskonto} locale={locale} />
           </div>
         </>
       )}
