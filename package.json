@@ -16,6 +16,7 @@
     "mcp:start": "tsx apps/mcp/src/server.ts",
     "api:start": "tsx apps/api/src/server.ts",
     "dashboard:dev": "npm run dev -w @enroute/dashboard",
+    "test": "vitest run",
 
     "//tenant": "Tenant-aware shortcut'lar — TENANT env var hem API hem dashboard tarafından okunur. Pernod default; fmcg-demo karma FMCG demo verisi (Faz 2'de seed edilir).",
     "api:start:pernod":     "TENANT=pernod     tsx apps/api/src/server.ts",
@@ -32,6 +33,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.11"
   }
 }
