@@ -20,6 +20,22 @@
  */
 import { runReadOnly } from "./db.js";
 import { sqlNow } from "./now.js";
+import { distScopeClause } from "./scope-clause.js";
+import {
+  computeWalletGapAndPeerCrossSell,
+  classifyWalletGapCategories,
+  buildPeerCrossSellCandidates,
+  rankReorderCandidates,
+  type WalletGapItem,
+  type PeerCrossSellItem,
+} from "./reorder-v2.js";
+
+// v2 saf sınıflandırma/skorlama fonksiyonları + tipleri RE-EXPORT edilir —
+// bkz. `reorder-v2.ts` dosya-üstü notu (dosya-boyutu hijyeni için ayrıldı,
+// ama "reorder.ts genişlet" sözleşmesi/test erişimi buradan bozulmadan devam
+// eder, `distScopeClause`/`scope-clause.ts` ile AYNI desen).
+export { classifyWalletGapCategories, buildPeerCrossSellCandidates, rankReorderCandidates };
+export type { WalletGapItem, PeerCrossSellItem };
 
 // ---------------------------------------------------------------------------
 // Eşik sabitleri — NAMED const, keyfi büyülü sayı yok.
@@ -96,16 +112,31 @@ export type CrossSellItem = {
   birlikteSayisi: number;
 };
 
+// -- v2 (additive) — wallet-share/kapsam açığı + peer-temelli çapraz-satış --
+// `WalletGapItem`/`PeerCrossSellItem` tipleri `reorder-v2.ts`'te tanımlı
+// (bkz. import + re-export yukarıda) — burada YALNIZ `ReorderResult`'a
+// gömülür.
+
 export type ReorderResult = {
   musteriKod: number;
   generatedAt: string;
   overdue: OverdueItem[];
   winBack: WinBackItem[];
   crossSell: CrossSellItem[];
+  /** v2 — yalnız akran-agregatı bu ek-grup+scope için CACHE'lenmişse dolu
+   *  (bkz. `peer-aggregate.ts` `getPeerAggregate`); aksi halde alan HİÇ
+   *  set edilmez (undefined) — UI v1 davranışına sessizce düşer. */
+  walletGap?: WalletGapItem[];
+  /** v2 — bkz. `walletGap` notu; aynı koşulda dolu. */
+  peerCrossSell?: PeerCrossSellItem[];
   ozet: {
     toplamGecikmis: number;
     toplamWinback: number;
     toplamCross: number;
+    /** v2 — `walletGap` dolu ise uzunluğu, aksi halde undefined. */
+    gapSayi?: number;
+    /** v2 — `peerCrossSell` dolu ise uzunluğu, aksi halde undefined. */
+    peerCrossSayi?: number;
   };
 };
 
@@ -114,28 +145,13 @@ export type ReorderResult = {
 // ---------------------------------------------------------------------------
 
 /**
- * `allowedDistKods`/`distId`'den SQL WHERE fragment'ı üretir. Bu modül
- * `TenantScope` almaz (fonksiyon imzası ham parametre alır — server.ts
- * `scope.distKods`/`scopeSingleDistId(scope)`'u çözüp buraya geçirir);
- * semantik `auth.ts`'teki `distFilterClause` ile AYNI:
- *   - `distId` verilmişse (merkez drill-down / dist tek-dist scope) → o tek dist.
- *   - yoksa `allowedDistKods` null → filtre yok (merkez, filtresiz).
- *   - `allowedDistKods` boş dizi → izinli dist yok → `1=0` (hiçbir şey görme).
- *
- * `export` yalnız test erişimi için (bkz. `__tests__/reorder.test.ts`) —
- * `getCustomerReorder` dışında başka bir modülün kullanması BEKLENMEZ.
+ * `distScopeClause` artık `scope-clause.ts`'te tanımlı (bkz. o dosyanın
+ * dosya-üstü yorumu — `peer-aggregate.ts` da bunu kullandığı için dairesel
+ * import'tan kaçınmak amacıyla taşındı). Burada RE-EXPORT edilir: mevcut
+ * `__tests__/reorder.test.ts` bunu `../reorder.js`'den import ediyor, o yol
+ * DEĞİŞMEDEN çalışmaya devam eder.
  */
-export function distScopeClause(
-  options: { allowedDistKods?: number[] | null; distId?: number | null },
-  alias = "f.LNGDISTKOD",
-): string {
-  const effective =
-    options.distId != null ? [options.distId] : (options.allowedDistKods ?? null);
-  if (effective == null) return "";
-  const ids = effective.filter((n) => Number.isInteger(n));
-  if (ids.length === 0) return " AND 1=0";
-  return ` AND ${alias} IN (${ids.join(",")})`;
-}
+export { distScopeClause };
 
 // ---------------------------------------------------------------------------
 // Fetcher #1 — müşteri×ürün geçmişi (overdue/winBack sınıflandırması +
@@ -370,7 +386,8 @@ export function classify(row: ProductHistoryRow): Classification {
 // ---------------------------------------------------------------------------
 
 /**
- * Bir müşteri için Sipariş Öneri sinyalleri (overdue + winBack + crossSell).
+ * Bir müşteri için Sipariş Öneri sinyalleri — v1 (overdue + winBack +
+ * crossSell) + v2 (walletGap + peerCrossSell, additive).
  *
  * Dist-scope SUNUCU-OTORİTER uygulanır: `distId` (drill-down/tek-dist) varsa
  * o tek dist'e, yoksa `allowedDistKods`'a daraltılır (auth.ts `resolveTenantScope`
@@ -379,7 +396,13 @@ export function classify(row: ProductHistoryRow): Classification {
  * `forceRefresh` YOK (bilinçli) — bu fonksiyon `withCache` KULLANMAZ (dosya-
  * üstü yorum: MVP'de per-müşteri kalıcı cache şişirir), her çağrı zaten canlı
  * hesap; diğer v3 snapshot fonksiyonlarının imza-uyumu burada gerekmiyor (bu
- * endpoint `makeV3Handler`/`makeSnapshotHandler` kullanmıyor).
+ * endpoint `makeV3Handler`/`makeSnapshotHandler` kullanmıyor). v2 kısmı BUNA
+ * İSTİSNA: `getPeerAggregate` bir SQLite CACHE okur (MSSQL'e gitmez) — bu
+ * yüzden v2 eklemek yukarıdaki "her çağrı canlı hesap" ilkesini bozmaz,
+ * sadece CANLI akran hesabını (Faz 0 B1 VETO) per-request yola SOKMAZ.
+ *
+ * Akran kohortu (ek-grup) SUNUCUDA, tek bir ucuz PK-lookup ile türetilir
+ * (`fetchCustomerEkGrup`) — client asla ekGrupKod göndermez/almaz (Faz 0 C2).
  */
 export async function getCustomerReorder(options: {
   musteriKod: number;
@@ -392,9 +415,12 @@ export async function getCustomerReorder(options: {
   }
   const scopeClause = distScopeClause(options);
 
-  const history = await fetchProductHistory(custKod, scopeClause).catch(
-    () => [] as ProductHistoryRow[],
-  );
+  // E3 fix (Faz 0) — DB hatası artık sessizce yutulmuyor, log'a düşüyor
+  // (davranış AYNI kalır: yine [] dönülür, istek patlamaz).
+  const history = await fetchProductHistory(custKod, scopeClause).catch((err) => {
+    console.error("[reorder] fetchProductHistory failed:", err);
+    return [] as ProductHistoryRow[];
+  });
 
   const overdue: OverdueItem[] = [];
   const winBack: WinBackItem[] = [];
@@ -423,14 +449,33 @@ export async function getCustomerReorder(options: {
   overdue.sort((a, b) => b.gunGecikti - a.gunGecikti);
   winBack.sort((a, b) => b.gunGecti - a.gunGecti);
 
-  // Cross-sell, müşterinin TÜM (365g) sahip olduğu ürün kodlarını hariç
-  // tutar — geçmişi boşsa (yeni müşteri) sorguyu hiç çalıştırmaya gerek yok.
   const ownedUrunKods = history.map((r) => r.urunKod);
+
+  // v2 — walletGap + peerCrossSell (additive, bkz. `reorder-v2.ts`). v1
+  // crossSell'DEN ÖNCE çalışır (sıra keyfi — ikisi birbirine bağımlı DEĞİL —
+  // ama tutarlı bir sıra test/log okunurluğunu kolaylaştırır). Ek-grup lookup
+  // `history.length`'e bağlı DEĞİL: geçmişi boş yepyeni bir müşteri için bile
+  // "akranların hiç almadığın şu kategorileri aldığı" sinyali DEĞERLİDİR.
+  const { walletGap, peerCrossSell } = await computeWalletGapAndPeerCrossSell({
+    custKod,
+    scopeClause,
+    ekGrupScopeClause: distScopeClause(options, "m.LNGDISTKOD"),
+    // `getPeerAggregate` yalnız bu iki alanı okur (cache anahtarına da SADECE
+    // bunlar girer, bkz. `peer-aggregate.ts` `peerAggregateCacheKey`);
+    // `options`'ı OLDUĞU GİBİ geçirmek (musteriKod dahil) çağrı sözleşmesini
+    // bulanıklaştırırdı.
+    peerScope: { allowedDistKods: options.allowedDistKods, distId: options.distId },
+    ownedUrunKods,
+  });
+
+  // Cross-sell (v1), müşterinin TÜM (365g) sahip olduğu ürün kodlarını hariç
+  // tutar — geçmişi boşsa (yeni müşteri) sorguyu hiç çalıştırmaya gerek yok.
   const crossSell =
     ownedUrunKods.length > 0
-      ? await fetchCrossSell(custKod, ownedUrunKods, scopeClause).catch(
-          () => [] as CrossSellItem[],
-        )
+      ? await fetchCrossSell(custKod, ownedUrunKods, scopeClause).catch((err) => {
+          console.error("[reorder] fetchCrossSell failed:", err);
+          return [] as CrossSellItem[];
+        })
       : [];
 
   return {
@@ -439,10 +484,14 @@ export async function getCustomerReorder(options: {
     overdue,
     winBack,
     crossSell,
+    ...(walletGap ? { walletGap } : {}),
+    ...(peerCrossSell ? { peerCrossSell } : {}),
     ozet: {
       toplamGecikmis: overdue.length,
       toplamWinback: winBack.length,
       toplamCross: crossSell.length,
+      ...(walletGap ? { gapSayi: walletGap.length } : {}),
+      ...(peerCrossSell ? { peerCrossSayi: peerCrossSell.length } : {}),
     },
   };
 }

@@ -35,6 +35,10 @@ export * from "./fold-other.js";
 export * from "./volume.js";
 export * from "./demo-mask.js";
 export * from "./reorder.js";
+// Sipariş Öneri v2 — akran (peer) agregatı, `reorder.ts`'in walletGap/
+// peerCrossSell alanlarının veri kaynağı. `warmPeerAggregates`/
+// `listActiveEkGrupKods` gece-batch/demo-bake script'leri için dışa açık.
+export * from "./peer-aggregate.js";
 
 // Insider konfigüratörü (Faz A Dalga 2 müşteri kırılımı; Faz B Dalga 1
 // ürün/marka + bölge) — çekirdek servisler; apps/api endpoint'leri bunları

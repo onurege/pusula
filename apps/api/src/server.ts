@@ -15,6 +15,7 @@ import { serve } from "@hono/node-server";
 import { z } from "zod";
 import { createAdminGate } from "./admin-gate.js";
 import { createSetupGate } from "./setup-gate.js";
+import { createReorderCustomerHandler } from "./reorder-route.js";
 import {
   analyzeRegionAnomaly,
   closePool,
@@ -1129,44 +1130,33 @@ app.post("/api/map/customers/:id/foresight", async (c) => {
 });
 
 // Sipariş Öneri — Insider (FMCG/Panorama) tek müşteri için overdue/winBack/
-// crossSell sinyalleri. Dist-scope SUNUCU-OTORİTER: `scopeFromRequest` oturumu
-// doğrular, `getCustomerReorder`'a yalnız `scope.distKods`/`scopeSingleDistId`
-// geçilir — client'ın gönderdiği herhangi bir dist bilgisi asla güvenilmez.
+// crossSell (v1) + walletGap/peerCrossSell (v2) sinyalleri. Dist-scope
+// SUNUCU-OTORİTER: `scopeFromRequest` oturumu doğrular, `getCustomerReorder`'a
+// yalnız `scope.distKods`/`scopeSingleDistId` geçilir — client'ın gönderdiği
+// herhangi bir dist/cohort bilgisi asla güvenilmez. `customerInScope` 403 +
+// audit-log kardeş uç `/api/map/customers/:id/sales` ile BİREBİR (Faz 0 C4).
+//
+// Handler `reorder-route.ts`'e çıkarıldı (Metz — test edilebilirlik, bkz. o
+// dosyanın dosya-üstü yorumu): `server.ts` import edilince gerçek TCP portu
+// dinlemeye başlıyor, izole route testi için saf bir fabrikaya ihtiyaç var.
 //
 // GUV-06: IP başına dakikada ~20 istek — generate/explain/run-sql ile AYNI
 // desen. Ağır uç: 40M satırlık TBLMSDBELGEDETAY'a karşı iki LOOP JOIN sorgusu
 // (geçmiş + cross-sell) — burst-abuse tek IP'den DB'yi zorlayabilir.
-app.get("/api/reorder/customer", async (c) => {
-  if (!checkRateLimit("heavy", clientIp(c), HEAVY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
-    return c.json({ error: "Çok fazla istek. Lütfen bir dakika sonra tekrar deneyin." }, 429);
-  }
-  let scope: TenantScope;
-  try {
-    scope = await scopeFromRequest(c);
-  } catch (err) {
-    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
-    // Ham hata client'a sızmaz — yalnız log'a, response'a jenerik mesaj.
-    console.error("[/api/reorder/customer] scope resolution failed:", err);
-    return c.json({ error: "Yetki kapsamı çözülemedi" }, 500);
-  }
-  try {
-    const musteriKodRaw = c.req.query("musteriKod");
-    const musteriKod = musteriKodRaw != null ? parseInt(musteriKodRaw, 10) : NaN;
-    if (!Number.isFinite(musteriKod)) {
-      return c.json({ error: "musteriKod zorunlu" }, 400);
-    }
-    const result = await getCustomerReorder({
-      musteriKod,
-      allowedDistKods: scope.distKods,
-      distId: scopeSingleDistId(scope),
-    });
-    return c.json(result);
-  } catch (err) {
-    // Ham DB hatası client'a sızmaz — yalnız log'a, response'a sanitize edilmiş mesaj.
-    console.error("[/api/reorder/customer] failed:", err);
-    return c.json({ error: "Sipariş önerisi hesaplanamadı" }, 500);
-  }
-});
+app.get(
+  "/api/reorder/customer",
+  createReorderCustomerHandler({
+    scopeFromRequest,
+    customerInScope: (musteriKod, allowedDistKods) =>
+      customerInScope(REPO_ROOT, musteriKod, allowedDistKods),
+    getCustomerReorder,
+    scopeSingleDistId,
+    checkRateLimit,
+    clientIp,
+    heavyRateLimit: HEAVY_RATE_LIMIT,
+    rateLimitWindowMs: RATE_LIMIT_WINDOW_MS,
+  }),
+);
 
 // Komuta Köprüsü — CEO/Satış Direktörü ekranı için tek atışta tüm agregat.
 // Pahalı (8 paralel SQL + Gemini brief); cache'lenir, "Yenile" ile invalidate.
