@@ -1,3 +1,12 @@
+import type {
+  OverdueItem,
+  WinBackItem,
+  CrossSellItem,
+  WalletGapItem as CoreWalletGapItem,
+  PeerCrossSellItem as CorePeerCrossSellItem,
+  ReorderResult as CoreReorderResult,
+} from "@enroute/core";
+
 const API_URL = process.env.ENROUTE_API_URL ?? "http://localhost:8080";
 
 export type ReportSummary = {
@@ -496,46 +505,25 @@ export type ForesightResult = {
 // -- SİPARİŞ ÖNERİSİ (reorder) ----------------------------------------------
 // Miktar kasten yok — ürün kararı: satışçı miktarı kendi girer, biz sadece
 // "hangi ürün, ne zaman" sinyalini veririz.
+//
+// Tipler artık `packages/core/src/reorder.ts`/`peer-aggregate.ts`'ten
+// PAYLAŞILIR (Faz 0 D3 borcu kapatıldı — önceden burada BAĞIMSIZ birebir
+// kopya tanımlanıyordu, tek gerçek kaynak backend'e taşındı). İsimler
+// (`ReorderOverdueItem` vb.) geriye-uyum için KORUNUR — bu dosyayı import
+// eden hiçbir yer (ör. `customer-modal.tsx`) değişmek zorunda kalmaz.
 
-export type ReorderOverdueItem = {
-  urunKod: number;
-  urunAd: string;
-  sonSiparis: string;
-  ortAralikGun: number;
-  siparisSayisi: number;
-  gunGecikti: number;
-};
+export type ReorderOverdueItem = OverdueItem;
+export type ReorderWinBackItem = WinBackItem;
+export type ReorderCrossSellItem = CrossSellItem;
 
-export type ReorderWinBackItem = {
-  urunKod: number;
-  urunAd: string;
-  sonSiparis: string;
-  ortAralikGun: number;
-  siparisSayisi: number;
-  gunGecti: number;
-};
+// -- v2 (additive) — wallet-share gap + peer-temelli çapraz-satış ----------
+// Alanlar OPSİYONEL (`ReorderResult.walletGap`/`peerCrossSell`) — backend bu
+// ek-grup+scope için akran-agregatını henüz ısıtmadıysa (cache boş) UI ilgili
+// bölümü gizler (geriye-uyum, bkz. `customer-modal.tsx`).
 
-export type ReorderCrossSellItem = {
-  urunKod: number;
-  urunAd: string;
-  /** Müşterinin zaten sahip olduğu, bu öneriyle en çok birlikte alınan ÇIPA ürün — UI'da "{anchorUrunAd} alıyor → bunu da alıyor" bağlamı için. */
-  anchorUrunKod: number;
-  anchorUrunAd: string;
-  birlikteSayisi: number;
-};
-
-export type ReorderResult = {
-  musteriKod: number;
-  generatedAt: string;
-  overdue: ReorderOverdueItem[];
-  winBack: ReorderWinBackItem[];
-  crossSell: ReorderCrossSellItem[];
-  ozet: {
-    toplamGecikmis: number;
-    toplamWinback: number;
-    toplamCross: number;
-  };
-};
+export type WalletGapItem = CoreWalletGapItem;
+export type PeerCrossSellItem = CorePeerCrossSellItem;
+export type ReorderResult = CoreReorderResult;
 
 /**
  * Dist-scope sunucu-otoriter uygulanır (auth cookie → Bearer → API guard);

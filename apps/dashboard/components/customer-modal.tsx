@@ -16,7 +16,15 @@ import {
   Users,
   X,
 } from "lucide-react";
-import type { CustomerSales, ForesightResult, MapCustomer, ReorderResult } from "@/lib/api";
+import type {
+  CustomerSales,
+  ForesightResult,
+  MapCustomer,
+  PeerCrossSellItem,
+  ReorderCrossSellItem,
+  ReorderResult,
+  WalletGapItem,
+} from "@/lib/api";
 import {
   explainOnRadar,
   getCustomerForesight,
@@ -667,16 +675,48 @@ function MiniTile({ label, value }: { label: string; value: string }) {
 // ne zaman sinyali.
 // ---------------------------------------------------------------------------
 
+/**
+ * v2 — kapsam açığı: "hic-almadi" akranların içindeki en acil boşluk olduğu
+ * için her zaman "akran-alti" öğelerinden önce gelir; her iki alt-küme kendi
+ * içinde `oncelikSkoru` düşene göre sıralanır (backend'in ürettiği sıra
+ * korunmaz — skor UI'nın sorumluluğunda tazelenir).
+ */
+function sortWalletGap(items: WalletGapItem[]): WalletGapItem[] {
+  const rank = (t: WalletGapItem["tur"]) => (t === "hic-almadi" ? 0 : 1);
+  return [...items].sort((a, b) => rank(a.tur) - rank(b.tur) || b.oncelikSkoru - a.oncelikSkoru);
+}
+
+function sortByPriority<T extends { oncelikSkoru: number }>(items: T[]): T[] {
+  return [...items].sort((a, b) => b.oncelikSkoru - a.oncelikSkoru);
+}
+
 function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; locale?: Locale }) {
+  const gapItems = sortWalletGap(data.walletGap ?? []);
+  // v2 peer-temelli çapraz-satış varsa v1'in yerini alır (aynı bölüm, daha
+  // anlamlı gerekçe); yoksa geriye-uyum için v1 `crossSell` gösterilmeye devam eder.
+  const peerCrossItems = data.peerCrossSell ? sortByPriority(data.peerCrossSell) : null;
+
+  const summaryEntries: { count: number; label: string }[] = [
+    { count: data.ozet.toplamGecikmis, label: translate(locale, "customer.reorder.overdue_count", "gecikmiş") },
+    { count: data.ozet.toplamWinback, label: translate(locale, "customer.reorder.dropped_count", "bırakılmış") },
+    { count: data.ozet.toplamCross, label: translate(locale, "customer.reorder.suggestion_count", "öneri") },
+  ];
+  if (typeof data.ozet.gapSayi === "number") {
+    summaryEntries.push({ count: data.ozet.gapSayi, label: translate(locale, "customer.reorder.gap_count", "kapsam açığı") });
+  }
+  if (typeof data.ozet.peerCrossSayi === "number") {
+    summaryEntries.push({ count: data.ozet.peerCrossSayi, label: translate(locale, "customer.reorder.peer_cross_count", "akran önerisi") });
+  }
+
   return (
     <div className="space-y-4">
       <div className="text-[11px] text-muted">
-        <span className="text-fg-2 font-medium">{data.ozet.toplamGecikmis}</span>{" "}
-        {translate(locale, "customer.reorder.overdue_count", "gecikmiş")} ·{" "}
-        <span className="text-fg-2 font-medium">{data.ozet.toplamWinback}</span>{" "}
-        {translate(locale, "customer.reorder.dropped_count", "bırakılmış")} ·{" "}
-        <span className="text-fg-2 font-medium">{data.ozet.toplamCross}</span>{" "}
-        {translate(locale, "customer.reorder.suggestion_count", "öneri")}
+        {summaryEntries.map((entry, i) => (
+          <span key={entry.label}>
+            {i > 0 && " · "}
+            <span className="text-fg-2 font-medium">{entry.count}</span> {entry.label}
+          </span>
+        ))}
       </div>
 
       <ReorderGroup
@@ -721,23 +761,105 @@ function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; loca
         )}
       />
 
-      <ReorderGroup
+      {/* v2 — kapsam açığı: alan gelmezse (backend henüz üretmiyorsa) ya da
+          boşsa bölüm hiç render edilmez; çıplak liste değil, her satır
+          "neden önerildiği"ni anlatan bir cümle taşır. */}
+      {gapItems.length > 0 && (
+        <ReorderGroup
+          title={translate(locale, "customer.reorder.gap_title", "Kapsam Açığı")}
+          titleTone="text-accent"
+          itemTone="border-accent/30 bg-accent/5"
+          items={gapItems}
+          emptyText={translate(locale, "customer.reorder.gap_empty", "kapsam açığı yok")}
+          keyOf={(g) => g.urunGrupKod}
+          renderItem={(g) => (
+            <>
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-sm truncate">{g.urunGrupAd}</span>
+                <span
+                  className={
+                    "text-[10px] font-semibold shrink-0 " +
+                    (g.tur === "hic-almadi" ? "text-bad" : "text-warn")
+                  }
+                >
+                  {g.tur === "hic-almadi"
+                    ? translate(locale, "customer.reorder.gap_tur_none", "hiç almadı")
+                    : translate(locale, "customer.reorder.gap_tur_below", "akran altı")}
+                </span>
+              </div>
+              <div className="text-[10px] text-muted mt-0.5">
+                {translate(
+                  locale,
+                  g.tur === "hic-almadi" ? "customer.reorder.gap_none_desc" : "customer.reorder.gap_below_desc",
+                  g.tur === "hic-almadi"
+                    ? "Akranlarının %{pct}'i {grup} alıyor — bu müşteri hiç almıyor."
+                    : "Akranlarının %{pct}'i {grup} alıyor — bu müşteri az alıyor.",
+                  { pct: g.peerPenetrasyon.toFixed(0), grup: g.urunGrupAd },
+                )}
+              </div>
+              <div className="text-[10px] text-muted mt-0.5">
+                {translate(locale, "customer.reorder.gap_meta", "{count} akran müşteri", {
+                  count: g.peerMusteriSayi,
+                })}
+              </div>
+            </>
+          )}
+        />
+      )}
+
+      <ReorderGroup<PeerCrossSellItem | ReorderCrossSellItem>
         title={translate(locale, "customer.reorder.cross_sell_title", "Çapraz-satış önerisi")}
         titleTone="text-muted"
         itemTone="border-border bg-surface"
-        items={data.crossSell}
+        items={peerCrossItems ?? data.crossSell}
         emptyText={translate(locale, "customer.reorder.cross_sell_empty", "öneri yok")}
         keyOf={(c) => c.urunKod}
-        renderItem={(c) => (
-          <div>
-            <div className="text-sm truncate">{c.urunAd}</div>
-            <div className="text-[10px] text-muted mt-0.5 truncate">
-              <span className="text-fg-2 font-medium">{c.anchorUrunAd}</span>{" "}
-              {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
-            </div>
-          </div>
-        )}
+        renderItem={(c) =>
+          peerCrossItems ? (
+            <PeerCrossSellRow item={c as PeerCrossSellItem} locale={locale} />
+          ) : (
+            <CrossSellRow item={c as ReorderCrossSellItem} locale={locale} />
+          )
+        }
       />
+    </div>
+  );
+}
+
+function CrossSellRow({ item, locale }: { item: ReorderCrossSellItem; locale: Locale }) {
+  return (
+    <div>
+      <div className="text-sm truncate">{item.urunAd}</div>
+      <div className="text-[10px] text-muted mt-0.5 truncate">
+        <span className="text-fg-2 font-medium">{item.anchorUrunAd}</span>{" "}
+        {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * v2 — peer-temelli çapraz-satış satırı. `anchorUrunAd` mevcutsa (backend bu
+ * öneriyi somut bir "birlikte alınan ürün" ile de destekleyebiliyorsa) v1'in
+ * daha spesifik gerekçesi korunur; yoksa akran-penetrasyonu cümlesi kullanılır.
+ */
+function PeerCrossSellRow({ item, locale }: { item: PeerCrossSellItem; locale: Locale }) {
+  return (
+    <div>
+      <div className="text-sm truncate">{item.urunAd}</div>
+      <div className="text-[10px] text-muted mt-0.5 truncate">
+        {item.anchorUrunAd ? (
+          <>
+            <span className="text-fg-2 font-medium">{item.anchorUrunAd}</span>{" "}
+            {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
+          </>
+        ) : (
+          translate(locale, "customer.reorder.peer_cross_desc", "Senin gibi müşterilerin %{pct}'i {urun} alıyor.", {
+            pct: item.peerPenetrasyon.toFixed(0),
+            urun: item.urunAd,
+          })
+        )}
+      </div>
     </div>
   );
 }
