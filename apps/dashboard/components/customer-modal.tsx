@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertCircle,
@@ -214,11 +214,123 @@ type Props = {
   locale?: Locale;
 };
 
+// ---------------------------------------------------------------------------
+// Sekmeler — modal içeriğini tek uzun scroll yerine 2 panele böler: Özet
+// (risk skoru + son 30g özet + tahsilat + ziyaret + sahada belge + AI &
+// öngörü — reorder DIŞINDA her şey, mevcut sırayla) ve Sipariş Önerisi
+// (ayrı, temiz panel). Veri-çekme (sales/reorder/explain/foresight) sekme
+// seçiminden bağımsız, state hep `CustomerModal` gövdesinde kalır — sekme
+// değişimi yalnızca görünürlüğü değiştirir (bkz. `hidden` attribute), fetch
+// tetiklemez.
+// ---------------------------------------------------------------------------
+
+type TabId = "ozet" | "oneri";
+
+const TABS: { id: TabId; key: string; fallback: string }[] = [
+  { id: "ozet", key: "customer.tab.ozet", fallback: "Özet" },
+  { id: "oneri", key: "customer.tab.oneri", fallback: "Sipariş Önerisi" },
+];
+
+function tabPanelId(id: TabId) {
+  return `customer-tabpanel-${id}`;
+}
+function tabButtonId(id: TabId) {
+  return `customer-tab-${id}`;
+}
+
+/** Ok tuşları (yatay) + Home/End ile roving focus; Enter/Space native button
+ *  davranışıyla zaten çalışır. WAI-ARIA APG "Tabs" desenine uyar. */
+function handleTabKeyDown(
+  e: React.KeyboardEvent<HTMLButtonElement>,
+  idx: number,
+  onChange: (id: TabId) => void,
+) {
+  let nextIdx: number | null = null;
+  if (e.key === "ArrowRight") nextIdx = (idx + 1) % TABS.length;
+  else if (e.key === "ArrowLeft") nextIdx = (idx - 1 + TABS.length) % TABS.length;
+  else if (e.key === "Home") nextIdx = 0;
+  else if (e.key === "End") nextIdx = TABS.length - 1;
+  if (nextIdx === null) return;
+  e.preventDefault();
+  onChange(TABS[nextIdx].id);
+  const tablist = e.currentTarget.closest('[role="tablist"]');
+  const buttons = tablist?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+  buttons?.[nextIdx]?.focus();
+}
+
+function TabBar({
+  active,
+  onChange,
+  locale,
+}: {
+  active: TabId;
+  onChange: (id: TabId) => void;
+  locale: Locale;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label={translate(locale, "customer.tabs.aria_label", "Müşteri detay sekmeleri")}
+      className="px-6 flex gap-1 border-t border-border/60"
+    >
+      {TABS.map((tab, idx) => {
+        const selected = tab.id === active;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            id={tabButtonId(tab.id)}
+            aria-controls={tabPanelId(tab.id)}
+            aria-selected={selected}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(tab.id)}
+            onKeyDown={(e) => handleTabKeyDown(e, idx, onChange)}
+            className={
+              "px-3 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 rounded-t-sm " +
+              (selected
+                ? "border-accent text-fg"
+                : "border-transparent text-muted hover:text-fg-2 hover:border-border")
+            }
+          >
+            {translate(locale, tab.key, tab.fallback)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function TabPanel({
+  id,
+  active,
+  children,
+}: {
+  id: TabId;
+  active: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      role="tabpanel"
+      id={tabPanelId(id)}
+      aria-labelledby={tabButtonId(id)}
+      hidden={!active}
+      tabIndex={0}
+      className="space-y-6 focus-visible:outline-none"
+    >
+      {children}
+    </div>
+  );
+}
+
 export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
   const [sales, setSales] = useState<SalesState>({ kind: "loading" });
   const [explain, setExplain] = useState<ExplainState>({ kind: "idle" });
   const [foresight, setForesight] = useState<ForesightState>({ kind: "idle" });
   const [reorder, setReorder] = useState<ReorderState>({ kind: "loading" });
+  // Modal her açıldığında / müşteri değiştiğinde "Özet" sekmesine döner.
+  const [activeTab, setActiveTab] = useState<TabId>("ozet");
 
   // Fetch detail when the modal opens / customer changes.
   useEffect(() => {
@@ -226,6 +338,7 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
     setSales({ kind: "loading" });
     setExplain({ kind: "idle" });
     setForesight({ kind: "idle" });
+    setActiveTab("ozet");
     getCustomerSales(customer.id, customer.distKod)
       .then((data) => !cancelled && setSales({ kind: "ok", data }))
       .catch((err) => !cancelled && setSales({ kind: "err", message: (err as Error).message }));
@@ -332,7 +445,8 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
               : "contents"
           }
         >
-        <header className="sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-border px-6 py-4 flex items-start justify-between gap-4">
+        <div className="sticky top-0 z-10 bg-surface/95 backdrop-blur border-b border-border">
+        <header className="px-6 py-4 flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <h2 className="text-lg font-semibold tracking-tight truncate">{customer.unvan}</h2>
             {customer.kisaAd && customer.kisaAd !== customer.unvan && (
@@ -401,8 +515,10 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
             <X size={18} />
           </button>
         </header>
+        {sales.kind === "ok" && <TabBar active={activeTab} onChange={setActiveTab} locale={locale} />}
+        </div>
 
-        <div className="p-6 space-y-6">
+        <div className="p-6">
           {sales.kind === "loading" && (
             <div className="text-sm text-muted text-center py-12">
               {translate(locale, "customer.detail_loading", "Müşteri detayı yükleniyor…")}
@@ -418,208 +534,237 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
 
           {sales.kind === "ok" && (
             <>
-              {/* Composite Risk Score — başlığın hemen altında öne çıkar.
-                  Ödeme bileşeni sync sırasında null geliyor (Univera mirror'da
-                  tahsilat snapshot'ı yok); detail fetch ile gelen tahsilat
-                  verisinden display-time hesaplıyoruz ve overall score'u
-                  yeniden ağırlıklandırıyoruz. */}
-              <RiskScoreCard
-                riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data, locale)}
-                locale={locale}
-              />
+              {/* Sekme 1 — Özet: reorder DIŞINDAKİ her şey (Risk Skoru kartı,
+                  Son 30 Gün KPI'ları, Tahsilat, Ziyaret Detayı, Sahada Belge,
+                  AI Analizi + Öngörü), mevcut sırayla tek panelde. */}
+              <TabPanel id="ozet" active={activeTab === "ozet"}>
+                {/* Composite Risk Score — başlığın hemen altında öne çıkar.
+                    Ödeme bileşeni sync sırasında null geliyor (Univera mirror'da
+                    tahsilat snapshot'ı yok); detail fetch ile gelen tahsilat
+                    verisinden display-time hesaplıyoruz ve overall score'u
+                    yeniden ağırlıklandırıyoruz. */}
+                <RiskScoreCard
+                  riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data, locale)}
+                  locale={locale}
+                />
 
-              {/* Top KPI grid */}
-              <section>
-                <SectionHeading>{translate(locale, "customer.section.last30_summary", "Son 30 Gün Özet")}</SectionHeading>
-                <div className="grid grid-cols-3 gap-3">
-                  <KpiTile
-                    label={translate(locale, "komuta.metric.ciro", "Ciro")}
-                    value={`${formatCompact(sales.data.ciro30, locale)} ₺`}
-                  />
-                  <KpiTile
-                    label={translate(locale, "customer.invoice", "Fatura")}
-                    value={Number(sales.data.fatura30 ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                  <KpiTile
-                    label={translate(locale, "customer.visit", "Ziyaret")}
-                    value={Number(sales.data.ziyaret30 ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                </div>
-                {(sales.data.sonFaturaTarihi || sales.data.sonZiyaretTarihi) && (
-                  <div className="text-xs text-muted mt-3 flex flex-wrap gap-x-4 gap-y-1">
-                    {sales.data.sonFaturaTarihi && (
-                      <span>
-                        {translate(locale, "customer.last_invoice", "Son fatura")}:{" "}
-                        <span className="text-fg">
-                          {new Date(sales.data.sonFaturaTarihi).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR")}
+                {/* Top KPI grid */}
+                <section>
+                  <SectionHeading>{translate(locale, "customer.section.last30_summary", "Son 30 Gün Özet")}</SectionHeading>
+                  <div className="grid grid-cols-3 gap-3">
+                    <KpiTile
+                      label={translate(locale, "komuta.metric.ciro", "Ciro")}
+                      value={`${formatCompact(sales.data.ciro30, locale)} ₺`}
+                    />
+                    <KpiTile
+                      label={translate(locale, "customer.invoice", "Fatura")}
+                      value={Number(sales.data.fatura30 ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                    />
+                    <KpiTile
+                      label={translate(locale, "customer.visit", "Ziyaret")}
+                      value={Number(sales.data.ziyaret30 ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                    />
+                  </div>
+                  {(sales.data.sonFaturaTarihi || sales.data.sonZiyaretTarihi) && (
+                    <div className="text-xs text-muted mt-3 flex flex-wrap gap-x-4 gap-y-1">
+                      {sales.data.sonFaturaTarihi && (
+                        <span>
+                          {translate(locale, "customer.last_invoice", "Son fatura")}:{" "}
+                          <span className="text-fg">
+                            {new Date(sales.data.sonFaturaTarihi).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR")}
+                          </span>
                         </span>
-                      </span>
-                    )}
-                    {sales.data.sonZiyaretTarihi && (
-                      <span>
-                        {translate(locale, "customer.last_visit", "Son ziyaret")}:{" "}
-                        <span className="text-fg">
-                          {new Date(sales.data.sonZiyaretTarihi).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR")}
+                      )}
+                      {sales.data.sonZiyaretTarihi && (
+                        <span>
+                          {translate(locale, "customer.last_visit", "Son ziyaret")}:{" "}
+                          <span className="text-fg">
+                            {new Date(sales.data.sonZiyaretTarihi).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR")}
+                          </span>
                         </span>
-                      </span>
-                    )}
-                  </div>
-                )}
-              </section>
-
-              {/* Tahsilat */}
-              <section>
-                <SectionHeading>{translate(locale, "customer.section.collections", "Tahsilat")}</SectionHeading>
-                <div className="grid grid-cols-4 gap-2">
-                  <MiniTile label={translate(locale, "customer.cash", "Nakit")} value={`${formatCompact(sales.data.tahsilatNakit, locale)} ₺`} />
-                  <MiniTile label={translate(locale, "customer.check", "Çek")} value={`${formatCompact(sales.data.tahsilatCek, locale)} ₺`} />
-                  <MiniTile label={translate(locale, "customer.promissory_note", "Senet")} value={`${formatCompact(sales.data.tahsilatSenet, locale)} ₺`} />
-                  <MiniTile label={translate(locale, "customer.credit_card", "Kredi K.")} value={`${formatCompact(sales.data.tahsilatKK, locale)} ₺`} />
-                </div>
-                <div className="text-[11px] text-muted mt-2">
-                  {translate(locale, "customer.total", "Toplam")}:{" "}
-                  <span className="text-fg tabular-nums">
-                    {formatCompact(
-                      sales.data.tahsilatNakit +
-                        sales.data.tahsilatCek +
-                        sales.data.tahsilatSenet +
-                        sales.data.tahsilatKK,
-                      locale,
-                    )}{" "}
-                    ₺
-                  </span>
-                </div>
-              </section>
-
-              {/* Ziyaret kırılımı */}
-              <section>
-                <SectionHeading>{translate(locale, "customer.section.visit_detail", "Ziyaret Detayı")}</SectionHeading>
-                <div className="grid grid-cols-2 gap-2">
-                  <MiniTile
-                    label={translate(locale, "customer.in_route_visit", "Rut içi ziyaret")}
-                    value={Number(sales.data.rutIciZiyaret ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                  <MiniTile
-                    label={translate(locale, "customer.off_route_visit", "Rut dışı ziyaret")}
-                    value={Number(sales.data.rutDisiZiyaret ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                </div>
-              </section>
-
-              {/* Belge sayıları (ziyaret içinde) */}
-              <section>
-                <SectionHeading>{translate(locale, "customer.section.field_documents", "Sahada Belge")}</SectionHeading>
-                <div className="grid grid-cols-3 gap-2">
-                  <MiniTile
-                    label={translate(locale, "customer.invoice", "Fatura")}
-                    value={Number(sales.data.ziyaretFaturaSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                  <MiniTile
-                    label={translate(locale, "customer.waybill", "İrsaliye")}
-                    value={Number(sales.data.ziyaretIrsaliyeSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                  <MiniTile
-                    label={translate(locale, "customer.order", "Sipariş")}
-                    value={Number(sales.data.ziyaretSiparisSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
-                  />
-                </div>
-              </section>
-
-              {/* Sipariş Önerisi */}
-              <section>
-                <SectionHeading>{translate(locale, "customer.section.reorder", "Sipariş Önerisi")}</SectionHeading>
-                {reorder.kind === "loading" && (
-                  <div className="text-sm text-muted text-center py-6">
-                    {translate(locale, "customer.reorder.loading", "Sipariş önerileri yükleniyor…")}
-                  </div>
-                )}
-                {reorder.kind === "err" && (
-                  <div className="rounded-md border border-bad/40 bg-bad/10 p-4 text-sm">
-                    <div className="font-medium text-bad mb-1">{translate(locale, "customer.reorder.error", "Sipariş önerisi alınamadı")}</div>
-                    <code className="text-xs text-muted">{reorder.message}</code>
-                  </div>
-                )}
-                {reorder.kind === "ok" && <ReorderSuggestions data={reorder.data} locale={locale} />}
-              </section>
-
-              {/* AI Analizi + Öngörü */}
-              <section className="pt-2 border-t border-border space-y-3">
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant="primary"
-                    size="lg"
-                    onClick={runExplain}
-                    loading={explain.kind === "loading"}
-                    iconLeft={explain.kind !== "loading" ? <Sparkles size={15} /> : undefined}
-                  >
-                    {explain.kind === "loading" ? (
-                      translate(locale, "customer.ai.analyzing", "Analiz ediliyor…")
-                    ) : (
-                      <>
-                        {translate(locale, "customer.ai.get_analysis", "AI Analizi al")}
-                        <span title={translate(locale, "komuta.fa.paid_content", "Ücretli içerik")} className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onClick={() => runForesight()}
-                    loading={foresight.kind === "loading"}
-                    iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
-                    className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
-                  >
-                    {foresight.kind === "loading" ? (
-                      translate(locale, "customer.foresight.extracting", "Öngörü çıkarılıyor…")
-                    ) : (
-                      <>
-                        {translate(locale, "customer.foresight.get", "Öngörü al (14 gün)")}
-                        <span title={translate(locale, "komuta.fa.paid_content", "Ücretli içerik")} className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
-                      </>
-                    )}
-                  </Button>
-                </div>
-
-                {explain.kind === "err" && (
-                  <Card tone="bad" padding="sm">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
-                      <code className="text-[11px] text-fg-2 leading-relaxed">{explain.message}</code>
+                      )}
                     </div>
-                  </Card>
-                )}
-                {explain.kind === "ok" && explain.brief && (
-                  <Card tone="accent" padding="md">
-                    <CardHeader className="flex items-center gap-1.5 text-accent">
-                      <Sparkles size={11} /> {translate(locale, "customer.ai.analysis", "AI Analizi")}
-                    </CardHeader>
-                    <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                      {explain.brief}
-                    </div>
-                    {explain.sql && (
-                      <details className="mt-3">
-                        <summary className="text-xs text-muted cursor-pointer hover:text-fg">
-                          {translate(locale, "customer.ai.sql_used", "Kullanılan SQL")}
-                        </summary>
-                        <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface-3 p-3 rounded-md border border-border">
-                          {explain.sql}
-                        </pre>
-                      </details>
-                    )}
-                  </Card>
+                  )}
+                </section>
+
+                {/* Tahsilat + Ziyaret Detayı + Sahada Belge — Özet'in devamı
+                    (ayrı "Operasyon" sekmesi kaldırıldı, kullanıcı isteğiyle
+                    reorder dışındaki her şey tek sekmede birleşti). */}
+                {sales.data.tahsilatNakit +
+                  sales.data.tahsilatCek +
+                  sales.data.tahsilatSenet +
+                  sales.data.tahsilatKK +
+                  (sales.data.rutIciZiyaret ?? 0) +
+                  (sales.data.rutDisiZiyaret ?? 0) +
+                  (sales.data.ziyaretFaturaSayisi ?? 0) +
+                  (sales.data.ziyaretIrsaliyeSayisi ?? 0) +
+                  (sales.data.ziyaretSiparisSayisi ?? 0) ===
+                0 ? (
+                  <div className="rounded-lg border border-dashed border-border bg-bg/40 p-8 text-center text-sm text-muted">
+                    {translate(locale, "customer.tab.operasyon_empty", "Bu müşteri için operasyon verisi yok.")}
+                  </div>
+                ) : (
+                  <>
+                    {/* Tahsilat */}
+                    <section>
+                      <SectionHeading>{translate(locale, "customer.section.collections", "Tahsilat")}</SectionHeading>
+                      <div className="grid grid-cols-4 gap-2">
+                        <MiniTile label={translate(locale, "customer.cash", "Nakit")} value={`${formatCompact(sales.data.tahsilatNakit, locale)} ₺`} />
+                        <MiniTile label={translate(locale, "customer.check", "Çek")} value={`${formatCompact(sales.data.tahsilatCek, locale)} ₺`} />
+                        <MiniTile label={translate(locale, "customer.promissory_note", "Senet")} value={`${formatCompact(sales.data.tahsilatSenet, locale)} ₺`} />
+                        <MiniTile label={translate(locale, "customer.credit_card", "Kredi K.")} value={`${formatCompact(sales.data.tahsilatKK, locale)} ₺`} />
+                      </div>
+                      <div className="text-[11px] text-muted mt-2">
+                        {translate(locale, "customer.total", "Toplam")}:{" "}
+                        <span className="text-fg tabular-nums">
+                          {formatCompact(
+                            sales.data.tahsilatNakit +
+                              sales.data.tahsilatCek +
+                              sales.data.tahsilatSenet +
+                              sales.data.tahsilatKK,
+                            locale,
+                          )}{" "}
+                          ₺
+                        </span>
+                      </div>
+                    </section>
+
+                    {/* Ziyaret kırılımı */}
+                    <section>
+                      <SectionHeading>{translate(locale, "customer.section.visit_detail", "Ziyaret Detayı")}</SectionHeading>
+                      <div className="grid grid-cols-2 gap-2">
+                        <MiniTile
+                          label={translate(locale, "customer.in_route_visit", "Rut içi ziyaret")}
+                          value={Number(sales.data.rutIciZiyaret ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                        />
+                        <MiniTile
+                          label={translate(locale, "customer.off_route_visit", "Rut dışı ziyaret")}
+                          value={Number(sales.data.rutDisiZiyaret ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                        />
+                      </div>
+                    </section>
+
+                    {/* Belge sayıları (ziyaret içinde) */}
+                    <section>
+                      <SectionHeading>{translate(locale, "customer.section.field_documents", "Sahada Belge")}</SectionHeading>
+                      <div className="grid grid-cols-3 gap-2">
+                        <MiniTile
+                          label={translate(locale, "customer.invoice", "Fatura")}
+                          value={Number(sales.data.ziyaretFaturaSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                        />
+                        <MiniTile
+                          label={translate(locale, "customer.waybill", "İrsaliye")}
+                          value={Number(sales.data.ziyaretIrsaliyeSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                        />
+                        <MiniTile
+                          label={translate(locale, "customer.order", "Sipariş")}
+                          value={Number(sales.data.ziyaretSiparisSayisi ?? 0).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
+                        />
+                      </div>
+                    </section>
+                  </>
                 )}
 
-                {foresight.kind === "err" && (
-                  <Card tone="bad" padding="sm">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
-                      <code className="text-[11px] text-fg-2 leading-relaxed">{foresight.message}</code>
+                {/* AI Analizi + Öngörü — Özet'in devamı (ayrı "AI & Öngörü"
+                    sekmesi kaldırıldı, butonlar + sonuç render'ları buraya
+                    taşındı). */}
+                <section className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      variant="primary"
+                      size="lg"
+                      onClick={runExplain}
+                      loading={explain.kind === "loading"}
+                      iconLeft={explain.kind !== "loading" ? <Sparkles size={15} /> : undefined}
+                    >
+                      {explain.kind === "loading" ? (
+                        translate(locale, "customer.ai.analyzing", "Analiz ediliyor…")
+                      ) : (
+                        <>
+                          {translate(locale, "customer.ai.get_analysis", "AI Analizi al")}
+                          <span title={translate(locale, "komuta.fa.paid_content", "Ücretli içerik")} className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => runForesight()}
+                      loading={foresight.kind === "loading"}
+                      iconLeft={foresight.kind !== "loading" ? <Target size={15} /> : undefined}
+                      className="border-accent/40 text-accent hover:bg-[var(--color-accent-soft)]"
+                    >
+                      {foresight.kind === "loading" ? (
+                        translate(locale, "customer.foresight.extracting", "Öngörü çıkarılıyor…")
+                      ) : (
+                        <>
+                          {translate(locale, "customer.foresight.get", "Öngörü al (14 gün)")}
+                          <span title={translate(locale, "komuta.fa.paid_content", "Ücretli içerik")} className="ml-1.5 text-[11px] font-bold px-1 rounded border border-current opacity-90">$</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {explain.kind === "err" && (
+                    <Card tone="bad" padding="sm">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
+                        <code className="text-[11px] text-fg-2 leading-relaxed">{explain.message}</code>
+                      </div>
+                    </Card>
+                  )}
+                  {explain.kind === "ok" && explain.brief && (
+                    <Card tone="accent" padding="md">
+                      <CardHeader className="flex items-center gap-1.5 text-accent">
+                        <Sparkles size={11} /> {translate(locale, "customer.ai.analysis", "AI Analizi")}
+                      </CardHeader>
+                      <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                        {explain.brief}
+                      </div>
+                      {explain.sql && (
+                        <details className="mt-3">
+                          <summary className="text-xs text-muted cursor-pointer hover:text-fg">
+                            {translate(locale, "customer.ai.sql_used", "Kullanılan SQL")}
+                          </summary>
+                          <pre className="mt-2 text-[11px] font-mono leading-relaxed overflow-auto bg-surface-3 p-3 rounded-md border border-border">
+                            {explain.sql}
+                          </pre>
+                        </details>
+                      )}
+                    </Card>
+                  )}
+
+                  {foresight.kind === "err" && (
+                    <Card tone="bad" padding="sm">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle size={14} className="text-bad mt-0.5 shrink-0" />
+                        <code className="text-[11px] text-fg-2 leading-relaxed">{foresight.message}</code>
+                      </div>
+                    </Card>
+                  )}
+                  {/* When foresight loads, the modal expands and the right pane
+                      hosts the dashboard, so no inline panel is needed here. */}
+                </section>
+              </TabPanel>
+
+              {/* Sekme 2 — Sipariş Önerisi (mevcut kompakt ReorderSuggestions, AYNEN). */}
+              <TabPanel id="oneri" active={activeTab === "oneri"}>
+                <section>
+                  <SectionHeading>{translate(locale, "customer.section.reorder", "Sipariş Önerisi")}</SectionHeading>
+                  {reorder.kind === "loading" && (
+                    <div className="text-sm text-muted text-center py-6">
+                      {translate(locale, "customer.reorder.loading", "Sipariş önerileri yükleniyor…")}
                     </div>
-                  </Card>
-                )}
-                {/* When foresight loads, the modal expands and the right pane
-                    hosts the dashboard, so no inline panel is needed here. */}
-              </section>
+                  )}
+                  {reorder.kind === "err" && (
+                    <div className="rounded-md border border-bad/40 bg-bad/10 p-4 text-sm">
+                      <div className="font-medium text-bad mb-1">{translate(locale, "customer.reorder.error", "Sipariş önerisi alınamadı")}</div>
+                      <code className="text-xs text-muted">{reorder.message}</code>
+                    </div>
+                  )}
+                  {reorder.kind === "ok" && <ReorderSuggestions data={reorder.data} locale={locale} />}
+                </section>
+              </TabPanel>
             </>
           )}
         </div>
@@ -722,87 +867,81 @@ function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; loca
       <ReorderGroup
         title={translate(locale, "customer.reorder.overdue_title", "Gecikmiş siparişler")}
         titleTone="text-bad"
-        itemTone="border-bad/30 bg-bad/5"
         items={data.overdue}
         emptyText={translate(locale, "customer.reorder.overdue_empty", "gecikmiş sipariş yok")}
         keyOf={(o) => o.urunKod}
+        locale={locale}
         renderItem={(o) => (
-          <>
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="text-sm truncate">{o.urunAd}</span>
-              <span className="text-xs font-semibold text-bad shrink-0">
-                {translate(locale, "customer.reorder.overdue_days", "{n} gün gecikti", { n: o.gunGecikti })}
-              </span>
-            </div>
-            <div className="text-[10px] text-muted mt-0.5">
-              {translate(locale, "customer.reorder.overdue_meta", "{count} sipariş · ort {days}g", {
-                count: o.siparisSayisi,
-                days: o.ortAralikGun,
-              })}
-            </div>
-          </>
+          <BarRow
+            name={o.urunAd}
+            valueText={translate(locale, "customer.reorder.overdue_days", "{n} gün gecikti", { n: o.gunGecikti })}
+            valueTone="text-bad"
+            meta={translate(locale, "customer.reorder.overdue_meta", "{count} sipariş · ort {days}g", {
+              count: o.siparisSayisi,
+              days: o.ortAralikGun,
+            })}
+          />
         )}
       />
 
       <ReorderGroup
         title={translate(locale, "customer.reorder.dropped_title", "Bırakılan ürünler")}
         titleTone="text-warn"
-        itemTone="border-warn/30 bg-warn/5"
         items={data.winBack}
         emptyText={translate(locale, "customer.reorder.dropped_empty", "bırakılmış ürün yok")}
         keyOf={(w) => w.urunKod}
+        locale={locale}
         renderItem={(w) => (
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-sm truncate">{w.urunAd}</span>
-            <span className="text-xs font-semibold text-warn shrink-0">
-              {translate(locale, "customer.reorder.dropped_days", "{n} gündür sipariş yok", { n: w.gunGecti })}
-            </span>
-          </div>
+          <BarRow
+            name={w.urunAd}
+            valueText={translate(locale, "customer.reorder.dropped_days", "{n} gündür sipariş yok", { n: w.gunGecti })}
+            valueTone="text-warn"
+          />
         )}
       />
 
       {/* v2 — kapsam açığı: alan gelmezse (backend henüz üretmiyorsa) ya da
-          boşsa bölüm hiç render edilmez; çıplak liste değil, her satır
-          "neden önerildiği"ni anlatan bir cümle taşır. */}
+          boşsa bölüm hiç render edilmez. "hiç almadı" = FIRSAT (yeşil) — akranın
+          çoğunun aldığı, bu müşterinin hiç dokunmadığı en büyük boşluk; kırmızı
+          "risk" çağrışımı YANLIŞ olur. "akran altı" nötr/muted — zaten alıyor,
+          sadece ortalamanın altında. */}
       {gapItems.length > 0 && (
         <ReorderGroup
           title={translate(locale, "customer.reorder.gap_title", "Kapsam Açığı")}
           titleTone="text-accent"
-          itemTone="border-accent/30 bg-accent/5"
           items={gapItems}
           emptyText={translate(locale, "customer.reorder.gap_empty", "kapsam açığı yok")}
           keyOf={(g) => g.urunGrupKod}
+          locale={locale}
           renderItem={(g) => (
-            <>
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="text-sm truncate">{g.urunGrupAd}</span>
-                <span
-                  className={
-                    "text-[10px] font-semibold shrink-0 " +
-                    (g.tur === "hic-almadi" ? "text-bad" : "text-warn")
-                  }
-                >
-                  {g.tur === "hic-almadi"
-                    ? translate(locale, "customer.reorder.gap_tur_none", "hiç almadı")
-                    : translate(locale, "customer.reorder.gap_tur_below", "akran altı")}
-                </span>
-              </div>
-              <div className="text-[10px] text-muted mt-0.5">
-                {translate(
-                  locale,
-                  g.tur === "hic-almadi" ? "customer.reorder.gap_none_desc" : "customer.reorder.gap_below_desc",
-                  g.tur === "hic-almadi"
-                    ? "Akranlarının %{pct}'i {grup} alıyor — bu müşteri hiç almıyor."
-                    : "Akranlarının %{pct}'i {grup} alıyor — bu müşteri az alıyor.",
-                  { pct: g.peerPenetrasyon.toFixed(0), grup: g.urunGrupAd },
-                )}
-              </div>
-              <div className="text-[10px] text-muted mt-0.5">
-                {translate(locale, "customer.reorder.gap_meta", "{count} akran müşteri", {
-                  count: g.peerMusteriSayi,
-                })}
-              </div>
-            </>
+            <BarRow
+              name={g.urunGrupAd}
+              pct={g.peerPenetrasyon}
+              barTone={g.tur === "hic-almadi" ? "bg-good/70" : "bg-muted-2/60"}
+              valueText={`%${g.peerPenetrasyon.toFixed(0)}`}
+              badge={
+                g.tur === "hic-almadi" ? (
+                  <Badge tone="good" size="sm">
+                    {translate(locale, "customer.reorder.gap_tur_none", "fırsat")}
+                  </Badge>
+                ) : (
+                  <Badge tone="muted" size="sm">
+                    {translate(locale, "customer.reorder.gap_tur_below", "akran altı")}
+                  </Badge>
+                )
+              }
+              meta={translate(locale, "customer.reorder.gap_meta", "{count} akran", {
+                count: formatCompact(g.peerMusteriSayi, locale),
+              })}
+              title={translate(
+                locale,
+                g.tur === "hic-almadi" ? "customer.reorder.gap_none_desc" : "customer.reorder.gap_below_desc",
+                g.tur === "hic-almadi"
+                  ? "Akranlarının %{pct}'i {grup} alıyor — bu müşteri hiç almıyor."
+                  : "Akranlarının %{pct}'i {grup} alıyor — bu müşteri az alıyor.",
+                { pct: g.peerPenetrasyon.toFixed(0), grup: g.urunGrupAd },
+              )}
+            />
           )}
         />
       )}
@@ -810,10 +949,10 @@ function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; loca
       <ReorderGroup<PeerCrossSellItem | ReorderCrossSellItem>
         title={translate(locale, "customer.reorder.cross_sell_title", "Çapraz-satış önerisi")}
         titleTone="text-muted"
-        itemTone="border-border bg-surface"
         items={peerCrossItems ?? data.crossSell}
         emptyText={translate(locale, "customer.reorder.cross_sell_empty", "öneri yok")}
         keyOf={(c) => c.urunKod}
+        locale={locale}
         renderItem={(c) =>
           peerCrossItems ? (
             <PeerCrossSellRow item={c as PeerCrossSellItem} locale={locale} />
@@ -826,61 +965,139 @@ function ReorderSuggestions({ data, locale = "tr" }: { data: ReorderResult; loca
   );
 }
 
+/**
+ * Kompakt tek-satır satır — panelin genelindeki "isim · bar · değer" bar-satır
+ * desenine uyar (bkz. `v3/marka/BrandPortfolioPanel.tsx`). `pct` verilmezse
+ * (v1 overdue/winBack gibi peer-yüzdesi olmayan veriler) bar hiç render
+ * edilmez — sahte bir oran icat edilmez.
+ */
+function BarRow({
+  name,
+  pct,
+  barTone = "bg-good/70",
+  valueText,
+  valueTone = "text-fg-2",
+  badge,
+  meta,
+  title,
+}: {
+  name: string;
+  pct?: number;
+  barTone?: string;
+  valueText: string;
+  valueTone?: string;
+  badge?: React.ReactNode;
+  meta?: string;
+  title?: string;
+}) {
+  return (
+    <li className="flex items-center gap-2.5 px-2.5 py-1.5 hover:bg-surface-2/60 transition-colors" title={title}>
+      <span className="text-sm truncate flex-1 min-w-0">{name}</span>
+      {pct !== undefined && (
+        <div className="w-16 h-1.5 rounded-full bg-bg overflow-hidden shrink-0" aria-hidden="true">
+          <div
+            className={"h-full rounded-full transition-[width] duration-300 " + barTone}
+            style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }}
+          />
+        </div>
+      )}
+      <span className={"text-xs font-semibold tabular-nums shrink-0 whitespace-nowrap " + valueTone}>
+        {valueText}
+      </span>
+      {badge}
+      {meta && (
+        <span className="text-[10px] text-muted shrink-0 truncate max-w-[120px]">{meta}</span>
+      )}
+    </li>
+  );
+}
+
 function CrossSellRow({ item, locale }: { item: ReorderCrossSellItem; locale: Locale }) {
   return (
-    <div>
-      <div className="text-sm truncate">{item.urunAd}</div>
-      <div className="text-[10px] text-muted mt-0.5 truncate">
-        <span className="text-fg-2 font-medium">{item.anchorUrunAd}</span>{" "}
-        {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
-      </div>
-    </div>
+    <BarRow
+      name={item.urunAd}
+      valueText={translate(locale, "customer.reorder.cross_sell_count", "{n}×", { n: item.birlikteSayisi })}
+      badge={
+        <Badge tone="muted" size="sm">
+          {translate(locale, "customer.reorder.cross_sell_badge", "öneri")}
+        </Badge>
+      }
+      meta={item.anchorUrunAd}
+      title={translate(
+        locale,
+        "customer.reorder.cross_sell_hint_full",
+        "{anchor} alıyor · bunu alanlar bunu da alıyor",
+        { anchor: item.anchorUrunAd },
+      )}
+    />
   );
 }
 
 /**
- * v2 — peer-temelli çapraz-satış satırı. `anchorUrunAd` mevcutsa (backend bu
- * öneriyi somut bir "birlikte alınan ürün" ile de destekleyebiliyorsa) v1'in
- * daha spesifik gerekçesi korunur; yoksa akran-penetrasyonu cümlesi kullanılır.
+ * v2 — peer-temelli çapraz-satış satırı. Akranların büyük kısmının aldığı,
+ * bu müşterinin henüz almadığı ürün her zaman bir FIRSAT'tır (yeşil) —
+ * `WalletGapItem` "hic-almadi" ile aynı anlam ailesinde. `anchorUrunAd`
+ * mevcutsa (backend somut bir "birlikte alınan ürün" ile destekleyebiliyorsa)
+ * v1'in daha spesifik gerekçesi meta alanında kısaca korunur; yoksa akran
+ * sayısı gösterilir.
  */
 function PeerCrossSellRow({ item, locale }: { item: PeerCrossSellItem; locale: Locale }) {
+  const meta =
+    item.anchorUrunAd ??
+    translate(locale, "customer.reorder.peer_cross_meta", "{count} akran", {
+      count: formatCompact(item.peerMusteriSayi, locale),
+    });
+  const title = item.anchorUrunAd
+    ? translate(
+        locale,
+        "customer.reorder.cross_sell_hint_full",
+        "{anchor} alıyor · bunu alanlar bunu da alıyor",
+        { anchor: item.anchorUrunAd },
+      )
+    : translate(locale, "customer.reorder.peer_cross_desc", "Senin gibi müşterilerin %{pct}'i {urun} alıyor.", {
+        pct: item.peerPenetrasyon.toFixed(0),
+        urun: item.urunAd,
+      });
   return (
-    <div>
-      <div className="text-sm truncate">{item.urunAd}</div>
-      <div className="text-[10px] text-muted mt-0.5 truncate">
-        {item.anchorUrunAd ? (
-          <>
-            <span className="text-fg-2 font-medium">{item.anchorUrunAd}</span>{" "}
-            {translate(locale, "customer.reorder.cross_sell_hint", "alıyor · bunu alanlar bunu da alıyor")}
-          </>
-        ) : (
-          translate(locale, "customer.reorder.peer_cross_desc", "Senin gibi müşterilerin %{pct}'i {urun} alıyor.", {
-            pct: item.peerPenetrasyon.toFixed(0),
-            urun: item.urunAd,
-          })
-        )}
-      </div>
-    </div>
+    <BarRow
+      name={item.urunAd}
+      pct={item.peerPenetrasyon}
+      barTone="bg-good/70"
+      valueText={`%${item.peerPenetrasyon.toFixed(0)}`}
+      badge={
+        <Badge tone="good" size="sm">
+          {translate(locale, "customer.reorder.gap_tur_none", "fırsat")}
+        </Badge>
+      }
+      meta={meta}
+      title={title}
+    />
   );
 }
+
+const REORDER_GROUP_TOP_N = 4;
 
 function ReorderGroup<T>({
   title,
   titleTone,
-  itemTone,
   items,
   emptyText,
   keyOf,
   renderItem,
+  locale,
 }: {
   title: string;
   titleTone: string;
-  itemTone: string;
   items: T[];
   emptyText: string;
   keyOf: (item: T) => React.Key;
   renderItem: (item: T) => React.ReactNode;
+  locale: Locale;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleItems = expanded ? items : items.slice(0, REORDER_GROUP_TOP_N);
+  const hiddenCount = items.length - REORDER_GROUP_TOP_N;
+
   return (
     <div>
       <div className={"text-[10px] uppercase tracking-wider font-semibold mb-1.5 " + titleTone}>
@@ -889,13 +1106,25 @@ function ReorderGroup<T>({
       {items.length === 0 ? (
         <div className="text-xs text-muted">{emptyText}</div>
       ) : (
-        <ul className="space-y-1.5">
-          {items.map((item) => (
-            <li key={keyOf(item)} className={"rounded-md border px-3 py-2 " + itemTone}>
-              {renderItem(item)}
-            </li>
-          ))}
-        </ul>
+        <>
+          <ul className="rounded-md border border-border bg-surface divide-y divide-border/50 overflow-hidden">
+            {visibleItems.map((item) => (
+              <Fragment key={keyOf(item)}>{renderItem(item)}</Fragment>
+            ))}
+          </ul>
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded((prev) => !prev)}
+              aria-expanded={expanded}
+              className="mt-1.5 text-[11px] font-medium text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 rounded-sm"
+            >
+              {expanded
+                ? translate(locale, "customer.reorder.show_less", "daha az göster")
+                : translate(locale, "customer.reorder.show_more", "+{n} daha", { n: hiddenCount })}
+            </button>
+          )}
+        </>
       )}
     </div>
   );
