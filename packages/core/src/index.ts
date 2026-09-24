@@ -35,6 +35,9 @@ export * from "./fold-other.js";
 export * from "./volume.js";
 export * from "./demo-mask.js";
 export * from "./reorder.js";
+// Demo köprüsü — yalnız demoData tenant'ta sentetik harita id'sini gerçek
+// müşteriye eşler (bkz. reorder-demo-bridge.ts dosya-üstü notu).
+export * from "./reorder-demo-bridge.js";
 // Sipariş Öneri v2 — akran (peer) agregatı, `reorder.ts`'in walletGap/
 // peerCrossSell alanlarının veri kaynağı. `warmPeerAggregates`/
 // `listActiveEkGrupKods` gece-batch/demo-bake script'leri için dışa açık.

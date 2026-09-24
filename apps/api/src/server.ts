@@ -26,6 +26,7 @@ import {
   getKomutaFacets,
   getMapFacets,
   getCustomerReorder,
+  resolveDemoReorderCustomer,
   getWietnauerYonetimSnapshot,
   getWietnauerMarkaSnapshot,
   getWietnauerAktivasyonSnapshot,
@@ -1149,7 +1150,16 @@ app.get(
     scopeFromRequest,
     customerInScope: (musteriKod, allowedDistKods) =>
       customerInScope(REPO_ROOT, musteriKod, allowedDistKods),
-    getCustomerReorder,
+    // Demo tenant: harita müşterileri sentetik (map_customers, PERNOD_TEST'te
+    // yok). Sentetik id'yi gerçek aktif müşteriye eşleyip reorder'ı onun için
+    // hesapla (illüstratif). Gerçek tenant'ta sarmalama YOK — motor değişmez.
+    getCustomerReorder: DEMO_DATA
+      ? async (options) =>
+          getCustomerReorder({
+            ...options,
+            musteriKod: await resolveDemoReorderCustomer(options.musteriKod),
+          })
+      : getCustomerReorder,
     scopeSingleDistId,
     checkRateLimit,
     clientIp,
