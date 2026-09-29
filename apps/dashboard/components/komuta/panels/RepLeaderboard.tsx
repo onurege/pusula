@@ -1,4 +1,5 @@
 import type { KomutaRep, ValueUnit } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { InfoHint } from "../InfoHint";
 import { Val } from "../format";
 
@@ -9,6 +10,9 @@ export function RepLeaderboard({
   reps: KomutaRep[];
   unit?: ValueUnit;
 }) {
+  // Hacim birimi tenant'a göre değişir (Pernod "9L", Wietnauer "70cl") —
+  // sabit fallback YOK, tenant-nötr KISIT'i.
+  const volumeShort = getTenantConfig().volume.short;
   // Panel sözleşmesi "Top 10" — kaynak fazla satır dönse de ilk 10 gösterilir.
   const topReps = reps.slice(0, 10);
   const max = Math.max(1, ...topReps.map((r) => r.ciro));
@@ -49,7 +53,7 @@ export function RepLeaderboard({
               <div className="lb-bar">
                 <div className={`lb-bar-fill${tone}`} style={{ width: `${pct}%` }} />
               </div>
-              <div className={`lb-pct ${pctTone}`}><Val n={r.ciro} unit={unit} /></div>
+              <div className={`lb-pct ${pctTone}`}><Val n={r.ciro} unit={unit} volumeShort={volumeShort} /></div>
             </div>
           );
         })

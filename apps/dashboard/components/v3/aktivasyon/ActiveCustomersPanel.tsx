@@ -5,13 +5,14 @@ import type { ActiveCustomers90d } from "./types";
  * Panel A — 90g Aktif Müşteri sayısı + segment kırılımı.
  *
  * KPI hero (toplam aktif + önceki döneme göre değişim) + altta segment
- * dağılımı yatay bar. Segment etiketleri müşteri grup kırılımı üzerinden
- * (TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM.TXTAD — Prestige /
+ * dağılımı yatay bar. Segment etiketleri tenant-konfigüre müşteri kırılımı
+ * üzerinden (getCustomerBreakdownMeta — Wietnauer'da birleşik ek saha; eskiden
  * Premium / Premium Plus / Standart / Standart Plus / Tanımsız vb.) gelir.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
+export function ActiveCustomersPanel({ data, locale = "tr" }: { data: ActiveCustomers90d; locale?: Locale }) {
   if (panelHidden("panel.risk.active")) return null;
   const change = data.degisimPct;
   const changeTone =
@@ -30,14 +31,21 @@ export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.risk.active", "90 Gün Aktif Müşteri")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.active", t(locale, "panel.risk.active", "90 Gün Aktif Müşteri"))}</div>
           <div className="v3-panel-sub">
-            Son 90 gün içinde en az 1 fatura kesilmiş distinct müşteri ·
-            önceki 90 güne göre {""}
-            <strong style={{ color: changeColor }}>
-              {changeSign}
-              {change.toFixed(1)}%
-            </strong>
+            {locale === "en" ? (
+              <>
+                Distinct customers with at least 1 invoice in the last 90 days ·
+                vs. previous 90 days {""}
+                <strong style={{ color: changeColor }}>{changeSign}{change.toFixed(1)}%</strong>
+              </>
+            ) : (
+              <>
+                Son 90 gün içinde en az 1 fatura kesilmiş distinct müşteri ·
+                önceki 90 güne göre {""}
+                <strong style={{ color: changeColor }}>{changeSign}{change.toFixed(1)}%</strong>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -47,15 +55,16 @@ export function ActiveCustomersPanel({ data }: { data: ActiveCustomers90d }) {
           {data.toplam.toLocaleString("tr-TR")}
         </div>
         <div className="act-hero-sub">
-          aktif müşteri (önceki dönem:{" "}
-          {data.oncekiToplam.toLocaleString("tr-TR")})
+          {locale === "en"
+            ? `active customers (previous period: ${data.oncekiToplam.toLocaleString("tr-TR")})`
+            : `aktif müşteri (önceki dönem: ${data.oncekiToplam.toLocaleString("tr-TR")})`}
         </div>
       </div>
 
       <div className="seg-list">
-        <div className="seg-title">Müşteri Grup Kırılımı</div>
+        <div className="seg-title">{locale === "en" ? "Customer Breakdown" : "Müşteri Kırılımı"}</div>
         {segments.length === 0 && (
-          <div className="seg-empty">Grup kırılımı verisi bulunamadı.</div>
+          <div className="seg-empty">{locale === "en" ? "No group breakdown data found." : "Grup kırılımı verisi bulunamadı."}</div>
         )}
         {segments.map((s) => (
           <div key={s.segment} className="seg-row">

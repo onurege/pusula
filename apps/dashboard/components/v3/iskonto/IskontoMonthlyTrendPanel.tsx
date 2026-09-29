@@ -7,9 +7,11 @@ import { formatCompact } from "@/components/komuta/format";
  * Tek SVG; iki eksen — sol: tutar (bar), sağ: % (line).
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, localizeAyAbbr, type Locale } from "@/lib/i18n";
 
 export function IskontoMonthlyTrendPanel({
   points,
+  locale = "tr",
 }: {
   points: ReadonlyArray<{
     yyyymm: string;
@@ -17,14 +19,16 @@ export function IskontoMonthlyTrendPanel({
     iskonto: number;
     iskontoOraniPct: number;
   }>;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.iskonto.monthly")) return null;
+  const title = panelTitle("panel.iskonto.monthly", t(locale, "panel.iskonto.monthly", "Aylık İskonto Trendi"));
   if (points.length === 0) {
     return (
       <div className="trend-panel">
         <div className="trend-head">
-          <div className="trend-title">{panelTitle("panel.iskonto.monthly", "Aylık İskonto Trendi")}</div>
-          <div className="trend-sub">Veri yok</div>
+          <div className="trend-title">{title}</div>
+          <div className="trend-sub">{locale === "en" ? "No data" : "Veri yok"}</div>
         </div>
       </div>
     );
@@ -75,14 +79,16 @@ export function IskontoMonthlyTrendPanel({
     <div className="trend-panel">
       <div className="trend-head">
         <div>
-          <div className="trend-title">{panelTitle("panel.iskonto.monthly", "Aylık İskonto Trendi")}</div>
+          <div className="trend-title">{title}</div>
           <div className="trend-sub">
-            Son 12 ay · İskonto tutarı (bar) ve iskonto/ciro oranı (çizgi)
+            {locale === "en"
+              ? "Last 12 months · Discount amount (bar) and discount/revenue rate (line)"
+              : "Son 12 ay · İskonto tutarı (bar) ve iskonto/ciro oranı (çizgi)"}
           </div>
         </div>
         <div className="trend-legend">
-          <span className="lg-bar" /> iskonto tutarı
-          <span className="lg-line" /> oran %
+          <span className="lg-bar" /> {locale === "en" ? "discount amount" : "iskonto tutarı"}
+          <span className="lg-line" /> {locale === "en" ? "rate %" : "oran %"}
         </div>
       </div>
 
@@ -155,7 +161,7 @@ export function IskontoMonthlyTrendPanel({
                   fontSize="10"
                   fill="var(--color-muted-2)"
                 >
-                  {p.ay}
+                  {localizeAyAbbr(p.ay, locale)}
                 </text>
               </g>
             );

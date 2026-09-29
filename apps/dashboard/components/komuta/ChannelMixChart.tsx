@@ -15,6 +15,7 @@ import {
   YAxis,
 } from "recharts";
 import type { KomutaChannelMonthlyRow, ValueUnit } from "@/lib/api";
+import { t as translate, localizeAyAbbr, type Locale } from "@/lib/i18n";
 
 type ViewMode = "bar" | "pie";
 /** Global Periyot değeri: kaç ay trend gösterileceği, ya da "ytd" (bu yıl). */
@@ -24,6 +25,12 @@ type Props = {
   rows: KomutaChannelMonthlyRow[];
   /** Birim — değerler TL veya 9LE bazında olur. Default: tl. */
   unit?: ValueUnit;
+  /** Tenant'ın hacim kısaltması (Pernod "9L", Wietnauer "70cl") — server
+   *  component (`page.tsx`) `getTenantConfig().volume.short` ile okur, buraya
+   *  prop olarak geçirir (bu "use client" bileşen server-only config'e
+   *  erişemez). Sabit fallback YOK — `unit === "9le"` olduğu her yerde
+   *  çağıran taraf bu prop'u geçirmek ZORUNDA (tenant-nötr KISIT'i). */
+  volumeShort: string;
   /** Default: "Kanal Mix" */
   title?: string;
   /** Default: "📊" */
@@ -43,6 +50,7 @@ type Props = {
   enableTypeFilter?: boolean;
   /** md15: dropdown etiketi. Default: "Müşteri Tipi" */
   typeFilterLabel?: string;
+  locale?: Locale;
 };
 
 // Tutarlı kanal renkleri — Komuta'nın geri kalanıyla aynı palette.
@@ -94,16 +102,28 @@ function readChartColors() {
 export function ChannelMixChart({
   rows,
   unit = "tl",
-  title = "Kanal Mix",
+  volumeShort,
+  title,
   icon = "📊",
-  category = "kanal mix",
-  sourceNote = "Müşteri grubu (TBLMUSTERIGRUP.TXTAD) × ay kırılımı, son 12 ay. Top 5 kanal görünür; geri kalan \"Diğer\" altında toplandı.",
+  category,
+  sourceNote,
   periodMonths,
   enablePieView = false,
   enableTypeFilter = false,
-  typeFilterLabel = "Müşteri Tipi",
+  typeFilterLabel,
+  locale = "tr",
 }: Props) {
-  const unitSuffix = unit === "9le" ? "9L" : "₺";
+  const resolvedTitle = title ?? translate(locale, "komuta.channelmix.title", "Kanal Mix");
+  const resolvedCategory = category ?? translate(locale, "komuta.channelmix.category", "kanal mix");
+  const resolvedSourceNote =
+    sourceNote ??
+    translate(
+      locale,
+      "komuta.channelmix.source_note",
+      "Müşteri grubu (TBLMUSTERIGRUP.TXTAD) × ay kırılımı, son 12 ay. Top 5 kanal görünür; geri kalan \"Diğer\" altında toplandı.",
+    );
+  const resolvedTypeFilterLabel = typeFilterLabel ?? translate(locale, "komuta.channelmix.type_filter_default", "Müşteri Tipi");
+  const unitSuffix = unit === "9le" ? volumeShort : "₺";
   const [colors, setColors] = useState(readChartColors);
   const [view, setView] = useState<ViewMode>("bar");
   const [selectedType, setSelectedType] = useState<string>("all");
@@ -184,7 +204,7 @@ export function ChannelMixChart({
       const cells = byMonth.get(m) ?? {};
       const row: Record<string, string | number> = {
         yyyymm: m,
-        ay: monthLabel.get(m) ?? m,
+        ay: localizeAyAbbr(monthLabel.get(m) ?? m, locale),
       };
       for (const ch of channels) row[ch] = cells[ch] ?? 0;
       return row;
@@ -194,19 +214,22 @@ export function ChannelMixChart({
     const pieData = channels.map((ch) => ({ name: ch, value: channelTotals.get(ch) ?? 0 }));
 
     return { data, channels, totals: { grandTotal }, pieData };
-  }, [filteredRows]);
+  }, [filteredRows, locale]);
 
   if (data.length === 0) {
     return (
       <div className="panel">
         <div className="panel-header">
           <div className="panel-title">
-            <span className="icon">{icon}</span> {title}
+            <span className="icon">{icon}</span> {resolvedTitle}
           </div>
         </div>
         <div className="cmc-empty">
-          {category} verisi henüz hazır değil. Sağ üstteki <strong>Verileri
-          yenile</strong> butonuna tıklayarak son 12 ayın aylık kırılımını çek.
+          {translate(locale, "komuta.channelmix.empty", "{category} verisi henüz hazır değil. Sağ üstteki", {
+            category: resolvedCategory,
+          })}{" "}
+          <strong>{translate(locale, "komuta.channelmix.empty_cta", "Verileri yenile")}</strong>{" "}
+          {translate(locale, "komuta.channelmix.empty_suffix", "butonuna tıklayarak son 12 ayın aylık kırılımını çek.")}
         </div>
         <style jsx>{`
           .cmc-empty {
@@ -232,22 +255,24 @@ export function ChannelMixChart({
     <div className="panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">{icon}</span> {title}
+          <span className="icon">{icon}</span> {resolvedTitle}
         </div>
-        <div className="panel-meta">{formatCompact(totals.grandTotal)} {unitSuffix} toplam</div>
+        <div className="panel-meta">
+          {formatCompact(totals.grandTotal, locale)} {unitSuffix} {translate(locale, "komuta.channelmix.total", "toplam")}
+        </div>
       </div>
 
       {showToolbar && (
         <div className="cmc-toolbar">
           {enableTypeFilter && (
             <label className="cmc-select-wrap">
-              <span className="cmc-select-label">{typeFilterLabel}</span>
+              <span className="cmc-select-label">{resolvedTypeFilterLabel}</span>
               <select
                 value={selectedType}
                 onChange={(e) => setSelectedType(e.target.value)}
-                aria-label={typeFilterLabel}
+                aria-label={resolvedTypeFilterLabel}
               >
-                <option value="all">Tümü</option>
+                <option value="all">{translate(locale, "komuta.all", "Tümü")}</option>
                 {typeOptions.map((t) => (
                   <option key={t} value={t}>{t}</option>
                 ))}
@@ -255,7 +280,7 @@ export function ChannelMixChart({
             </label>
           )}
           {enablePieView && (
-            <div className="cmc-seg" role="tablist" aria-label="Görünüm">
+            <div className="cmc-seg" role="tablist" aria-label={translate(locale, "komuta.view_label", "Görünüm")}>
               <button
                 type="button"
                 role="tab"
@@ -272,7 +297,7 @@ export function ChannelMixChart({
                 className={view === "pie" ? "on" : ""}
                 onClick={() => setView("pie")}
               >
-                Pasta
+                {translate(locale, "komuta.channelmix.pie", "Pasta")}
               </button>
             </div>
           )}
@@ -286,7 +311,7 @@ export function ChannelMixChart({
               <Tooltip
                 formatter={(v, name) => {
                   const num = typeof v === "number" ? v : Number(v ?? 0);
-                  return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
+                  return [`${formatCompact(num, locale)} ${unitSuffix}`, String(name ?? "")];
                 }}
                 contentStyle={{
                   background: colors.tooltipBg,
@@ -325,7 +350,7 @@ export function ChannelMixChart({
                 axisLine={{ stroke: colors.axis }}
               />
               <YAxis
-                tickFormatter={formatCompact}
+                tickFormatter={(v) => formatCompact(v, locale)}
                 tick={{ fill: colors.axisTick, fontSize: 10 }}
                 tickLine={false}
                 axisLine={false}
@@ -335,7 +360,7 @@ export function ChannelMixChart({
                 cursor={{ fill: colors.cursor }}
                 formatter={(v, name) => {
                   const num = typeof v === "number" ? v : Number(v ?? 0);
-                  return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
+                  return [`${formatCompact(num, locale)} ${unitSuffix}`, String(name ?? "")];
                 }}
                 contentStyle={{
                   background: colors.tooltipBg,
@@ -346,7 +371,11 @@ export function ChannelMixChart({
                 }}
                 labelStyle={{ color: colors.tooltipLabel, fontWeight: 600 }}
                 itemStyle={{ padding: "1px 0" }}
-                labelFormatter={(label) => `${String(label ?? "")} · Aylık Toplam`}
+                labelFormatter={(label) =>
+                  translate(locale, "komuta.channelmix.monthly_total", "{label} · Aylık Toplam", {
+                    label: String(label ?? ""),
+                  })
+                }
               />
               <Legend
                 wrapperStyle={{ fontSize: 11, paddingTop: 4 }}
@@ -369,7 +398,7 @@ export function ChannelMixChart({
         </ResponsiveContainer>
       </div>
 
-      <div className="cmc-hint">{sourceNote}</div>
+      <div className="cmc-hint">{resolvedSourceNote}</div>
 
       <style jsx>{`
         .cmc-chart-wrap {
@@ -440,14 +469,20 @@ export function ChannelMixChart({
 }
 
 /** Komuta page'deki formatCompact ile aynı davranış — sadece bu component
- *  için yerel kopya (page tsx'ten import problematik server/client sınırı). */
-function formatCompact(n: number): string {
+ *  için yerel kopya (page tsx'ten import problematik server/client sınırı).
+ *  EN'de "B" (bin/thousand) İngilizce'de "billion" ile karışacağı için
+ *  locale'e göre farklı kısaltma seti kullanılır (K/M/Bn). */
+function formatCompact(n: number, locale: Locale = "tr"): string {
   if (typeof n !== "number" || isNaN(n)) return "—";
+  const intl = locale === "en" ? "en-US" : "tr-TR";
+  const suffixBillion = locale === "en" ? "Bn" : "Mr";
+  const suffixMillion = locale === "en" ? "M" : "Mn";
+  const suffixThousand = locale === "en" ? "K" : "B";
   if (Math.abs(n) >= 1_000_000_000)
-    return (n / 1_000_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mr";
+    return (n / 1_000_000_000).toLocaleString(intl, { maximumFractionDigits: 2 }) + " " + suffixBillion;
   if (Math.abs(n) >= 1_000_000)
-    return (n / 1_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " Mn";
+    return (n / 1_000_000).toLocaleString(intl, { maximumFractionDigits: 1 }) + " " + suffixMillion;
   if (Math.abs(n) >= 1_000)
-    return (n / 1_000).toLocaleString("tr-TR", { maximumFractionDigits: 0 }) + " B";
-  return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
+    return (n / 1_000).toLocaleString(intl, { maximumFractionDigits: 0 }) + " " + suffixThousand;
+  return n.toLocaleString(intl, { maximumFractionDigits: 0 });
 }

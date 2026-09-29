@@ -5,6 +5,7 @@ import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { donemLabel } from "@/lib/donem";
+import { getLocale, t } from "@/lib/i18n";
 import { VisitDailyTrendPanel } from "@/components/v3/saha/VisitDailyTrendPanel";
 import { CoveragePanel } from "@/components/v3/saha/CoveragePanel";
 import { RepPerformancePanel } from "@/components/v3/saha/RepPerformancePanel";
@@ -12,7 +13,10 @@ import { VisitConversionPanel } from "@/components/v3/saha/VisitConversionPanel"
 import { DistributorComparisonPanel } from "@/components/v3/saha/DistributorComparisonPanel";
 import { formatCompact } from "@/components/komuta/format";
 
-export const metadata = { title: "Saha Operasyon · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.saha.title", "Saha Operasyon")} · V3 · Insider` };
+}
 
 /**
  * V3 Dashboard #5 — Distribütör & Saha Operasyon.
@@ -31,6 +35,7 @@ type Props = {
 
 export default async function V3SahaOperasyonPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
@@ -46,12 +51,17 @@ export default async function V3SahaOperasyonPage({ searchParams }: Props) {
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 05"
-        title="Distribütör & Saha Operasyon"
+        locale={locale}
+        eyebrow={t(locale, "page.saha.eyebrow", "Dashboard 05")}
+        title={t(locale, "page.saha.title", "Distribütör & Saha Operasyon")}
         contentKey="page.saha.title"
         descKey="page.saha.desc"
-        description={`${tenant.displayName} sahasının günlük ziyaret temposu, müşteri kapsama oranı, temsilci performansı ve sipariş dönüşüm verimliliği — operasyonel ekiplerin tek görünümü.`}
-        dataNote={`TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · TBLMUSTERIGRUPKIRILIM müşteri grup kırılımı · ${donemLabel(donem, dateFrom, dateTo)}`}
+        description={
+          locale === "en"
+            ? `${tenant.displayName} field team's daily visit pace, customer coverage, rep performance, and order conversion efficiency — one view for operations teams.`
+            : `${tenant.displayName} sahasının günlük ziyaret temposu, müşteri kapsama oranı, temsilci performansı ve sipariş dönüşüm verimliliği — operasyonel ekiplerin tek görünümü.`
+        }
+        dataNote={`TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · ${locale === "en" ? "customer breakdown (tenant-configured)" : "müşteri kırılımı (tenant-konfigürasyonu)"} · ${donemLabel(donem, dateFrom, dateTo, locale)}`}
         generatedAt={snap?.generatedAt}
       />
 
@@ -59,9 +69,9 @@ export default async function V3SahaOperasyonPage({ searchParams }: Props) {
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.saha.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.saha.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -72,30 +82,30 @@ export default async function V3SahaOperasyonPage({ searchParams }: Props) {
           <div className="v3-kpi-grid">
             {!panelHidden("kpi.saha.ziyaret") && (
             <KpiTile
-              label={cs("kpi.saha.ziyaret", "Son 7g Ziyaret")}
+              label={cs("kpi.saha.ziyaret", t(locale, "kpi.saha.ziyaret", "Son 7g Ziyaret"))}
               value={formatCompact(snap.kpi.son7gZiyaret)}
-              sub="toplam (rut içi + rut dışı)"
+              sub={locale === "en" ? "total (in-route + out-of-route)" : "toplam (rut içi + rut dışı)"}
             />
           )}
             {!panelHidden("kpi.saha.unique") && (
             <KpiTile
-              label={cs("kpi.saha.unique", "Unique Müşteri")}
+              label={cs("kpi.saha.unique", t(locale, "kpi.saha.unique", "Unique Müşteri"))}
               value={snap.kpi.son7gUniqueMusteri.toLocaleString("tr-TR")}
-              sub="son 7g'de en az 1 ziyaret"
+              sub={locale === "en" ? "at least 1 visit in the last 7d" : "son 7g'de en az 1 ziyaret"}
             />
           )}
             {!panelHidden("kpi.saha.aktiftemsilci") && (
             <KpiTile
-              label={cs("kpi.saha.aktiftemsilci", "Aktif Temsilci")}
+              label={cs("kpi.saha.aktiftemsilci", t(locale, "kpi.saha.aktiftemsilci", "Aktif Temsilci"))}
               value={snap.kpi.son7gAktifTemsilci.toLocaleString("tr-TR")}
-              sub="son 7g'de en az 1 ziyaret yapan"
+              sub={locale === "en" ? "made at least 1 visit in the last 7d" : "son 7g'de en az 1 ziyaret yapan"}
             />
           )}
             {!panelHidden("kpi.saha.donusum") && (
             <KpiTile
-              label={cs("kpi.saha.donusum", "Dönüşüm Oranı")}
+              label={cs("kpi.saha.donusum", t(locale, "kpi.saha.donusum", "Dönüşüm Oranı"))}
               value={`%${snap.kpi.son7gDonusumPct.toFixed(1)}`}
-              sub="son 7g · sipariş / ziyaret"
+              sub={locale === "en" ? "last 7d · order / visit" : "son 7g · sipariş / ziyaret"}
               tone={
                 snap.kpi.son7gDonusumPct >= 70
                   ? "good"
@@ -110,13 +120,13 @@ export default async function V3SahaOperasyonPage({ searchParams }: Props) {
           {/* Asıl içerik: 2 sütun */}
           <div className="v3-content-grid">
             <div className="col-main">
-              <VisitDailyTrendPanel rows={snap.visitDaily} kpi={snap.kpi} />
-              <RepPerformancePanel rows={snap.reps} />
-              <DistributorComparisonPanel rows={snap.distributors} />
+              <VisitDailyTrendPanel rows={snap.visitDaily} kpi={snap.kpi} locale={locale} />
+              <RepPerformancePanel rows={snap.reps} locale={locale} />
+              <DistributorComparisonPanel rows={snap.distributors} locale={locale} />
             </div>
             <div className="col-side">
-              <CoveragePanel coverage={snap.coverage} />
-              <VisitConversionPanel rows={snap.conversion} />
+              <CoveragePanel coverage={snap.coverage} locale={locale} />
+              <VisitConversionPanel rows={snap.conversion} locale={locale} />
             </div>
           </div>
         </>

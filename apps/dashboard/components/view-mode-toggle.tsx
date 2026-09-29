@@ -3,9 +3,11 @@
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Map as MapIcon, Layers } from "lucide-react";
 import { cn } from "@/components/ui/cn";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   current: "customer" | "region" | "city";
+  locale?: Locale;
 };
 
 /**
@@ -15,7 +17,7 @@ type Props = {
  *
  * "Verileri yenile" butonunun yanında, sağ üst köşede konumlanır.
  */
-export function ViewModeToggle({ current }: Props) {
+export function ViewModeToggle({ current, locale = "tr" }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const sp = useSearchParams();
@@ -48,10 +50,10 @@ export function ViewModeToggle({ current }: Props) {
             ? "bg-surface text-fg shadow-xs"
             : "text-muted hover:text-fg",
         )}
-        title="Müşteri bazlı — her noktaya tıklanabilir"
+        title={translate(locale, "map.view.customer_hint", "Müşteri bazlı — her noktaya tıklanabilir")}
       >
         <MapIcon size={13} />
-        Müşteri
+        {translate(locale, "map.view.customer", "Müşteri")}
       </button>
       <button
         type="button"
@@ -62,10 +64,14 @@ export function ViewModeToggle({ current }: Props) {
             ? "bg-surface text-fg shadow-xs"
             : "text-muted hover:text-fg",
         )}
-        title="Bölge bazlı — TBLDISTGRUP ile aggregate; balona tıklayınca müşterilere iner"
+        title={translate(
+          locale,
+          "map.view.region_hint",
+          "Bölge bazlı — TBLDISTGRUP ile aggregate; balona tıklayınca müşterilere iner",
+        )}
       >
         <Layers size={13} />
-        Bölge
+        {translate(locale, "komuta.filter.region", "Bölge")}
       </button>
     </div>
   );

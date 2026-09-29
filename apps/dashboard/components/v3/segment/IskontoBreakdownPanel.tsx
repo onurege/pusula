@@ -1,5 +1,6 @@
 import { formatCompact } from "@/components/komuta/format";
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * md35 — İskonto Kırılımı: Ek Grup ve nokta (müşteri) bazında harcanan
@@ -31,9 +32,11 @@ export type MusteriIskontoRow = {
 export function IskontoBreakdownPanel({
   ekGrup,
   musteri,
+  locale = "tr",
 }: {
   ekGrup: EkGrupIskontoRow[];
   musteri: MusteriIskontoRow[];
+  locale?: Locale;
 }) {
   if (panelHidden("panel.segment.iskonto")) return null;
   const ekGrupVisible = ekGrup.slice(0, 12);
@@ -43,18 +46,19 @@ export function IskontoBreakdownPanel({
     <div className="v3-panel iskonto-break-panel">
       <div className="seg-head">
         <div className="seg-title">
-          {panelTitle("panel.segment.iskonto", "İskonto Kırılımı — Ek Grup / Nokta")}
+          {panelTitle("panel.segment.iskonto", t(locale, "panel.segment.iskonto", "İskonto Kırılımı — Ek Grup / Nokta"))}
         </div>
         <div className="seg-sub">
-          Son 30g DBLISKONTOTUTARI toplamı · Ek Grup ({ekGrup.length}) ve nokta (müşteri, top{" "}
-          {musteri.length}) bazında
+          {locale === "en"
+            ? `Last 30d DBLISKONTOTUTARI total · by Sub-Group (${ekGrup.length}) and outlet (customer, top ${musteri.length})`
+            : `Son 30g DBLISKONTOTUTARI toplamı · Ek Grup (${ekGrup.length}) ve nokta (müşteri, top ${musteri.length}) bazında`}
         </div>
       </div>
 
       <div className="iskonto-break-grid">
         <div className="iskonto-break-col">
-          <div className="iskonto-break-col-title">Ek Grup bazında</div>
-          {ekGrupVisible.length === 0 && <div className="seg-empty">Henüz veri yok</div>}
+          <div className="iskonto-break-col-title">{locale === "en" ? "By Sub-Group" : "Ek Grup bazında"}</div>
+          {ekGrupVisible.length === 0 && <div className="seg-empty">{t(locale, "seg.empty", "Henüz veri yok")}</div>}
           <div className="seg-list">
             {ekGrupVisible.map((r) => (
               <div key={r.kod} className="seg-row">
@@ -71,7 +75,7 @@ export function IskontoBreakdownPanel({
                     <span className="sep">·</span>
                     <span className="pay">%{r.payPct.toFixed(1)}</span>
                     <span className="sep">·</span>
-                    <span className="disc">isk. oranı %{r.iskontoOraniPct.toFixed(1)}</span>
+                    <span className="disc">{locale === "en" ? "disc. rate" : "isk. oranı"} %{r.iskontoOraniPct.toFixed(1)}</span>
                   </div>
                 </div>
               </div>
@@ -80,19 +84,21 @@ export function IskontoBreakdownPanel({
         </div>
 
         <div className="iskonto-break-col">
-          <div className="iskonto-break-col-title">Nokta (müşteri) bazında — Top {musteri.length}</div>
+          <div className="iskonto-break-col-title">
+            {locale === "en" ? `By Outlet (Customer) — Top ${musteri.length}` : `Nokta (müşteri) bazında — Top ${musteri.length}`}
+          </div>
           {musteri.length === 0 ? (
-            <div className="seg-empty">Henüz veri yok</div>
+            <div className="seg-empty">{t(locale, "seg.empty", "Henüz veri yok")}</div>
           ) : (
             <div className="iskonto-table-wrap">
               <table className="iskonto-table">
                 <thead>
                   <tr>
                     <th className="rank">#</th>
-                    <th>Müşteri</th>
-                    <th>Ek Grup</th>
-                    <th className="num-col">İskonto</th>
-                    <th className="num-col">Oran</th>
+                    <th>{t(locale, "col.musteri_th", "Müşteri")}</th>
+                    <th>{t(locale, "col.ekgrup_th", "Ek Grup")}</th>
+                    <th className="num-col">{t(locale, "col.iskonto", "İskonto")}</th>
+                    <th className="num-col">{t(locale, "col.oran", "Oran")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -100,10 +106,10 @@ export function IskontoBreakdownPanel({
                     <tr key={r.musteriKod}>
                       <td className="rank">{r.rank}</td>
                       <td className="unvan" title={r.unvan}>
-                        {r.unvan || `Müşteri #${r.musteriKod}`}
+                        {r.unvan || `${t(locale, "col.musteri_th", "Müşteri")} #${r.musteriKod}`}
                       </td>
                       <td className="ekgrup" title={r.ekGrupAd ?? undefined}>
-                        {r.ekGrupAd ?? "(Tanımsız)"}
+                        {r.ekGrupAd ?? t(locale, "undefined_label", "(Tanımsız)")}
                       </td>
                       <td className="num-col">₺{formatCompact(r.iskontoTutari)}</td>
                       <td className="num-col">%{r.iskontoOraniPct.toFixed(1)}</td>

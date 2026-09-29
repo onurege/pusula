@@ -12,6 +12,125 @@
 export type Industry = "alcohol" | "fmcg";
 
 /**
+ * Müşteri kırılımı boyutu — iki mod (Faz A ek-saha genişlemesi):
+ *
+ *   - TEK-HOP (`mode` yok veya `"single-hop"`, GERİ UYUM ŞART): TBLMUSTERI
+ *     üzerindeki bir lookup-kod kolonunu (`joinColumn`) bir lookup tablosuna
+ *     (`table`) bağlar; o tablonun okunabilir adı `labelColumn`'da tutulur
+ *     (Univera kuralı: lookup tabloları TXTKOD (PK) + TXTAD (ad) çiftini
+ *     taşır — bu ikisi arasındaki JOIN anahtarı sabit "TXTKOD", config'e
+ *     girmez). Örnek (Pernod/fmcg-demo default): TBLMUSTERI.TXTGRUPKIRILIMKOD
+ *     → TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TBLMUSTERIGRUPKIRILIM.TXTAD.
+ *
+ *   - İKİ-HOP (`mode: "eksaha-two-hop"`): Wietnauer'ın "ek-saha" birleşik
+ *     müşteri kırılımı — TBLMUSTERI → `bridgeTable` (m2m köprü, iki
+ *     `sahaKods` değeri) → `lookupTable` (saha kodu → okunabilir ad).
+ *     Sonuç COALESCE(saha1 adı, saha2 adı, "(Tanımsız)") ile tek etikete
+ *     indirgenir (bkz. `tenant/customer-breakdown-sql.ts`). Örnek (Wietnauer
+ *     default): saha1=OFF-TRADE SEGMENTASYON, saha2=ON-TRADE SEGMENTASYON.
+ *
+ * SQL'e interpolate edilmeden önce DAİMA `resolveCustomerBreakdown()`'dan
+ * (bkz. `tenant/identifier.ts`) geçmeli — regex + küratörlü allowlist, mode'a
+ * göre farklı allowlist kümesi. Geçersiz değer THROW eder (fail-closed).
+ */
+export type CustomerBreakdownDimension =
+  | {
+      mode?: "single-hop";
+      /** Lookup tablosu — `dbo.` şeması sabit, `resolveIdentifier()` doğrular. */
+      table: string;
+      /** TBLMUSTERI üzerindeki FK kolonu — lookup tablosunun TXTKOD'una bağlanır. */
+      joinColumn: string;
+      /** Lookup tablosunun okunabilir ad kolonu (genelde "TXTAD"). */
+      labelColumn: string;
+    }
+  | {
+      mode: "eksaha-two-hop";
+      /** [saha1, saha2] — TAM İKİ tam sayı (Wietnauer: [1,2]). */
+      sahaKods: number[];
+      /** m2m köprü tablosu (Wietnauer: `TBLMUSTERIEKSAHA`). */
+      bridgeTable: string;
+      /** Köprüde `TBLMUSTERI.LNGKOD`'a bağlanan FK kolonu. */
+      bridgeMusteriRef: string;
+      /** Köprüde saha kodunu taşıyan kolon (`sahaKods` ile filtrelenir). */
+      bridgeSahaCol: string;
+      /** Köprüde lookup'a bağlanan (TRY_CONVERT edilecek) ham kod kolonu. */
+      bridgeCodeCol: string;
+      /** Saha kodu → okunabilir ad lookup tablosu (Wietnauer: `TBLEKSAHASECENEK`). */
+      lookupTable: string;
+      /** Lookup'ta hangi sahaya ait olduğunu taşıyan kolon. */
+      lookupSahaCol: string;
+      /** Lookup'ta PK kolonu — köprünün `bridgeCodeCol`'una (int'e çevrilmiş) bağlanır. */
+      lookupKeyCol: string;
+      /** Lookup'ın okunabilir ad kolonu (Wietnauer: `TXTACIKLAMA`). */
+      labelColumn: string;
+    };
+
+/**
+ * Ürün/marka kırılımı boyutu — TBLURUN üzerindeki bir lookup-kod kolonunu
+ * (`joinColumn`) bir lookup tablosuna (`table`) bağlar; Univera kuralı
+ * (TXTKOD PK + TXTAD ad) burada da geçerli — bkz. `CustomerBreakdownDimension`
+ * dokümantasyonu. Faz B öncesi bu değerler `TenantConfig.brandTable` /
+ * `brandJoinColumn` alanlarında hardcoded union olarak yaşıyordu (aşağıda
+ * hâlâ dururlar — default kaynağı ve geriye-uyum için); okuma yolu artık
+ * buradan (config-driven boyut) geçer.
+ *
+ * Örnek (Pernod default): TBLURUN.TXTURUNEKGRUPKOD → TBLURUNEKGRUP.TXTKOD,
+ * ad TBLURUNEKGRUP.TXTAD (Chivas Regal, Ballantine's, …).
+ */
+export type ProductBreakdownDimension = {
+  table: string;
+  joinColumn: string;
+  labelColumn: string;
+};
+
+/**
+ * Distribütör → bölge kırılımı boyutu — TBLDIST üzerindeki bir lookup-kod
+ * kolonunu (`joinColumn`) bir lookup tablosuna (`table`) bağlar; aynı
+ * Univera TXTKOD/TXTAD kuralı. Faz B öncesi `TenantConfig.distRegionTable` /
+ * `distRegionColumn` alanlarında hardcoded union olarak yaşıyordu (aşağıda
+ * hâlâ dururlar — default kaynağı ve geriye-uyum için).
+ *
+ * Örnek (Pernod default): TBLDIST.TXTGRUP → TBLDISTGRUP.TXTKOD, ad
+ * TBLDISTGRUP.TXTAD (AKDENIZ, EGE, MARMARA, …).
+ */
+export type RegionBreakdownDimension = {
+  table: string;
+  joinColumn: string;
+  labelColumn: string;
+};
+
+/**
+ * Aktivasyon-risk 4 tier'ı, kötüden iyiye: `red` (en riskli) → `green` (en
+ * sağlıklı). `"visit-order"` modelinde anlamı: ziyaret/sipariş var/yok
+ * ikilisinin 4 kombinasyonu (bkz. `riskModel` dokümantasyonu) — kullanıcı bu
+ * tier'lardan hangilerinin "risk" sayılacağını `RiskConfig.riskTiers`'da seçer.
+ */
+export type RiskTier = "red" | "orange" | "yellow" | "green";
+
+/**
+ * `riskModel: "visit-order"` için kullanıcı-konfigüre varsayılanlar.
+ *
+ * Pencere (`windowDays`) BURADA YOK — SEÇİLİ DÖNEMDEN (görünüm-anı, ekran
+ * filtresi) gelir, config'e sabitlenmez. Asıl risk HESABI `map.ts`
+ * `classifyRiskTier`'da yapılır (başka bir ajan/dalga); bu tip yalnız hangi
+ * sinyalin öncelikli olduğunu ve hangi tier'ların "risk" sayıldığını taşır.
+ */
+export type RiskConfig = {
+  /** Hangi sinyale öncelik verilir — "visit" (ziyaret, ONAYLI varsayılan
+   *  öncelik) veya "order" (sipariş). Kullanıcı çevirebilir. */
+  priority: "visit" | "order";
+  /** Hangi tier'lar dashboard'da "risk" olarak işaretlenir — kullanıcı seçer. */
+  riskTiers: RiskTier[];
+};
+
+/** Config-driven boyutların tenant başına eşleme kümesi. */
+export type TenantDimensions = {
+  customerBreakdown: CustomerBreakdownDimension;
+  productBreakdown: ProductBreakdownDimension;
+  regionBreakdown: RegionBreakdownDimension;
+};
+
+/**
  * Hacim birimi — TL'nin yanında ikinci bir KPI birimi (TL ↔ X toggle).
  *
  * Alkol sektöründe `9LE` (9-Litre-Equivalent) standart birimdir — Pernod'un
@@ -69,6 +188,20 @@ export type TenantLabels = {
   kpiSourceNote: string;
   /** Hacim çarpanı tooltip metni (9LE veya FMCG karşılığı). */
   volumeMultiplierHint: string;
+};
+
+/**
+ * Aynı Insider kurulumunda login'de seçilebilen bir veritabanı. Aynı Panorama
+ * şeması, aynı sunucu/kimlik — yalnız bağlantının `database` adı değişir
+ * (Panorama'nın "şirket" seçicisinin karşılığı, ör. Reckitt Core / ESSHOME).
+ */
+export type TenantDatabase = {
+  /** URL/JWT-güvenli kısa kimlik. Doğrulama: `^[a-z0-9][a-z0-9-]{0,30}$`. */
+  id: string;
+  /** Login dropdown'ında görünen ad ("Reckitt Core"). */
+  label: string;
+  /** MSSQL database adı — bağlantının YALNIZ `database` alanını override eder. */
+  database: string;
 };
 
 export type TenantConfig = {
@@ -149,6 +282,60 @@ export type TenantConfig = {
    * panelleri bu liste üzerinden render edilir.
    */
   strategicBrands?: string[];
+
+  /**
+   * Login'de seçilebilen veritabanları (aynı şema/sunucu/kimlik, farklı
+   * `database`). Tanımsız veya tek eleman → login'de seçici çıkmaz ve tüm
+   * sorgular bugünkü tek-DB yolunu izler (regresyon-sıfır). Birden çok eleman →
+   * login dropdown'ı + istek-bazlı DB yönlendirmesi (bkz. `request-context.ts`,
+   * `resolveDatabaseName`). İlk eleman varsayılan sayılır (bağlam olmayan
+   * warm/job yolları onu kullanır).
+   */
+  databases?: TenantDatabase[];
+
+  // -- Config-driven boyutlar (Insider konfigüratör) --------------------------
+
+  /**
+   * Alan → tablo/kolon eşlemeleri — Insider konfigüratörünün admin panelden
+   * kodsuz özelleştirebileceği boyutlar. Faz A yalnız `customerBreakdown`
+   * taşıyordu; Faz B `productBreakdown` (bugünkü `brandTable`/
+   * `brandJoinColumn`) ve `regionBreakdown`'ı (bugünkü `distRegionTable`/
+   * `distRegionColumn`) ekledi. `brandTable`/`distRegionTable` alanları
+   * yukarıda hâlâ dururlar (default DEĞER kaynağı + geriye-uyum) ama SQL'e
+   * giden okuma yolu artık `tenant/index.ts` `getProductBreakdownMeta()` /
+   * `getRegionBreakdownMeta()` üzerinden bu `dimensions` alanına gider —
+   * böylece admin panel override'ı bu iki boyutta da çalışır.
+   *
+   * SQL'e interpolate edilmeden önce burada tutulan değerler DAİMA
+   * `resolveIdentifier()`'dan (bkz. `tenant/identifier.ts`) geçmeli — regex
+   * `^[A-Za-z0-9_]+$` + küratörlü allowlist. Bu, `distRegionTable` gibi
+   * doğrulamasız-interpolasyon geçmişindeki hatayı (Faz 0 C1) tekrar etmemek
+   * için zorunlu.
+   *
+   * Runtime override (`getMappingConfig()`, `tenant/index.ts`) bu default'un
+   * ÜSTÜNE biner — şifreli dosya store'dan (`tenant/mapping-store.ts`) okunur.
+   */
+  dimensions: TenantDimensions;
+
+  // -- Aktivasyon-risk modeli ---------------------------------------------------
+
+  /**
+   * Aktivasyon-risk modeli — `"composite"` (mevcut davranış: gün/ciro tabanlı
+   * bileşik skor, Pernod default) veya `"visit-order"` (2-sinyal: ziyaret
+   * var/yok + sipariş var/yok, Wietnauer talebi — brief madde 13).
+   * Tanımsızsa `"composite"` (geri uyum — Pernod/fmcg-demo davranışı DEĞİŞMEZ).
+   *
+   * HESAPLAMA burada YAPILMAZ — `map.ts` `classifyRiskTier`'da yapılır; bu
+   * alan yalnız hangi modelin aktif olduğunu taşır (config sözleşmesi).
+   */
+  riskModel?: "composite" | "visit-order";
+
+  /**
+   * `riskModel: "visit-order"` için kullanıcı-konfigüre varsayılanlar
+   * (öncelik + risk sayılan tier'lar). `riskModel` `"composite"` (veya
+   * tanımsız) iken okunmaz/kullanılmaz.
+   */
+  riskConfig?: RiskConfig;
 
   // -- UI davranışı (tenant-özel arayüz kısıtları) ----------------------------
 

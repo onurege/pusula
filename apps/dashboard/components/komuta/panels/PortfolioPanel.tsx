@@ -1,4 +1,5 @@
 import type { KomutaPortfolioRow, ProductTier, ValueUnit } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { InfoHint } from "../InfoHint";
 import { Val, truncate } from "../format";
 
@@ -15,6 +16,9 @@ export function PortfolioPanel({
   portfolio: KomutaPortfolioRow[];
   unit?: ValueUnit;
 }) {
+  // Hacim birimi tenant'a göre değişir (Pernod "9L", Wietnauer "70cl") —
+  // sabit fallback YOK, tenant-nötr KISIT'i.
+  const volumeShort = getTenantConfig().volume.short;
   return (
     <div className="panel brand-portfolio">
       <div className="panel-header">
@@ -63,9 +67,9 @@ export function PortfolioPanel({
                     {truncate(p.grup, 26)}
                     <TierBadge tier={p.tier} />
                   </td>
-                  <td className="current"><Val n={p.bu} unit={unit} /></td>
-                  <td className="right"><Val n={p.oneYearAgo} unit={unit} /></td>
-                  <td className="right"><Val n={p.twoYearsAgo} unit={unit} /></td>
+                  <td className="current"><Val n={p.bu} unit={unit} volumeShort={volumeShort} /></td>
+                  <td className="right"><Val n={p.oneYearAgo} unit={unit} volumeShort={volumeShort} /></td>
+                  <td className="right"><Val n={p.twoYearsAgo} unit={unit} volumeShort={volumeShort} /></td>
                   <td className="right">
                     {p.yoyPct == null ? (
                       "—"

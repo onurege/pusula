@@ -62,4 +62,29 @@ export const PERNOD_CONFIG: TenantConfig = {
   // Pernod portföyünden son 30g ciro lider 4 markası — TBLURUNEKGRUP.TXTAD
   // ile birebir eşleşmeli. probe-wietnauer.ts canlı veriden teyit eder.
   strategicBrands: ["Chivas Regal", "Ballantine's", "Absolut", "Olmeca"],
+
+  // Müşteri kırılımı: komuta.ts fetchChannelByCustomerType/getKomutaFacets
+  // bugün TENANT'tan bağımsız hep bu tabloyu okuyor (md34) — bu değerler o
+  // hardcoded davranışın BİREBİR aynısı, konfigüratör öncesi kod-gömülü hâli.
+  dimensions: {
+    customerBreakdown: {
+      table: "TBLMUSTERIGRUPKIRILIM",
+      joinColumn: "TXTGRUPKIRILIMKOD",
+      labelColumn: "TXTAD",
+    },
+    // Faz B — `brandTable`/`brandJoinColumn` (yukarıda) ile BİREBİR aynı
+    // değerler; SQL'e giden okuma yolu artık buradan (config-driven boyut).
+    productBreakdown: {
+      table: "TBLURUNEKGRUP",
+      joinColumn: "TXTURUNEKGRUPKOD",
+      labelColumn: "TXTAD",
+    },
+    // Faz B — `distRegionTable`/`distRegionColumn` (yukarıda) ile BİREBİR
+    // aynı değerler.
+    regionBreakdown: {
+      table: "TBLDISTGRUP",
+      joinColumn: "TXTGRUP",
+      labelColumn: "TXTAD",
+    },
+  },
 };

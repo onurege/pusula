@@ -1,40 +1,50 @@
 /**
  * Wietnauer Dashboard #3 — Müşteri Segmentasyon
  *
- * Üç bağımsız segment boyutu + bir cross-segment heatmap + iskonto kırılımı:
+ * Dört bağımsız müşteri-kırılım boyutu (md10 — segment ekranı, Yönetim
+ * Kurulu ile aynı sırada) + bir cross-segment heatmap + iskonto kırılımı:
  *
- *   A) Müşteri Grubu — TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM
- *      Müşteri grup kırılımı (Prestige / Premium / Premium Plus / Standart /
- *      Standart Plus / Off Trade C&PS Tedarikçi vb.). Komuta'da kanıtlı
- *      pattern (bkz. komuta.ts fetchChannelByCustomerType) — bu dashboard'a
- *      taşındı; eski TBLMUSTERIGRUP (TEKEL/BÜFE/MARKET bayi grubu) kaynağı
- *      terk edildi.
+ *   A) Müşteri Grubu — TBLMUSTERI.TXTGRUPKOD × TBLMUSTERIGRUP.TXTAD
+ *      (TEKEL / BÜFE / MARKET / BAR gibi bayi grubu). Cockpit Kanal Mix
+ *      (komuta.ts fetchChannelMonthly) ile AYNI kaynak. `musteriGrubu`
+ *      alanı → FE MusteriGrupPanel.
  *
- *   B) Müşteri Ek Grubu (bayilik formatı) — TBLSBMUSTERIEKGRUPBAGLANTI /
+ *   B) Birleşik Ek Saha (Saha1+2) — `getCustomerBreakdownMeta()` üzerinden,
+ *      Faz A1'de eklenen iki-hop kırılım: TBLMUSTERI → TBLMUSTERIEKSAHA
+ *      (köprü) → TBLEKSAHASECENEK (lookup), Saha1 (OFF-TRADE) ve Saha2
+ *      (ON-TRADE) COALESCE'lenir. `customerBreakdownJoin/LabelExpr/CodeExpr`
+ *      üreticileriyle üretilir — mode her zaman config'ten gelir, burada
+ *      hardcode YOK. `ekSaha` alanı → FE EkSahaPanel (md10 öncesi bu alan
+ *      TBLMUSTERIGRUP kaynaklıydı; md10 ile birleşik ek-sahaya çevrildi).
+ *
+ *   C) Müşteri Ek Grubu (bayilik formatı) — TBLSBMUSTERIEKGRUPBAGLANTI /
  *      TBLMUSTERI.TXTEKGRUPKOD (tenant'a göre m2m veya direct FK)
  *      Bakkal / Büfe / Market / Hipermarket / Franchise gibi format.
+ *      `ekGrup` alanı → FE EkGrupPanel.
  *
- *   C) Müşteri Tipi — TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM
- *      A) ile AYNI kaynak (müşteri grup kırılımı) — iş kararıyla bu boyut da
- *      artık kırılım kaynağından besleniyor. Eski Ek Saha 8
- *      (TBLMUSTERIEKSAHA × TBLEKSAHASECENEK, Perakende/On Trade/Otel/Tali
- *      Bayi/OPA) kaynağı terk edildi; md24'te bu boyuta taşınmıştı, şimdi
- *      grup kırılımına geçildi.
+ *   D) Müşteri Grup Kırılımı — TBLMUSTERI.TXTGRUPKIRILIMKOD ×
+ *      TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige / Premium / Premium Plus /
+ *      Standart / Standart Plus / Off Trade C&PS Tedarikçi vb.). Komuta'da
+ *      kanıtlı pattern (bkz. komuta.ts fetchChannelByCustomerType), burada
+ *      HARDCODE tek-hop join — B)'nin config-driven kaynağıyla KARIŞTIRILMASIN
+ *      (B) Faz A1'den beri aynı fiziksel tabloları farklı bir amaçla
+ *      kullanıyor olabilir, ama D) her zaman literal TBLMUSTERIGRUPKIRILIM).
+ *      `grupKirilim` alanı → FE'ye md10 ile eklenen yeni panel.
  *
- *   D) Cirosal Segment (ciro-bazlı tüketici segmenti) — TBLCIROSALSEGMENTMUSTERI
+ *   E) Cirosal Segment (ciro-bazlı tüketici segmenti) — TBLCIROSALSEGMENTMUSTERI
  *      Wietnauer'da bu boyut dolu olmayabilir; UI empty-state ile karşılar.
  *      (md32'den beri sayfada gösterilmiyor, snapshot'ta hâlâ mevcut.)
  *
- *   E) Cross-segment: Müşteri Tipi × Marka — TBLMUSTERIEKSAHA × Marka tablosu
- *      Heatmap; her hücre o tip × marka kesişimindeki son 30g ciro payı.
+ *   F) Cross-segment: Müşteri Grubu (A) × Marka — TBLMUSTERIGRUP × Marka tablosu
+ *      Heatmap; her hücre o grup × marka kesişimindeki son 30g ciro payı.
  *
- *   F) İskonto Kırılımı (md35) — TBLMSDFATURA.DBLISKONTOTUTARI toplamı,
- *      Ek Grup (B'nin aynı bağlantı deseni) ve nokta (müşteri) bazında.
+ *   G) İskonto Kırılımı (md35) — TBLMSDFATURA.DBLISKONTOTUTARI toplamı,
+ *      Ek Grup (C'nin aynı bağlantı deseni) ve nokta (müşteri) bazında.
  *
  * SQL tabloları için NOT:
- *   - TBLMUSTERIEKSAHA join'i Komuta'da çalışan kanıtlı patternle aynı:
- *       me.LNGMUSTERIREF = m.LNGKOD AND me.LNGEKSAHAKODU = 8
- *       lk.LNGTAKIPKOD = 8 AND lk.LNGKOD = me.TXTEKSAHAACIKLAMA
+ *   - B)'nin iki-hop join'i Komuta'da çalışan kanıtlı patternle aynı köprü/
+ *     lookup çiftini kullanır (bkz. tenant/customer-breakdown-sql.ts
+ *     `eksahaJoin`); alias çakışmasın diye me1/lk1 (saha1) + me2/lk2 (saha2).
  *   - TBLSBMUSTERIEKGRUPBAGLANTI / TXTEKGRUPKOD sütun adları tenant config'ten
  *     (`customerEkGrupLink`) gelir — Wietnauer "direct" (TBLMUSTERI.TXTEKGRUPKOD),
  *     Pernod "m2m" (köprü tablo).
@@ -42,13 +52,19 @@
  *     fetcher boş array döner ve UI empty state'i render eder.
  *
  * Cache: full dataset (tüm dist'ler) TEK cache anahtarı — wietnauer-stok.ts
- * `scopedRows` deseni. Stratejik markalar D paneline girer (cross-segment
+ * `scopedRows` deseni. Stratejik markalar F paneline girer (cross-segment
  * heatmap'te marka bazlı vurgu için, JS-post-processing olarak).
  */
 import { withCache } from "./cache.js";
 import { resolveWindowBounds } from "./now.js";
 import { runReadOnly } from "./db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getTenantConfig, getCustomerBreakdownMeta, getProductBreakdownMeta } from "./tenant/index.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
+import {
+  customerBreakdownJoin,
+  customerBreakdownLabelExpr,
+  customerBreakdownCodeExpr,
+} from "./tenant/customer-breakdown-sql.js";
 import { cityColClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-segment";
@@ -65,13 +81,19 @@ const CACHE_DOMAIN = "wietnauer-segment";
 // kaynakları bu boyutlar için artık kullanılmıyor.
 // v7: C) Müşteri Tipi boyutu TBLMUSTERIGRUPKIRILIM → TBLMUSTERIGRUP (cockpit
 // Kanal Mix ile aynı; A) ile ayrışsın). Stale cache eski kırılımı servis etmesin.
-const CACHE_VERSION = "v7";
+// v8: md10 — segment ekranı 4 müşteri kırılımına çıkarıldı (Yönetim Kurulu
+// sırasıyla hizalı). `musteriGrubu` artık TBLMUSTERIGRUP (eski `ekSaha`
+// kaynağı), `ekSaha` artık birleşik ek-saha Saha1+2 (getCustomerBreakdownMeta
+// two-hop, eski `musteriGrubu` kaynağı) — İKİ ALANIN KAYNAĞI YER DEĞİŞTİRDİ.
+// Yeni `grupKirilim` alanı (literal TBLMUSTERIGRUPKIRILIM tek-hop) eklendi.
+// Stale cache eski alan↔kaynak eşleşmesini servis etmesin diye bump.
+const CACHE_VERSION = "v8";
 
 // ---------- Tipler ----------------------------------------------------------
 
 /**
- * Ortak "tip bazlı segment" satırı — hem A) Müşteri Grubu hem C) Müşteri
- * Tipi (Ek Saha 8) aynı şekli kullanır; yalnızca kaynak SQL farklı.
+ * Ortak "tip bazlı segment" satırı — A) Müşteri Grubu, B) Birleşik Ek Saha
+ * ve D) Müşteri Grup Kırılımı aynı şekli kullanır; yalnızca kaynak SQL farklı.
  */
 export type TipSegmentRow = {
   /** Lookup kodu (string). Tanımsız satırlar için "0". */
@@ -87,13 +109,19 @@ export type TipSegmentRow = {
   ortIskontoOraniPct: number;
 };
 
-/** A) Müşteri Grubu — Müşteri Grup Kırılımı (TBLMUSTERI.TXTGRUPKIRILIMKOD ×
- *  TBLMUSTERIGRUPKIRILIM). */
+/** A) Müşteri Grubu — TBLMUSTERI.TXTGRUPKOD × TBLMUSTERIGRUP.TXTAD. */
 export type MusteriGrupSegmentRow = TipSegmentRow;
 
-/** C) Müşteri Tipi — Müşteri Grup Kırılımı ile AYNI kaynak
- *  (TBLMUSTERI.TXTGRUPKIRILIMKOD × TBLMUSTERIGRUPKIRILIM). */
+/** B) Birleşik Ek Saha (Saha1+2) — `getCustomerBreakdownMeta()` iki-hop
+ *  kaynağı (TBLMUSTERI → TBLMUSTERIEKSAHA → TBLEKSAHASECENEK, Saha1/Saha2
+ *  COALESCE). md10 öncesi bu alan (`ekSaha`) TBLMUSTERIGRUP kaynaklıydı. */
 export type EkSahaSegmentRow = TipSegmentRow;
+
+/** D) Müşteri Grup Kırılımı — TBLMUSTERI.TXTGRUPKIRILIMKOD ×
+ *  TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Standart vb.). Her zaman
+ *  literal tek-hop join — `getCustomerBreakdownMeta()`'dan BAĞIMSIZ (o config
+ *  Wietnauer'da artık B)'nin iki-hop kaynağına işaret ediyor). */
+export type GrupKirilimSegmentRow = TipSegmentRow;
 
 /** B) Müşteri Ek Grubu (bayilik formatı). */
 export type EkGrupSegmentRow = {
@@ -166,19 +194,23 @@ export type MusteriIskontoRow = {
 export type WietnauerSegmentSnapshot = {
   generatedAt: string;
   demoDate: string | null;
-  /** A) Müşteri Grubu — Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM). */
+  /** A) Müşteri Grubu — TBLMUSTERIGRUP (md10: 4 kırılımın 1.si). */
   musteriGrubu: MusteriGrupSegmentRow[];
-  /** B) Müşteri Ek Grubu (bayilik formatı). */
-  ekGrup: EkGrupSegmentRow[];
-  /** C) Müşteri Tipi — A) ile AYNI kaynak (Müşteri Grup Kırılımı). */
+  /** B) Birleşik Ek Saha (Saha1+2) — iki-hop `getCustomerBreakdownMeta()`
+   *  kaynağı (md10: 4 kırılımın 2.si). */
   ekSaha: EkSahaSegmentRow[];
-  /** D) Cirosal segment — sayfada artık render edilmiyor (md32), snapshot'ta korunur. */
+  /** C) Müşteri Ek Grubu (bayilik formatı) (md10: 4 kırılımın 3.sü). */
+  ekGrup: EkGrupSegmentRow[];
+  /** D) Müşteri Grup Kırılımı — literal TBLMUSTERIGRUPKIRILIM (md10: 4
+   *  kırılımın 4.sü, yeni alan). */
+  grupKirilim: GrupKirilimSegmentRow[];
+  /** E) Cirosal segment — sayfada artık render edilmiyor (md32), snapshot'ta korunur. */
   cirosal: CirosalSegmentRow[];
-  /** F) Ek Grup bazında iskonto tutarı kırılımı (md35). */
+  /** G) Ek Grup bazında iskonto tutarı kırılımı (md35). */
   ekGrupIskonto: EkGrupIskontoRow[];
-  /** F) Nokta (müşteri) bazında iskonto tutarı kırılımı — Top 20 (md35). */
+  /** G) Nokta (müşteri) bazında iskonto tutarı kırılımı — Top 20 (md35). */
   musteriIskonto: MusteriIskontoRow[];
-  /** E) Cross-segment heatmap; satırlar = müşteri tipi, sütunlar = marka. */
+  /** F) Cross-segment heatmap; satırlar = müşteri grubu, sütunlar = marka. */
   cross: {
     tipler: string[];
     markalar: string[];
@@ -238,22 +270,21 @@ function aggregateTipSegment(rows: TipSegmentRawRow[]): TipSegmentRow[] {
 }
 
 /**
- * A) Müşteri Grubu — Müşteri Grup Kırılımı (TBLMUSTERI.TXTGRUPKIRILIMKOD ×
- * TBLMUSTERIGRUPKIRILIM.TXTKOD → TXTAD).
+ * A) Müşteri Grubu — TBLMUSTERIGRUP (TBLMUSTERI.TXTGRUPKOD → TXTAD):
+ * OFF TRADE / ON TRADE / TURİZM / TEDARİKÇİ / CP&S gibi müşteri grubu.
  *
- * Komuta'da kanıtlı join pattern (bkz. komuta.ts fetchChannelByCustomerType,
- * md34): Prestige / Premium / Premium Plus / Standart / Standart Plus /
- * "Off Trade C&PS Tedarikçi" gibi kırılım etiketleri. TXTKOD UNIQUE,
- * müşterilerin ~%97'si eşleşir; eşleşmeyen/boş satırlar "(Tanımsız)" düşer.
+ * Cockpit Kanal Mix (komuta.ts fetchChannelMonthly) ile AYNI boyut kaynağı.
+ * md10 öncesi bu sorgu `ekSaha` (C) alanını besliyordu; segment ekranı 4
+ * kırılıma çıkarılırken sıradaki yeri (1.) gereği `musteriGrubu` alanına
+ * taşındı — SQL DEĞİŞMEDİ, yalnızca hangi snapshot alanına yazıldığı değişti.
  *
- * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0).
+ * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0) —
+ * kırılım kodu boş/eşleşmeyenler "(Tanımsız)" grubunda sayılır (LEFT JOIN).
  * Ciro: son 30g fatura net toplamı, KAPALI PENCERE.
  * İskonto oranı: SUM(iskonto) / SUM(brüt) × 100 — fatura başlığı bazlı.
  *
- * Scope-free ham satırlar — dist_id hem `musteri_tip` (TBLMUSTERI.LNGDISTKOD)
- * hem `fatura_30g` (f.LNGDISTKOD) için eklendi. Kırılım sayısı küçük (~6-10)
- * × 31 dist ≈ 310 satır max — ucuz. pay%/iskonto oranı scope SONRASI public
- * API'de hesaplanır.
+ * Scope-free ham satırlar — dist_id hem müşteri-master hem fatura tarafı
+ * için eklendi. Kırılım sayısı küçük (~6-10) × 31 dist ≈ 310 satır.
  */
 async function fetchMusteriGrupSegmentRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<TipSegmentRawRow[]> {
   const sql = `
@@ -261,10 +292,10 @@ async function fetchMusteriGrupSegmentRaw(win: { lower: string; upper: string },
       SELECT
         m.LNGKOD AS musteri_kod,
         m.LNGDISTKOD AS dist_id,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
-        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)), ''), '0') AS tip_kod
+        ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
+        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKOD)), ''), '0') AS tip_kod
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
       WHERE m.BYTDURUM = 0${cityColClause(cities, "m.TXTSEHIR")}
     ),
     fatura_30g AS (
@@ -318,32 +349,124 @@ async function fetchMusteriGrupSegmentRaw(win: { lower: string; upper: string },
 }
 
 /**
- * C) Müşteri Tipi — TBLMUSTERIGRUP (TBLMUSTERI.TXTGRUPKOD → TXTAD):
- * OFF TRADE / ON TRADE / TURİZM / TEDARİKÇİ / CP&S gibi müşteri grubu.
+ * B) Birleşik Ek Saha (Saha1+2) — `getCustomerBreakdownMeta()` iki-hop
+ * kaynağı (TBLMUSTERI → TBLMUSTERIEKSAHA köprü → TBLEKSAHASECENEK lookup,
+ * Saha1/Saha2 COALESCE — Faz A1'de eklendi, bkz. tenant/configs/wietnauer.ts).
+ * md10 öncesi bu sorgu `musteriGrubu` (A) alanını besliyordu; segment ekranı
+ * 4 kırılıma çıkarılırken sıradaki yeri (2.) gereği `ekSaha` alanına taşındı
+ * — SQL DEĞİŞMEDİ, yalnızca hangi snapshot alanına yazıldığı değişti.
  *
- * Cockpit Kanal Mix (komuta.ts fetchChannelMonthly) ile AYNI boyut kaynağı.
- * A) Müşteri Grubu ise Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM,
- * Prestige/Premium/Standart…) kullanır — iki panel bilinçli olarak FARKLI
- * boyutları gösterir. Eski Ek Saha 8 (TBLMUSTERIEKSAHA × TBLEKSAHASECENEK)
- * kaynağı bu boyut için artık kullanılmıyor.
+ * `customerBreakdownJoin/LabelExpr/CodeExpr` üreticileri mode'a göre
+ * dallanır (single-hop/eksaha-two-hop); burada HARDCODE yok, config'ten gelen
+ * meta ne dönerse o kullanılır (C1 fail-closed doğrulaması meta içinde).
  *
- * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0) —
- * kırılım kodu boş/eşleşmeyenler "(Tanımsız)" grubunda sayılır (LEFT JOIN).
- * Ciro/iskonto oranı: A) ile aynı desen, son 30g KAPALI PENCERE.
+ * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0).
+ * Ciro: son 30g fatura net toplamı, KAPALI PENCERE.
+ * İskonto oranı: SUM(iskonto) / SUM(brüt) × 100 — fatura başlığı bazlı.
  *
- * Scope-free ham satırlar — dist_id hem müşteri-master hem fatura tarafı
- * için eklendi. Kırılım sayısı küçük (~6-10) × 31 dist ≈ 310 satır.
+ * Scope-free ham satırlar — dist_id hem `musteri_tip` (TBLMUSTERI.LNGDISTKOD)
+ * hem `fatura_30g` (f.LNGDISTKOD) için eklendi. Kırılım sayısı küçük (~6-10)
+ * × 31 dist ≈ 310 satır max — ucuz. pay%/iskonto oranı scope SONRASI public
+ * API'de hesaplanır.
  */
 async function fetchEkSahaSegmentRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<TipSegmentRawRow[]> {
+  // Segment tablo/kolonu tenant config'ten (`resolveIdentifier` doğrulamalı —
+  // Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH musteri_tip AS (
       SELECT
         m.LNGKOD AS musteri_kod,
         m.LNGDISTKOD AS dist_id,
-        ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
-        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKOD)), ''), '0') AS tip_kod
+        ${customerBreakdownLabelExpr(kirilimMeta, "tip_ad")},
+        ${customerBreakdownCodeExpr(kirilimMeta, "tip_kod")}
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
+      ${customerBreakdownJoin(kirilimMeta)}
+      WHERE m.BYTDURUM = 0${cityColClause(cities, "m.TXTSEHIR")}
+    ),
+    fatura_30g AS (
+      SELECT
+        mt.tip_kod,
+        mt.tip_ad,
+        f.LNGDISTKOD AS dist_id,
+        SUM(f.DBLNETTUTAR) AS ciro,
+        SUM(f.DBLBRUTTUTAR) AS brut,
+        SUM(f.DBLISKONTOTUTARI) AS iskonto
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN musteri_tip mt ON mt.musteri_kod = f.LNGMUSTERIKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}
+      GROUP BY mt.tip_kod, mt.tip_ad, f.LNGDISTKOD
+    ),
+    musteri_sayi AS (
+      SELECT tip_kod, tip_ad, dist_id, COUNT(*) AS musteri_sayi
+      FROM musteri_tip
+      GROUP BY tip_kod, tip_ad, dist_id
+    ),
+    combos AS (
+      SELECT tip_kod, tip_ad, dist_id FROM musteri_sayi
+      UNION
+      SELECT tip_kod, tip_ad, dist_id FROM fatura_30g
+    )
+    SELECT
+      c.tip_kod AS kod,
+      c.tip_ad AS ad,
+      c.dist_id,
+      ISNULL(ms.musteri_sayi, 0) AS musteri_sayi,
+      ISNULL(f.ciro, 0) AS ciro,
+      ISNULL(f.brut, 0) AS brut,
+      ISNULL(f.iskonto, 0) AS iskonto
+    FROM combos c
+    LEFT JOIN musteri_sayi ms ON ms.tip_kod = c.tip_kod AND ms.tip_ad = c.tip_ad AND ms.dist_id = c.dist_id
+    LEFT JOIN fatura_30g f ON f.tip_kod = c.tip_kod AND f.tip_ad = c.tip_ad AND f.dist_id = c.dist_id
+    ORDER BY ISNULL(f.ciro, 0) DESC, ISNULL(ms.musteri_sayi, 0) DESC
+  `;
+  const result = await runReadOnly(sql, { limit: 2000, timeoutMs: 45_000 });
+  return result.rows.map((r) => ({
+    kod: String(r.kod ?? "0"),
+    ad: String(r.ad ?? "(Tanımsız)"),
+    distId: r.dist_id != null ? Number(r.dist_id) : null,
+    musteriSayi: Number(r.musteri_sayi ?? 0),
+    ciro: Number(r.ciro ?? 0),
+    brut: Number(r.brut ?? 0),
+    iskonto: Number(r.iskonto ?? 0),
+  }));
+}
+
+/**
+ * D) Müşteri Grup Kırılımı — TBLMUSTERI.TXTGRUPKIRILIMKOD ×
+ * TBLMUSTERIGRUPKIRILIM.TXTKOD → TXTAD.
+ *
+ * Komuta'da kanıtlı join pattern (bkz. komuta.ts fetchChannelByCustomerType,
+ * md34): Prestige / Premium / Premium Plus / Standart / Standart Plus /
+ * "Off Trade C&PS Tedarikçi" gibi kırılım etiketleri. TXTKOD UNIQUE,
+ * müşterilerin ~%97'si eşleşir; eşleşmeyen/boş satırlar "(Tanımsız)" düşer.
+ *
+ * md10 — segment ekranı 4 kırılıma çıkarılırken YENİ eklenen alan
+ * (`grupKirilim`). Literal tek-hop join — `getCustomerBreakdownMeta()`'ı
+ * KASITLI OLARAK kullanmaz (o config artık B) alanının iki-hop kaynağına
+ * işaret ediyor; bu boyut her zaman TBLMUSTERIGRUPKIRILIM olmalı).
+ *
+ * Müşteri sayısı: o kırılımda tanımlı distinct müşteri (BYTDURUM=0).
+ * Ciro: son 30g fatura net toplamı, KAPALI PENCERE.
+ * İskonto oranı: SUM(iskonto) / SUM(brüt) × 100 — fatura başlığı bazlı.
+ *
+ * Scope-free ham satırlar — dist_id hem `musteri_tip` (TBLMUSTERI.LNGDISTKOD)
+ * hem `fatura_30g` (f.LNGDISTKOD) için eklendi. Kırılım sayısı küçük (~6-10)
+ * × 31 dist ≈ 310 satır max — ucuz. pay%/iskonto oranı scope SONRASI public
+ * API'de hesaplanır.
+ */
+async function fetchGrupKirilimSegmentRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<TipSegmentRawRow[]> {
+  const sql = `
+    WITH musteri_tip AS (
+      SELECT
+        m.LNGKOD AS musteri_kod,
+        m.LNGDISTKOD AS dist_id,
+        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip_ad,
+        ISNULL(NULLIF(LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)), ''), '0') AS tip_kod
+      FROM dbo.TBLMUSTERI m
+      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
       WHERE m.BYTDURUM = 0${cityColClause(cities, "m.TXTSEHIR")}
     ),
     fatura_30g AS (
@@ -655,14 +778,7 @@ type SegmentBrandCrossRawRow = {
  * Top-N seçimi + pay% scope SONRASI public API'de hesaplanır.
  */
 async function fetchSegmentBrandCrossRaw(win: { lower: string; upper: string }, cities?: string[] | null): Promise<SegmentBrandCrossRawRow[]> {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  // SQL injection emniyeti — config TypeScript union'dan.
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   const sql = `
     SELECT
@@ -678,7 +794,7 @@ async function fetchSegmentBrandCrossRaw(win: { lower: string; upper: string }, 
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin(productMeta)}
     INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
     LEFT JOIN dbo.TBLMUSTERIGRUP g ON g.TXTKOD = m.TXTGRUPKOD
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
@@ -969,8 +1085,9 @@ function aggregateMusteriIskonto(rows: MusteriIskontoRawRow[]): MusteriIskontoRo
 
 type RawSegmentBundle = {
   musteriGrubu: TipSegmentRawRow[];
-  ekGrup: EkGrupSegmentRawRow[];
   ekSaha: TipSegmentRawRow[];
+  ekGrup: EkGrupSegmentRawRow[];
+  grupKirilim: TipSegmentRawRow[];
   cirosal: CirosalSegmentRawRow[];
   ekGrupIskonto: EkGrupIskontoRawRow[];
   musteriIskonto: MusteriIskontoRawRow[];
@@ -1007,11 +1124,12 @@ export async function getWietnauerSegmentSnapshot(
     CACHE_DOMAIN,
     cacheKey,
     async () => {
-      // Yedi sorgu paralel — toplam latency max(her sorgu).
-      const [musteriGrubu, ekGrup, ekSaha, cirosal, ekGrupIskonto, musteriIskonto, cross] = await Promise.all([
+      // Sekiz sorgu paralel — toplam latency max(her sorgu).
+      const [musteriGrubu, ekSaha, ekGrup, grupKirilim, cirosal, ekGrupIskonto, musteriIskonto, cross] = await Promise.all([
         fetchMusteriGrupSegmentRaw(win, cities),
-        fetchEkGrupSegmentRaw(win, cities),
         fetchEkSahaSegmentRaw(win, cities),
+        fetchEkGrupSegmentRaw(win, cities),
+        fetchGrupKirilimSegmentRaw(win, cities),
         fetchCirosalSegmentRaw(win, cities),
         fetchEkGrupIskontoRaw(win, cities),
         fetchMusteriIskontoRaw(win, cities),
@@ -1019,8 +1137,9 @@ export async function getWietnauerSegmentSnapshot(
       ]);
       return {
         musteriGrubu,
-        ekGrup,
         ekSaha,
+        ekGrup,
+        grupKirilim,
         cirosal,
         ekGrupIskonto,
         musteriIskonto,
@@ -1033,8 +1152,9 @@ export async function getWietnauerSegmentSnapshot(
 
   const {
     musteriGrubu: rawMusteriGrubu,
-    ekGrup: rawEkGrup,
     ekSaha: rawEkSaha,
+    ekGrup: rawEkGrup,
+    grupKirilim: rawGrupKirilim,
     cirosal: rawCirosal,
     ekGrupIskonto: rawEkGrupIskonto,
     musteriIskonto: rawMusteriIskonto,
@@ -1052,8 +1172,9 @@ export async function getWietnauerSegmentSnapshot(
   };
 
   const musteriGrubu = aggregateTipSegment(rawMusteriGrubu.filter((r) => inScope(r.distId)));
-  const ekGrup = aggregateEkGrupSegment(rawEkGrup.filter((r) => inScope(r.distId)));
   const ekSaha = aggregateTipSegment(rawEkSaha.filter((r) => inScope(r.distId)));
+  const ekGrup = aggregateEkGrupSegment(rawEkGrup.filter((r) => inScope(r.distId)));
+  const grupKirilim = aggregateTipSegment(rawGrupKirilim.filter((r) => inScope(r.distId)));
   const cirosal = aggregateCirosalSegment(rawCirosal.filter((r) => inScope(r.distId)));
   const ekGrupIskonto = aggregateEkGrupIskonto(rawEkGrupIskonto.filter((r) => inScope(r.distId)));
   const musteriIskonto = aggregateMusteriIskonto(rawMusteriIskonto.filter((r) => inScope(r.distId)));
@@ -1066,8 +1187,9 @@ export async function getWietnauerSegmentSnapshot(
     generatedAt,
     demoDate: process.env.DEMO_DATE?.trim() || null,
     musteriGrubu,
-    ekGrup,
     ekSaha,
+    ekGrup,
+    grupKirilim,
     cirosal,
     ekGrupIskonto,
     musteriIskonto,

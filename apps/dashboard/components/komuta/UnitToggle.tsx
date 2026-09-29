@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui/cn";
 import { useTenant } from "@/components/tenant-provider";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 /**
  * Komuta birim toggle'ı: TL ↔ <hacim birimi>.
@@ -21,7 +22,7 @@ import { useTenant } from "@/components/tenant-provider";
  * URL-state tercihi: localStorage yerine query param — server component
  * okur, bookmark/share korur, V1+V2'de aynı pattern.
  */
-export function UnitToggle() {
+export function UnitToggle({ locale = "tr" }: { locale?: Locale } = {}) {
   const pathname = usePathname() ?? "/";
   const sp = useSearchParams();
   const tenant = useTenant();
@@ -45,7 +46,7 @@ export function UnitToggle() {
     {
       id: "tl",
       label: `${tenant.currencySymbol} TL`,
-      hint: "Tüm değerler Türk Lirası bazında",
+      hint: translate(locale, "komuta.unit.tl_hint", "Tüm değerler Türk Lirası bazında"),
     },
     {
       id: volumeKey,
@@ -57,12 +58,17 @@ export function UnitToggle() {
   return (
     <div
       role="tablist"
-      aria-label="Birim"
+      aria-label={translate(locale, "unit.label", "Birim")}
       className="inline-flex items-center gap-1 p-1 rounded-lg bg-surface-2 border border-border"
-      title={`TL ↔ ${tenant.volume.short} birim toggle'ı. Tüm Komuta hesaplamaları seçilen birim üzerinden yeniden çalışır.`}
+      title={translate(
+        locale,
+        "komuta.unit.toggle_hint",
+        "TL ↔ {unit} birim toggle'ı. Tüm Komuta hesaplamaları seçilen birim üzerinden yeniden çalışır.",
+        { unit: tenant.volume.short },
+      )}
     >
       <span className="px-2 text-[10.5px] uppercase tracking-wider text-muted font-semibold">
-        Birim
+        {translate(locale, "unit.label", "Birim")}
       </span>
       {options.map((opt) => {
         const isActive = active === opt.id;

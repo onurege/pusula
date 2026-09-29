@@ -18,7 +18,10 @@ import type {
 import { getKomutaSnapshot, getKomutaFacets, type KomutaFacets } from "@/lib/api";
 import { KomutaFilterDropdowns } from "@/components/komuta/KomutaFilterDropdowns";
 import { KomutaPeriyotDropdown } from "@/components/komuta/KomutaPeriyotDropdown";
+import { periyotLabel } from "@/components/komuta/periyot-options";
 import { getContentMap, t, panelTitle, panelHidden } from "@/lib/content";
+import { getLocale, t as translate, localizeVolumeUnit, type Locale } from "@/lib/i18n";
+import { getTenantConfig } from "@/lib/tenant";
 import { FinanceAgentLauncher } from "@/components/komuta/FinanceAgentLauncher";
 import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
 import { CalendarChart } from "@/components/komuta/CalendarChart";
@@ -29,9 +32,10 @@ import { CustomerTypeBrandPanel } from "@/components/komuta/CustomerTypeBrandPan
 
 // `force-dynamic` kaldırıldı — searchParams Promise zaten dynamic tetikliyor;
 // böylece sayfa içi fetch'ler Data Cache'e girebiliyor (5 dk revalidate).
-export const metadata = {
-  title: "Komuta · Insider",
-};
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${translate(locale, "komuta.meta_title", "Komuta")} · Insider` };
+}
 
 type Props = {
   searchParams: Promise<{
@@ -52,10 +56,15 @@ function periyotToMonths(p: string | null): PeriodMonths {
 }
 
 export default async function KomutaPage({ searchParams }: Props) {
+  const locale = await getLocale();
   const sp = await searchParams;
   const forceRefresh = sp.refresh === "1";
   const reelTL = sp.reel === "1";
   const unit: ValueUnit = sp.unit === "9le" ? "9le" : "tl";
+  // Hacim birimi kısaltması tenant'a göre değişir (Pernod "9L", Wietnauer
+  // "70cl") — client component'lere ("use client") prop olarak geçirilir,
+  // onlar server-only getTenantConfig()'e erişemez.
+  const volShort = getTenantConfig().volume.short;
   const bolge = sp.bolge?.trim() || null;
   const kanal = sp.kanal?.trim() || null;
   const urunGrup = sp.urunGrup?.trim() || null;
@@ -77,6 +86,10 @@ export default async function KomutaPage({ searchParams }: Props) {
       bolge,
       kanal,
       urunGrup,
+      // md1 — KPI şeridi artık sabit "son 30 gün" değil, seçili periyoda
+      // (backend periodDays) bağlı. Önceden yalnızca Kanal Mix trendine
+      // gidiyordu; snapshot'a da iletilmezse KPI'lar hep 30g'de donuk kalırdı.
+      periyot,
     });
   } catch (e) {
     // Oturum düşmüşse API 401/403 döner → 404 değil, login'e yönlendir.
@@ -87,16 +100,20 @@ export default async function KomutaPage({ searchParams }: Props) {
 
   // Header açıklaması — aktif filtreleri (KPI'ları GERÇEKTEN daraltan bölge /
   // grup kırılımı / ürün grubu) gerçek facet etiketleriyle yansıtır. Hiç filtre
-  // yoksa "Tüm Distribütörler". Periyot yalnız Kanal Mix trendini sürdüğü için
-  // 30g KPI başlığına katılmaz (yanıltmasın).
+  // yoksa "Tüm Distribütörler". md1 — periyot artık KPI şeridini de sürüyor
+  // (bkz. `getKomutaSnapshot({ periyot })` yukarıda), bu yüzden başlıktaki
+  // sabit "Son 30 Gün" metni seçili periyoda göre değişir (yanıltmasın).
   const kanalAd = kanal ? (facets.kanallar.find((k) => k.kod === kanal)?.ad ?? kanal) : null;
   const urunAd = urunGrup ? (facets.urunGruplari.find((u) => u.kod === urunGrup)?.ad ?? urunGrup) : null;
   const activeFilters = [
-    bolge ? `Bölge: ${bolge}` : null,
-    kanalAd ? `Grup: ${kanalAd}` : null,
-    urunAd ? `Ürün: ${urunAd}` : null,
+    bolge ? `${translate(locale, "komuta.filter.region", "Bölge")}: ${bolge}` : null,
+    kanalAd ? `${translate(locale, "komuta.filter.group", "Grup")}: ${kanalAd}` : null,
+    urunAd ? `${translate(locale, "komuta.filter.product", "Ürün")}: ${urunAd}` : null,
   ].filter(Boolean) as string[];
-  const scopeLabel = activeFilters.length > 0 ? activeFilters.join(" · ") : "Tüm Distribütörler";
+  const scopeLabel =
+    activeFilters.length > 0
+      ? activeFilters.join(" · ")
+      : translate(locale, "komuta.filter.all_distributors", "Tüm Distribütörler");
 
   return (
     <>
@@ -104,47 +121,59 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} demo={!!snap.demoDate} scopeLabel={scopeLabel} />
-        <FilterBar reelTL={snap.reelTL} facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} periyot={periyot} />
-        {snap.reelTL && <ReelTlBanner />}
+        <Header
+          generatedAt={snap.generatedAt}
+          reelTL={snap.reelTL}
+          demo={!!snap.demoDate}
+          scopeLabel={scopeLabel}
+          periyot={periyot}
+          locale={locale}
+        />
+        <FilterBar reelTL={snap.reelTL} facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} periyot={periyot} locale={locale} />
+        {snap.reelTL && <ReelTlBanner locale={locale} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
             şeridi öncesi konumlandırılır ki sayfaya giren göz hemen
             "bu sabahın hikâyesi" cümlesini yakalasın. Brief üretilemezse
             sessizce kaybolmasın → fallback mesaj. */}
         {snap.brief && snap.brief.trim().length >= 50 ? (
-          <AiInsightBar brief={snap.brief} />
+          <AiInsightBar brief={snap.brief} locale={locale} />
         ) : (
           <div className="ai-brief-empty">
             <span className="ai-brief-empty-icon">🤖</span>
             <div>
-              <strong>Günün AI yorumu henüz hazır değil.</strong>{" "}
+              <strong>{translate(locale, "komuta.brief.empty_title", "Günün AI yorumu henüz hazır değil.")}</strong>{" "}
               <span className="ai-brief-empty-sub">
-                Yorum, gece güncellemesinde (03:00) bir kez üretilir ve gün
-                boyu aynı kalır. Bir sonraki güncellemede otomatik gelecek.
+                {translate(
+                  locale,
+                  "komuta.brief.empty_sub",
+                  "Yorum, gece güncellemesinde (03:00) bir kez üretilir ve gün boyu aynı kalır. Bir sonraki güncellemede otomatik gelecek.",
+                )}
               </span>
             </div>
           </div>
         )}
-        <KpiStrip kpis={snap.kpis} />
-        {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} />}
+        <KpiStrip kpis={snap.kpis} periyot={periyot} locale={locale} />
+        {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} locale={locale} />}
 
         <div className="main-grid">
           {!panelHidden("panel.cockpit.map") && (
-            <TurkeyMapPolygon regions={snap.regions} />
+            <TurkeyMapPolygon regions={snap.regions} locale={locale} />
           )}
           {!panelHidden("panel.cockpit.channelmonthly") && (
             <ChannelMixChart
               rows={snap.channelMonthly}
               unit={snap.unit}
-              title={panelTitle("panel.cockpit.channelmonthly", "Kanal Mix")}
+              volumeShort={volShort}
+              title={panelTitle("panel.cockpit.channelmonthly", translate(locale, "panel.cockpit.channelmonthly", "Kanal Mix"))}
               periodMonths={periodMonths}
               enablePieView
+              locale={locale}
             />
           )}
         </div>
 
         {!panelHidden("panel.cockpit.calendar") && (
-          <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} />
+          <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} volumeShort={volShort} locale={locale} />
         )}
 
         <div className="battle-grid">
@@ -157,36 +186,51 @@ export default async function KomutaPage({ searchParams }: Props) {
             <ChannelMixChart
               rows={snap.channelByType}
               unit={snap.unit}
-              title={panelTitle("panel.cockpit.channeltype", "Müşteri Grup Kırılımı · Son 12 Ay")}
+              volumeShort={volShort}
+              title={panelTitle(
+                "panel.cockpit.channeltype",
+                translate(locale, "panel.cockpit.channeltype", "Müşteri Grup Kırılımı · Son 12 Ay"),
+              )}
               icon="🛒"
-              category="grup kırılımı"
-              sourceNote="Müşteri grup kırılımı: Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı (TXTGRUPKIRILIMKOD), son 12 ay."
+              category={translate(locale, "komuta.channeltype.category", "grup kırılımı")}
+              sourceNote={translate(
+                locale,
+                "komuta.channeltype.source_note",
+                "Müşteri grup kırılımı: Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı (TXTGRUPKIRILIMKOD), son 12 ay.",
+              )}
               enableTypeFilter
-              typeFilterLabel="Grup Kırılımı"
+              typeFilterLabel={translate(locale, "komuta.channeltype.filter_label", "Grup Kırılımı")}
+              locale={locale}
             />
           )}
-          <MatrixPanel matrix={snap.matrix} unit={snap.unit} />
+          <MatrixPanel matrix={snap.matrix} unit={snap.unit} locale={locale} />
         </div>
 
-        <HeatmapPanel heatmap={snap.heatmap} />
+        <HeatmapPanel heatmap={snap.heatmap} locale={locale} />
 
         {/* md34 — Müşteri Grup Kırılımı × Marka: channeltype paneliyle aynı
             kaynak (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM) × tenant.brandTable. */}
         {!panelHidden("panel.cockpit.customertypebrand") && (
           <CustomerTypeBrandPanel
             data={snap.customerTypeBrand}
-            title={panelTitle("panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka")}
+            title={panelTitle(
+              "panel.cockpit.customertypebrand",
+              translate(locale, "panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka"),
+            )}
+            unit={unit}
+            volumeShort={volShort}
+            locale={locale}
           />
         )}
 
         <div className="bottom-grid">
-          <RepLeaderboard reps={snap.reps} unit={snap.unit} />
-          <DistLeaderboard dists={snap.topDists} unit={snap.unit} />
+          <RepLeaderboard reps={snap.reps} unit={snap.unit} locale={locale} />
+          <DistLeaderboard dists={snap.topDists} unit={snap.unit} locale={locale} />
         </div>
 
-        <PortfolioPanel portfolio={snap.portfolio} unit={snap.unit} />
+        <PortfolioPanel portfolio={snap.portfolio} unit={snap.unit} locale={locale} />
 
-        <Footer generatedAt={snap.generatedAt} />
+        <Footer generatedAt={snap.generatedAt} locale={locale} />
       </div>
     </>
   );
@@ -201,14 +245,20 @@ function Header({
   reelTL,
   demo,
   scopeLabel,
+  periyot,
+  locale,
 }: {
   generatedAt: string;
   reelTL: boolean;
   demo?: boolean;
   scopeLabel: string;
+  periyot: string;
+  locale: Locale;
 }) {
-  const rel = formatRelative(generatedAt);
-  const modeLabel = reelTL ? "Reel TL" : "Nominal TL";
+  const rel = formatRelative(generatedAt, locale);
+  const modeLabel = reelTL
+    ? translate(locale, "komuta.mode.reel", "Reel TL")
+    : translate(locale, "komuta.mode.nominal", "Nominal TL");
   return (
     <header className="komuta-page-header">
       <div className="komuta-page-header-main">
@@ -216,15 +266,17 @@ function Header({
           <span className="komuta-eyebrow-dot" />
           Komuta
         </div>
-        <h1 className="komuta-page-title">{t(getContentMap(), "page.cockpit.title", "Operasyon Genel Görünümü")}</h1>
+        <h1 className="komuta-page-title">
+          {t(getContentMap(), "page.cockpit.title", translate(locale, "page.cockpit.title", "Operasyon Genel Görünümü"))}
+        </h1>
         <p className="komuta-page-desc">
-          Univera Distribütör Operasyonu · CEO / Satış Direktörü görünümü ·{" "}
-          <strong>{scopeLabel}</strong> · Son 30 Gün ·{" "}
+          {translate(locale, "komuta.header.desc", "Univera Distribütör Operasyonu · CEO / Satış Direktörü görünümü")} ·{" "}
+          <strong>{scopeLabel}</strong> · {periyotLabel(periyot, locale)} ·{" "}
           <span style={{ color: "#6366f1" }}>{modeLabel}</span>
         </p>
       </div>
       <div className="komuta-page-header-actions">
-        {demo && <DemoBanner />}
+        {demo && <DemoBanner locale={locale} />}
         <span className="live-indicator">
           <span className="live-dot" />
           {rel}
@@ -241,6 +293,7 @@ function FilterBar({
   kanal,
   urunGrup,
   periyot,
+  locale,
 }: {
   reelTL: boolean;
   facets: KomutaFacets;
@@ -248,24 +301,25 @@ function FilterBar({
   kanal: string | null;
   urunGrup: string | null;
   periyot: string;
+  locale: Locale;
 }) {
   const reelHref = reelTL ? "/komuta" : "/komuta?reel=1";
 
   return (
     <div className="filter-bar">
-      <KomutaFilterDropdowns facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} />
-      <KomutaPeriyotDropdown periyot={periyot} />
+      <KomutaFilterDropdowns facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} locale={locale} />
+      <KomutaPeriyotDropdown periyot={periyot} locale={locale} />
       <span className="filter-spacer" />
       <div className="toggle-group">
         <Link
           href={reelHref}
           className={`toggle toggle-link${reelTL ? " on" : ""}`}
-          title="Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir"
+          title={translate(locale, "komuta.reel.title_hint", "Geçmiş değerleri TÜFE multiplier ile bugünün parasına çevirir")}
           prefetch={false}
         >
-          <span className="switch" /> Reel TL (TÜFE)
+          <span className="switch" /> {translate(locale, "komuta.reel.toggle_label", "Reel TL (TÜFE)")}
         </Link>
-        <UnitToggle />
+        <UnitToggle locale={locale} />
       </div>
     </div>
   );
@@ -273,27 +327,48 @@ function FilterBar({
 
 // -- KPI STRIP ---------------------------------------------------------------
 
-function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
+function KpiStrip({ kpis, periyot, locale }: { kpis: KomutaKpiCard[]; periyot: string; locale: Locale }) {
   if (panelHidden("panel.cockpit.kpistrip")) return null;
   if (!kpis || kpis.length === 0) {
-    return <div className="empty-note">KPI verisi alınamadı.</div>;
+    return <div className="empty-note">{translate(locale, "komuta.kpi.no_data", "KPI verisi alınamadı.")}</div>;
   }
   // Color accent per card matches mockup palette
   const accents = ["#6366f1", "#16a34a", "#9333ea", "#6366f1", "#16a34a"];
+  // Hint metinlerindeki birim adı sabit "9L" değil, tenant'ın kendi
+  // kısaltması (Pernod "9L", Wietnauer "70cl") — bkz. tenant.volume.short.
+  const volShort = getTenantConfig().volume.short;
+  // md1 — başlık artık seçili periyodu yansıtır (admin override varsa o
+  // kazanır; yoksa "{periyot} özet" fallback'i "Son 30 gün özet" yerine geçer).
+  const stripLabelFallback = translate(locale, "komuta.kpistrip.summary", "{periyot} özet", {
+    periyot: periyotLabel(periyot, locale),
+  });
   return (
     <div className="kpi-strip-wrap">
       <div className="kpi-strip-head">
-        <span className="kpi-strip-label">{panelTitle("panel.cockpit.kpistrip", "Son 30 gün özet")}</span>
+        <span className="kpi-strip-label">{panelTitle("panel.cockpit.kpistrip", stripLabelFallback)}</span>
         <InfoHint
-          title="KPI hesaplaması"
-          source="TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (9L için)"
-          window="Son 30 gün vs önceki 30 gün (delta % hesabı)"
-          base="SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = 9L)"
+          title={translate(locale, "komuta.hint.kpi.title", "KPI hesaplaması")}
+          source={translate(locale, "komuta.hint.kpi.source", "TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA ({unit} için)", {
+            unit: volShort,
+          })}
+          window={translate(locale, "komuta.hint.kpi.window", "{periyot} vs eşit uzunlukta önceki dönem (delta % hesabı)", {
+            periyot: periyotLabel(periyot, locale),
+          })}
+          base={translate(
+            locale,
+            "komuta.hint.kpi.base",
+            "SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = {unit})",
+            { unit: volShort },
+          )}
           notes={[
-            "Filtre: BYTTUR=0 AND BYTDURUM=0 (onaylı satış faturası)",
-            "9L çarpanı: TBLURUNEKSAHA saha 26 \"9 LT Değer\" (Pernod'un resmi katsayısı; 701 ürün için dolu)",
-            "Fallback (ek saha boş ise): DBLLITRE / 9 klasik hesaba düşülür",
-            "Demo modda GETDATE() çağrıları DEMO_DATE env değerine rewrite edilir",
+            translate(locale, "komuta.hint.kpi.note1", "Filtre: BYTTUR=0 AND BYTDURUM=0 (onaylı satış faturası)"),
+            // Hacim çarpanı tenant'a göre değişir (Pernod: TBLURUNEKSAHA saha
+            // 26 "9L"; Wietnauer: DBLLITRE/70cl). Sabit "Pernod" metni önceki
+            // sürümde her tenant'ta aynen görünüyordu — bunun yerine tenant'ın
+            // kendi `volume.hint` açıklaması kullanılır (tenant-nötr metin
+            // KISIT'i + doğru formül).
+            getTenantConfig().volume.hint,
+            translate(locale, "komuta.hint.kpi.note4", "Demo modda GETDATE() çağrıları DEMO_DATE env değerine rewrite edilir"),
           ]}
         />
       </div>
@@ -306,7 +381,7 @@ function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
             style={{ ["--accent" as string]: accents[i] ?? "#6366f1" }}
           >
             <div className="kpi-label">{panelTitle(`kpi.cockpit.${k.id}`, k.label)}</div>
-            <div className="kpi-value"><KpiValue k={k} /></div>
+            <div className="kpi-value"><KpiValue k={k} locale={locale} /></div>
             <div className="kpi-meta">
               {k.delta != null && (
                 <span className={k.delta >= 0 ? "delta-up" : "delta-down"}>
@@ -324,14 +399,14 @@ function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
 
 /** KPI değerini JSX olarak göster — sayı tam boy, birim (₺ / 9L) küçük + silik.
  *  Sayıyla suffix birbirine karışmasın diye verticalAlign + fontSize farkı. */
-function KpiValue({ k }: { k: KomutaKpiCard }) {
+function KpiValue({ k, locale }: { k: KomutaKpiCard; locale: Locale }) {
   if (k.format === "percent") {
     return <>%{k.value.toFixed(1)}</>;
   }
   const numStr =
     k.format === "compact"
       ? formatCompact(k.value)
-      : Math.round(k.value).toLocaleString("tr-TR");
+      : Math.round(k.value).toLocaleString(locale === "en" ? "en-US" : "tr-TR");
   return (
     <>
       {numStr}
@@ -346,7 +421,7 @@ function KpiValue({ k }: { k: KomutaKpiCard }) {
             verticalAlign: "0.18em",
           }}
         >
-          {k.unit}
+          {localizeVolumeUnit(k.unit, locale)}
         </span>
       )}
     </>
@@ -355,52 +430,60 @@ function KpiValue({ k }: { k: KomutaKpiCard }) {
 
 // -- DEMO MODE BANNER --------------------------------------------------------
 
-function DemoBanner() {
+function DemoBanner({ locale }: { locale: Locale }) {
   return (
-    <span className="demo-badge" title="Demo modu — örnek veri">
+    <span className="demo-badge" title={translate(locale, "komuta.demo.hint", "Demo modu — örnek veri")}>
       <span className="demo-badge-dot" />
-      Demo modu
+      {translate(locale, "komuta.demo.badge", "Demo modu")}
     </span>
   );
 }
 
 // -- CALENDAR BANNER ---------------------------------------------------------
 
-function ReelTlBanner() {
+function ReelTlBanner({ locale }: { locale: Locale }) {
   return (
     <div className="reel-banner">
       <div className="reel-banner-icon">📈</div>
       <div className="reel-banner-text">
-        <strong>Reel TL görünümü aktif</strong> · Geçmiş değerler TÜFE
-        multiplier'ı ile bugünün parasına çevrildi.{" "}
+        <strong>{translate(locale, "komuta.reel.banner_title", "Reel TL görünümü aktif")}</strong> ·{" "}
+        {translate(locale, "komuta.reel.banner_desc", "Geçmiş değerler TÜFE multiplier'ı ile bugünün parasına çevrildi.")}{" "}
         <span style={{ color: "#78716c" }}>
-          YoY ve 2-yıllık % değerleri reel kıyasla yeniden hesaplandı —
-          enflasyon arındırılmış gerçek büyüme.
+          {translate(
+            locale,
+            "komuta.reel.banner_sub",
+            "YoY ve 2-yıllık % değerleri reel kıyasla yeniden hesaplandı — enflasyon arındırılmış gerçek büyüme.",
+          )}
         </span>
       </div>
       <Link href="/komuta" className="reel-banner-cta" prefetch={false}>
-        Nominal TL'ye dön →
+        {translate(locale, "komuta.reel.back_cta", "Nominal TL'ye dön →")}
       </Link>
     </div>
   );
 }
 
-function CalendarBanner({ event }: { event: KomutaUpcomingEvent }) {
+function CalendarBanner({ event, locale }: { event: KomutaUpcomingEvent; locale: Locale }) {
   return (
     <div className="cal-banner">
       <div className="cal-banner-icon">📅</div>
       <div className="cal-banner-text">
-        <strong>{event.daysAhead} gün sonra {event.name}</strong>
-        {" · "}({new Date(event.date).toLocaleDateString("tr-TR", {
+        <strong>
+          {translate(locale, "komuta.calendar.days_until", "{days} gün sonra {name}", {
+            days: event.daysAhead,
+            name: event.name,
+          })}
+        </strong>
+        {" · "}({new Date(event.date).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
           day: "2-digit",
           month: "long",
           year: "numeric",
         })})
         {" · "}<span style={{ color: "#78716c" }}>
-          Yaklaşan Sezon panelinde geçen yıl etkisi
+          {translate(locale, "komuta.calendar.upcoming_hint", "Yaklaşan Sezon panelinde geçen yıl etkisi")}
         </span>
       </div>
-      <div className="cal-banner-cta">Sezon planını incele →</div>
+      <div className="cal-banner-cta">{translate(locale, "komuta.calendar.plan_cta", "Sezon planını incele →")}</div>
     </div>
   );
 }
@@ -1112,44 +1195,82 @@ function UpcomingEmpty() {
 function MatrixPanel({
   matrix,
   unit,
+  locale,
 }: {
   matrix: KomutaMatrixRow[];
   unit: ValueUnit;
+  locale: Locale;
 }) {
   if (panelHidden("panel.cockpit.matrix")) return null;
   return (
     <div className="panel matrix-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">📋</span> {panelTitle("panel.cockpit.matrix", "Ürün Grubu × Dönem")}
+          <span className="icon">📋</span>{" "}
+          {panelTitle("panel.cockpit.matrix", translate(locale, "panel.cockpit.matrix", "Ürün Grubu × Dönem"))}
           <InfoHint
-            title="Matrix hesaplaması"
+            title={translate(locale, "komuta.hint.matrix.title", "Matrix hesaplaması")}
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP"
-            window="5 dönem: bu ay, geçen ay, 3 ay önce, geçen yıl aynı ay, 2 yıl önce aynı ay"
-            base="SUM(DBLNETFIYAT × DBLMIKTAR) detay-bazlı + PeriodScales ile fatura tabanına normalize"
+            window={translate(
+              locale,
+              "komuta.hint.matrix.window",
+              "5 dönem: bu ay, geçen ay, 3 ay önce, geçen yıl aynı ay, 2 yıl önce aynı ay",
+            )}
+            base={translate(
+              locale,
+              "komuta.hint.matrix.base",
+              "SUM(DBLNETFIYAT × DBLMIKTAR) detay-bazlı + PeriodScales ile fatura tabanına normalize",
+            )}
             notes={[
-              "Detay ciro fatura toplamından ~%5-15 farklı; her dönem için fatura/detay oranı (PeriodScales) hesaplanıp çarpılır",
-              "TBLURUNGRUP join'inde LNGDISTKOD=u.LNGDISTKOD ekleme yapma (her ikisi NULL→JOIN boşalır)",
-              "Reel TL modunda her dönem TÜFE multiplier'ı uygulanır",
-              "Top 8 grup + \"Diğer\" (kalanların toplamı) + dip \"Toplam\" satırı",
+              translate(
+                locale,
+                "komuta.hint.matrix.note1",
+                "Detay ciro fatura toplamından ~%5-15 farklı; her dönem için fatura/detay oranı (PeriodScales) hesaplanıp çarpılır",
+              ),
+              translate(
+                locale,
+                "komuta.hint.matrix.note2",
+                "TBLURUNGRUP join'inde LNGDISTKOD=u.LNGDISTKOD ekleme yapma (her ikisi NULL→JOIN boşalır)",
+              ),
+              translate(locale, "komuta.hint.matrix.note3", "Reel TL modunda her dönem TÜFE multiplier'ı uygulanır"),
+              translate(
+                locale,
+                "komuta.hint.matrix.note4",
+                "Top 8 grup + \"Diğer\" (kalanların toplamı) + dip \"Toplam\" satırı",
+              ),
             ]}
           />
         </div>
-        <div className="panel-meta">Top 8 + Diğer + Toplam</div>
+        <div className="panel-meta">{translate(locale, "komuta.matrix.meta", "Top 8 + Diğer + Toplam")}</div>
       </div>
       {matrix.length === 0 ? (
-        <div className="empty-note">Ürün grubu verisi yok.</div>
+        <div className="empty-note">{translate(locale, "komuta.matrix.empty", "Ürün grubu verisi yok.")}</div>
       ) : (
         <table className="matrix-table">
           <thead>
             <tr>
-              <th>Ürün Grubu</th>
-              <th className="current">Bu Ay<span className="sub">son 30g</span></th>
-              <th>Geçen Ay<span className="sub">30-60g</span></th>
-              <th>3 Ay Önce<span className="sub">90-120g</span></th>
-              <th>Geçen Yıl<span className="sub">~365g</span></th>
-              <th>2 Yıl Önce<span className="sub">~730g</span></th>
-              <th>Trend</th>
+              <th>{translate(locale, "komuta.matrix.col_group", "Ürün Grubu")}</th>
+              <th className="current">
+                {translate(locale, "komuta.matrix.col_this_month", "Bu Ay")}
+                <span className="sub">{translate(locale, "komuta.matrix.col_this_month_sub", "son 30g")}</span>
+              </th>
+              <th>
+                {translate(locale, "komuta.matrix.col_last_month", "Geçen Ay")}
+                <span className="sub">{locale === "en" ? "30-60d" : "30-60g"}</span>
+              </th>
+              <th>
+                {translate(locale, "komuta.matrix.col_3mo_ago", "3 Ay Önce")}
+                <span className="sub">{locale === "en" ? "90-120d" : "90-120g"}</span>
+              </th>
+              <th>
+                {translate(locale, "komuta.matrix.col_last_year", "Geçen Yıl")}
+                <span className="sub">{locale === "en" ? "~365d" : "~365g"}</span>
+              </th>
+              <th>
+                {translate(locale, "komuta.matrix.col_2yr_ago", "2 Yıl Önce")}
+                <span className="sub">{locale === "en" ? "~730d" : "~730g"}</span>
+              </th>
+              <th>{translate(locale, "komuta.matrix.col_trend", "Trend")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1160,7 +1281,7 @@ function MatrixPanel({
               >
                 <td title={row.grup}>
                   {truncate(row.grup, 28)}
-                  {!row.isOther && !row.isTotal && <TierBadge tier={row.tier} />}
+                  {!row.isOther && !row.isTotal && <TierBadge tier={row.tier} locale={locale} />}
                 </td>
                 <td className="matrix-cell-current"><Val n={row.buAy} unit={unit} /></td>
                 <td><Val n={row.gecenAy} unit={unit} /></td>
@@ -1186,7 +1307,7 @@ function MatrixPanel({
 
 // -- HEATMAP -----------------------------------------------------------------
 
-function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
+function HeatmapPanel({ heatmap, locale }: { heatmap: KomutaHeatmapRow[]; locale: Locale }) {
   if (panelHidden("panel.cockpit.heatmap")) return null;
   if (heatmap.length === 0) return null;
   const grupHeaders = heatmap[0]?.cells.map((c) => c.grup) ?? [];
@@ -1194,20 +1315,36 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
     <div className="panel heatmap-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🔥</span> {panelTitle("panel.cockpit.heatmap", "Bölge × Ürün Grubu · YoY Değişim Heatmap")}
+          <span className="icon">🔥</span>{" "}
+          {panelTitle(
+            "panel.cockpit.heatmap",
+            translate(locale, "panel.cockpit.heatmap", "Bölge × Ürün Grubu · YoY Değişim Heatmap"),
+          )}
           <InfoHint
-            title="Heatmap YoY hesaplaması"
+            title={translate(locale, "komuta.hint.heatmap.title", "Heatmap YoY hesaplaması")}
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP × TBLDIST × TBLDISTGRUP"
-            window="Son 30g vs -395..-365g (geçen yıl aynı pencere)"
-            base="SUM(DBLNETFIYAT × DBLMIKTAR) her bölge × her grup hücresi"
+            window={translate(locale, "komuta.hint.heatmap.window", "Son 30g vs -395..-365g (geçen yıl aynı pencere)")}
+            base={translate(locale, "komuta.hint.heatmap.base", "SUM(DBLNETFIYAT × DBLMIKTAR) her bölge × her grup hücresi")}
             notes={[
-              "Top 8 bölge × Top 8 grup + Diğer (detay ciro toplamına göre)",
-              "yoyPct = (son − önceki)/önceki × 100; bucket sınıfı (fire/hot/warm/flat/cool/cold) Komuta CSS palette'i",
-              "Sadece kırmızı (cool/cold) hücreler tıklanabilir → Finans Agentı modal",
+              translate(
+                locale,
+                "komuta.hint.heatmap.note1",
+                "Top 8 bölge × Top 8 grup + Diğer (detay ciro toplamına göre)",
+              ),
+              translate(
+                locale,
+                "komuta.hint.heatmap.note2",
+                "yoyPct = (son − önceki)/önceki × 100; bucket sınıfı (fire/hot/warm/flat/cool/cold) Komuta CSS palette'i",
+              ),
+              translate(
+                locale,
+                "komuta.hint.heatmap.note3",
+                "Sadece kırmızı (cool/cold) hücreler tıklanabilir → Finans Agentı modal",
+              ),
             ]}
           />
         </div>
-        <div className="panel-meta">Son 30g vs Geçen yıl aynı 30g</div>
+        <div className="panel-meta">{translate(locale, "komuta.heatmap.meta", "Son 30g vs Geçen yıl aynı 30g")}</div>
       </div>
       <div
         className="heatmap-grid"
@@ -1216,16 +1353,19 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
           gridTemplateColumns: `repeat(${grupHeaders.length + 2}, 1fr)`,
         }}
       >
-        <div className="h-head">Bölge</div>
+        <div className="h-head">{translate(locale, "komuta.filter.region", "Bölge")}</div>
         {grupHeaders.map((g) => (
           <div key={g} className="h-head" title={g}>{truncate(g, 12)}</div>
         ))}
-        <div className="h-head right">Bölge Ort.</div>
+        <div className="h-head right">{translate(locale, "komuta.heatmap.col_region_avg", "Bölge Ort.")}</div>
 
         {heatmap.map((row) => (
           <Fragment key={row.bolge}>
             <div className="h-region">
-              {row.bolge} <span className="reg-sub">{row.distSayisi} distribütör</span>
+              {row.bolge}{" "}
+              <span className="reg-sub">
+                {translate(locale, "komuta.heatmap.dist_count", "{n} distribütör", { n: row.distSayisi })}
+              </span>
             </div>
             {row.cells.map((cell, i) => {
               // Demo journey: sadece kırmızı (anomali) hücreler finans
@@ -1244,7 +1384,10 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
                         "data-finance-product-group": cell.grup,
                         role: "button",
                         tabIndex: 0,
-                        title: `${row.bolge} × ${cell.grup} — finans analizini aç`,
+                        title: translate(locale, "komuta.heatmap.cell_cta", "{region} × {group} — finans analizini aç", {
+                          region: row.bolge,
+                          group: cell.grup,
+                        }),
                       }
                     : {})}
                 >
@@ -1267,9 +1410,11 @@ function HeatmapPanel({ heatmap }: { heatmap: KomutaHeatmapRow[] }) {
 function RepLeaderboard({
   reps,
   unit,
+  locale,
 }: {
   reps: KomutaRep[];
   unit: ValueUnit;
+  locale: Locale;
 }) {
   if (panelHidden("panel.cockpit.reps")) return null;
   // Panel sözleşmesi "Top 10" — kaynak fazla satır dönse de ilk 10 gösterilir.
@@ -1279,22 +1424,23 @@ function RepLeaderboard({
     <div className="panel leaderboard">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🏆</span> {panelTitle("panel.cockpit.reps", "Top Satış Temsilcileri")}
+          <span className="icon">🏆</span>{" "}
+          {panelTitle("panel.cockpit.reps", translate(locale, "panel.cockpit.reps", "Top Satış Temsilcileri"))}
           <InfoHint
-            title="Satış temsilcisi sıralaması"
+            title={translate(locale, "komuta.hint.reps.title", "Satış temsilcisi sıralaması")}
             source="TBLMSDFATURA × TBLSATISTEMSILCISI × TBLDIST"
-            window="Son 30 gün"
-            base="SUM(DBLNETTUTAR) her temsilci için + COUNT fatura"
+            window={translate(locale, "komuta.hint.window_30d", "Son 30 gün")}
+            base={translate(locale, "komuta.hint.reps.base", "SUM(DBLNETTUTAR) her temsilci için + COUNT fatura")}
             notes={[
-              "Filtre: f.BYTTUR=0, f.BYTDURUM=0, s.BYTDURUM=0 (aktif temsilci)",
-              "Top 10; sıralama ciro DESC",
+              translate(locale, "komuta.hint.reps.note1", "Filtre: f.BYTTUR=0, f.BYTDURUM=0, s.BYTDURUM=0 (aktif temsilci)"),
+              translate(locale, "komuta.hint.top10_desc", "Top 10; sıralama ciro DESC"),
             ]}
           />
         </div>
-        <div className="panel-meta">Son 30g · ciro sırası</div>
+        <div className="panel-meta">{translate(locale, "komuta.leaderboard.meta", "Son 30g · ciro sırası")}</div>
       </div>
       {topReps.length === 0 ? (
-        <div className="empty-note">Temsilci verisi yok.</div>
+        <div className="empty-note">{translate(locale, "komuta.reps.empty", "Temsilci verisi yok.")}</div>
       ) : (
         topReps.map((r) => {
           const pct = (r.ciro / max) * 100;
@@ -1327,9 +1473,11 @@ function RepLeaderboard({
 function DistLeaderboard({
   dists,
   unit,
+  locale,
 }: {
   dists: KomutaTopDist[];
   unit: ValueUnit;
+  locale: Locale;
 }) {
   if (panelHidden("panel.cockpit.dists")) return null;
   const max = Math.max(1, ...dists.map((d) => d.ciro));
@@ -1337,23 +1485,28 @@ function DistLeaderboard({
     <div className="panel leaderboard">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🏢</span> {panelTitle("panel.cockpit.dists", "Top Distribütörler")}
+          <span className="icon">🏢</span>{" "}
+          {panelTitle("panel.cockpit.dists", translate(locale, "panel.cockpit.dists", "Top Distribütörler"))}
           <InfoHint
-            title="Distribütör sıralaması"
+            title={translate(locale, "komuta.hint.dists.title", "Distribütör sıralaması")}
             source="TBLMSDFATURA × TBLDIST × TBLDISTEKGRUP"
-            window="Son 30 gün"
-            base="SUM(DBLNETTUTAR) her distribütör için + COUNT fatura"
+            window={translate(locale, "komuta.hint.window_30d", "Son 30 gün")}
+            base={translate(locale, "komuta.hint.dists.base", "SUM(DBLNETTUTAR) her distribütör için + COUNT fatura")}
             notes={[
-              "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0",
-              "Bölge etiketi (TBLDISTEKGRUP.TXTAD) liste satırında görünür",
-              "Top 10; sıralama ciro DESC",
+              translate(locale, "komuta.hint.dists.note1", "Filtre: f.BYTTUR=0, f.BYTDURUM=0, d.BYTDURUM=0"),
+              translate(
+                locale,
+                "komuta.hint.dists.note2",
+                "Bölge etiketi (TBLDISTEKGRUP.TXTAD) liste satırında görünür",
+              ),
+              translate(locale, "komuta.hint.top10_desc", "Top 10; sıralama ciro DESC"),
             ]}
           />
         </div>
-        <div className="panel-meta">Son 30g · ciro sırası</div>
+        <div className="panel-meta">{translate(locale, "komuta.leaderboard.meta", "Son 30g · ciro sırası")}</div>
       </div>
       {dists.length === 0 ? (
-        <div className="empty-note">Distribütör verisi yok.</div>
+        <div className="empty-note">{translate(locale, "komuta.dists.empty", "Distribütör verisi yok.")}</div>
       ) : (
         dists.map((d) => {
           const pct = (d.ciro / max) * 100;
@@ -1385,44 +1538,66 @@ function DistLeaderboard({
 function PortfolioPanel({
   portfolio,
   unit,
+  locale,
 }: {
   portfolio: KomutaPortfolioRow[];
   unit: ValueUnit;
+  locale: Locale;
 }) {
   if (panelHidden("panel.cockpit.portfolio")) return null;
   return (
     <div className="panel brand-portfolio">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">🥃</span> {panelTitle("panel.cockpit.portfolio", "Ürün Grubu Portföyü · 2 Yıllık Yörünge")}
+          <span className="icon">🥃</span>{" "}
+          {panelTitle(
+            "panel.cockpit.portfolio",
+            translate(locale, "panel.cockpit.portfolio", "Ürün Grubu Portföyü · 2 Yıllık Yörünge"),
+          )}
           <InfoHint
-            title="Portföy hesaplaması"
+            title={translate(locale, "komuta.hint.portfolio.title", "Portföy hesaplaması")}
             source="TBLMSDFATURA × TBLMSDBELGEDETAY × TBLURUN × TBLURUNGRUP"
-            window="3 dönem: son 30g, geçen yıl aynı 30g (-395..-365g), 2 yıl önce aynı 30g (-760..-730g)"
-            base="SUM(DBLNETFIYAT × DBLMIKTAR) detay-bazlı + PeriodScales ile fatura tabanına normalize"
+            window={translate(
+              locale,
+              "komuta.hint.portfolio.window",
+              "3 dönem: son 30g, geçen yıl aynı 30g (-395..-365g), 2 yıl önce aynı 30g (-760..-730g)",
+            )}
+            base={translate(
+              locale,
+              "komuta.hint.matrix.base",
+              "SUM(DBLNETFIYAT × DBLMIKTAR) detay-bazlı + PeriodScales ile fatura tabanına normalize",
+            )}
             notes={[
-              "Tier sınıflandırma (luxury/premium/core/value) ürün grubu adına göre keyword eşleşmesi",
-              "yoyPct = (bu − geçenYıl)/geçenYıl × 100",
-              "twoYrPct = (bu − ikiYılÖnce)/ikiYılÖnce × 100",
-              "Reel TL modunda baz değerler TÜFE multiplier ile bugünün TL'sine çevrilir",
+              translate(
+                locale,
+                "komuta.hint.portfolio.note1",
+                "Tier sınıflandırma (luxury/premium/core/value) ürün grubu adına göre keyword eşleşmesi",
+              ),
+              translate(locale, "komuta.hint.portfolio.note2", "yoyPct = (bu − geçenYıl)/geçenYıl × 100"),
+              translate(locale, "komuta.hint.portfolio.note3", "twoYrPct = (bu − ikiYılÖnce)/ikiYılÖnce × 100"),
+              translate(
+                locale,
+                "komuta.hint.portfolio.note4",
+                "Reel TL modunda baz değerler TÜFE multiplier ile bugünün TL'sine çevrilir",
+              ),
             ]}
           />
         </div>
-        <div className="panel-meta">Top 8 grup + Diğer</div>
+        <div className="panel-meta">{translate(locale, "komuta.portfolio.meta", "Top 8 grup + Diğer")}</div>
       </div>
       {portfolio.length === 0 ? (
-        <div className="empty-note">Portföy verisi yok.</div>
+        <div className="empty-note">{translate(locale, "komuta.portfolio.empty", "Portföy verisi yok.")}</div>
       ) : (
         <table className="bp-table">
           <thead>
             <tr>
-              <th>Ürün Grubu</th>
-              <th className="current">Son 30g</th>
-              <th>1 yıl önce</th>
-              <th>2 yıl önce</th>
+              <th>{translate(locale, "komuta.matrix.col_group", "Ürün Grubu")}</th>
+              <th className="current">{translate(locale, "komuta.portfolio.col_last30", "Son 30g")}</th>
+              <th>{translate(locale, "komuta.portfolio.col_1yr_ago", "1 yıl önce")}</th>
+              <th>{translate(locale, "komuta.portfolio.col_2yr_ago", "2 yıl önce")}</th>
               <th>YoY</th>
-              <th>2-yıl Δ</th>
-              <th>Trend</th>
+              <th>{translate(locale, "komuta.portfolio.col_2yr_delta", "2-yıl Δ")}</th>
+              <th>{translate(locale, "komuta.matrix.col_trend", "Trend")}</th>
             </tr>
           </thead>
           <tbody>
@@ -1436,7 +1611,7 @@ function PortfolioPanel({
                 <tr key={p.grup}>
                   <td title={p.grup}>
                     {truncate(p.grup, 26)}
-                    <TierBadge tier={p.tier} />
+                    <TierBadge tier={p.tier} locale={locale} />
                   </td>
                   <td className="current"><Val n={p.bu} unit={unit} /></td>
                   <td className="right"><Val n={p.oneYearAgo} unit={unit} /></td>
@@ -1481,27 +1656,29 @@ function PortfolioPanel({
 
 // -- AI INSIGHT BAR ----------------------------------------------------------
 
-function AiInsightBar({ brief }: { brief: string }) {
+function AiInsightBar({ brief, locale }: { brief: string; locale: Locale }) {
   if (panelHidden("panel.cockpit.brief")) return null;
   return (
     <div className="ai-insight">
       <div className="ai-icon">✨</div>
       <div className="ai-text">
-        <div className="ai-title">{panelTitle("panel.cockpit.brief", "UNIQUE AI · Bu Sabahın Yorumu")}</div>
+        <div className="ai-title">
+          {panelTitle("panel.cockpit.brief", translate(locale, "panel.cockpit.brief", "UNIQUE AI · Bu Sabahın Yorumu"))}
+        </div>
         <div className="ai-body" dangerouslySetInnerHTML={{ __html: brief }} />
       </div>
     </div>
   );
 }
 
-function Footer({ generatedAt }: { generatedAt: string }) {
+function Footer({ generatedAt, locale }: { generatedAt: string; locale: Locale }) {
   return (
     <div className="footer-bar">
       <span>
-        UNIQUE AI Reports · Univera veri kaynağı · son sorgulama:{" "}
-        {new Date(generatedAt).toLocaleString("tr-TR")}
+        {translate(locale, "komuta.footer.reports", "UNIQUE AI Reports · Univera veri kaynağı · son sorgulama:")}{" "}
+        {new Date(generatedAt).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
       </span>
-      <span>Görünüm: CEO / Satış Direktörü</span>
+      <span>{translate(locale, "komuta.footer.view", "Görünüm: CEO / Satış Direktörü")}</span>
     </div>
   );
 }
@@ -1518,11 +1695,15 @@ function formatCompact(n: number): string {
   return Math.round(n).toString();
 }
 
-/** Snapshot.unit suffix'i ile compact format — TL modunda "₺", 9L modunda "9L".
+/** Snapshot.unit suffix'i ile compact format — TL modunda "₺", hacim modunda
+ *  tenant'ın kendi kısaltması (Pernod "9L", Wietnauer "70cl", vb. — bkz.
+ *  `tenant.volume.short`). Önceden "9le" durumu sabit "9L" yazıyordu; bu,
+ *  Wietnauer gibi 9L kullanmayan tenant'larda YANLIŞ birim gösteriyordu
+ *  (MADDE 3/4 — hacim moduna geçince TL kalıntısı/yanlış birim kalmamalı).
  *  Sayı normal boy, birim küçük + silik bir span olarak yan yana — birbirine
  *  karışmasın. */
 function Val({ n, unit }: { n: number; unit: ValueUnit }) {
-  const suffix = unit === "9le" ? "9L" : "₺";
+  const suffix = unit === "9le" ? getTenantConfig().volume.short : "₺";
   return (
     <>
       {formatCompact(n)}
@@ -1552,20 +1733,21 @@ function trendEmoji(t: KomutaMatrixRow["trend"]): string {
   return "📊";
 }
 
-function TierBadge({ tier }: { tier: ProductTier }) {
+function TierBadge({ tier, locale: _locale }: { tier: ProductTier; locale: Locale }) {
   if (tier === "value") return null;
+  // LUX/PREM/CORE tier kısaltmaları — locale-nötr (sektör kısaltması, TR/EN aynı).
   const label = tier === "luxury" ? "LUX" : tier === "premium" ? "PREM" : "CORE";
   return <span className={`tier-badge tier-${tier}`}>{label}</span>;
 }
 
-function formatRelative(iso: string): string {
+function formatRelative(iso: string, locale: Locale): string {
   const seconds = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (seconds < 60) return "az önce";
+  if (seconds < 60) return translate(locale, "komuta.time_now", "az önce");
   const m = Math.floor(seconds / 60);
-  if (m < 60) return `${m} dk önce`;
+  if (m < 60) return translate(locale, "komuta.time_min_ago", "{n} dk önce", { n: m });
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} sa önce`;
-  return `${Math.floor(h / 24)} gün önce`;
+  if (h < 24) return translate(locale, "komuta.time_hr_ago", "{n} sa önce", { n: h });
+  return translate(locale, "komuta.time_day_ago", "{n} gün önce", { n: Math.floor(h / 24) });
 }
 
 // ============================================================================

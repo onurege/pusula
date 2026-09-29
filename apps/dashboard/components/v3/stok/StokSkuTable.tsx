@@ -3,12 +3,14 @@
 import { useMemo, useState } from "react";
 import type { StockRiskTier, WietnauerStockSkuRow } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
+import { t, type Locale } from "@/lib/i18n";
 
 const PAGE_SIZE_OPTIONS = [25, 50] as const;
 const DEFAULT_PAGE_SIZE: (typeof PAGE_SIZE_OPTIONS)[number] = 25;
 
 type Props = {
   rows: WietnauerStockSkuRow[];
+  locale?: Locale;
 };
 
 /**
@@ -22,7 +24,7 @@ type Props = {
  * `key` ile yeniden mount eder; böylece sayfa numarası her filtre
  * değişiminde 1'e döner.
  */
-export function StokSkuTable({ rows }: Props) {
+export function StokSkuTable({ rows, locale = "tr" }: Props) {
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
 
@@ -54,25 +56,25 @@ export function StokSkuTable({ rows }: Props) {
         <table className="stok-table">
           <thead>
             <tr>
-              <th>SKU</th>
-              <th>Distribütör</th>
-              <th>Marka</th>
-              <th>Risk</th>
-              <th className="num">Kalan</th>
-              <th>Tükenme</th>
-              <th className="num">Stok</th>
-              <th className="num">90g Satış</th>
-              <th className="num">Tahmin/gün</th>
-              <th className="num">Devir</th>
+              <th>{t(locale, "col.sku", "SKU")}</th>
+              <th>{t(locale, "col.distributor", "Distribütör")}</th>
+              <th>{t(locale, "col.marka", "Marka")}</th>
+              <th>{t(locale, "col.risk", "Risk")}</th>
+              <th className="num">{locale === "en" ? "Remaining" : "Kalan"}</th>
+              <th>{locale === "en" ? "Stockout" : "Tükenme"}</th>
+              <th className="num">{t(locale, "col.stok", "Stok")}</th>
+              <th className="num">{t(locale, "col.satis90g", "90g Satış")}</th>
+              <th className="num">{locale === "en" ? "Forecast/day" : "Tahmin/gün"}</th>
+              <th className="num">{locale === "en" ? "Turnover" : "Devir"}</th>
               <th className="num">ROP</th>
-              <th className="num">Eksik</th>
+              <th className="num">{locale === "en" ? "Shortfall" : "Eksik"}</th>
             </tr>
           </thead>
           <tbody>
             {pageRows.length === 0 && (
               <tr>
                 <td colSpan={12} className="stok-empty">
-                  Kayıt yok.
+                  {locale === "en" ? "No records." : "Kayıt yok."}
                 </td>
               </tr>
             )}
@@ -88,37 +90,59 @@ export function StokSkuTable({ rows }: Props) {
                 <td>{row.brand ?? "-"}</td>
                 <td>
                   <div className="stok-risk-cell">
-                    <RiskBadge tier={row.riskTier} />
+                    <RiskBadge tier={row.riskTier} locale={locale} />
                     {row.lowConfidence && (
                       <span
                         className="stok-lowconf"
-                        title={`Düşük güven: eldeki stok toplam hareketin yalnızca %${row.netSignalPct ?? "?"}'i — büyük giriş/çıkış akışının küçük farkı. Tek kaydedilmemiş giriş bu sonucu tersine çevirebilir. Fiziksel stok sayımıyla doğrulanmalı.`}
+                        title={
+                          locale === "en"
+                            ? `Low confidence: on-hand stock is only %${row.netSignalPct ?? "?"} of total movement — a small difference of large in/out flows. A single unrecorded receipt could flip this. Should be verified with a physical count.`
+                            : `Düşük güven: eldeki stok toplam hareketin yalnızca %${row.netSignalPct ?? "?"}'i — büyük giriş/çıkış akışının küçük farkı. Tek kaydedilmemiş giriş bu sonucu tersine çevirebilir. Fiziksel stok sayımıyla doğrulanmalı.`
+                        }
                       >
-                        düşük güven
+                        {locale === "en" ? "low confidence" : "düşük güven"}
                       </span>
                     )}
                     <span className={`confidence confidence-${row.stockConfidence}`}>
-                      {confidenceLabel(row.stockConfidence)} · {row.stockConfidenceScore}
+                      {confidenceLabel(row.stockConfidence, locale)} · {row.stockConfidenceScore}
                     </span>
                   </div>
                 </td>
-                <td className="num">{formatDays(row.daysLeft)}</td>
-                <td>{row.estimatedStockoutDate ? formatDate(row.estimatedStockoutDate) : "-"}</td>
+                <td className="num">{formatDays(row.daysLeft, locale)}</td>
+                <td>{row.estimatedStockoutDate ? formatDate(row.estimatedStockoutDate, locale) : "-"}</td>
                 <td className="num">{formatQty(row.onHandQty)}</td>
                 <td className="num">{formatQty(row.soldQty90d)}</td>
                 <td className="num">
-                  <span title={`Croston 180g: ${formatQty(row.crostonDailyQty)} · trend x${row.trendFactor.toFixed(2)} · mevsim x${row.seasonalityFactor.toFixed(2)}${row.seasonalityReason ? ` (${row.seasonalityReason})` : ""}`}>
+                  <span
+                    title={
+                      locale === "en"
+                        ? `Croston 180d: ${formatQty(row.crostonDailyQty)} · trend x${row.trendFactor.toFixed(2)} · seasonality x${row.seasonalityFactor.toFixed(2)}${row.seasonalityReason ? ` (${row.seasonalityReason})` : ""}`
+                        : `Croston 180g: ${formatQty(row.crostonDailyQty)} · trend x${row.trendFactor.toFixed(2)} · mevsim x${row.seasonalityFactor.toFixed(2)}${row.seasonalityReason ? ` (${row.seasonalityReason})` : ""}`
+                    }
+                  >
                     {formatQty(row.forecastDailyQty)}
                   </span>
                 </td>
                 <td className="num">{row.turnover90d == null ? "-" : row.turnover90d.toFixed(2)}</td>
                 <td className="num">
-                  <span title={`Lead time: ${row.leadTimeDays} gün (${leadTimeSourceLabel(row.leadTimeSource)}) · emniyet stok: ${formatQty(row.safetyStockQty)}`}>
+                  <span
+                    title={
+                      locale === "en"
+                        ? `Lead time: ${row.leadTimeDays} days (${leadTimeSourceLabel(row.leadTimeSource, locale)}) · safety stock: ${formatQty(row.safetyStockQty)}`
+                        : `Lead time: ${row.leadTimeDays} gün (${leadTimeSourceLabel(row.leadTimeSource, locale)}) · emniyet stok: ${formatQty(row.safetyStockQty)}`
+                    }
+                  >
                     {formatQty(row.reorderPointQty)}
                   </span>
                 </td>
                 <td className="num">
-                  <span title={`ROP - envanter pozisyonu. Pozisyon: stok ${formatQty(row.onHandQty)} + yolda ${formatQty(row.openOrderQty)} = ${formatQty(row.inventoryPositionQty)}`}>
+                  <span
+                    title={
+                      locale === "en"
+                        ? `ROP - inventory position. Position: stock ${formatQty(row.onHandQty)} + on order ${formatQty(row.openOrderQty)} = ${formatQty(row.inventoryPositionQty)}`
+                        : `ROP - envanter pozisyonu. Pozisyon: stok ${formatQty(row.onHandQty)} + yolda ${formatQty(row.openOrderQty)} = ${formatQty(row.inventoryPositionQty)}`
+                    }
+                  >
                     {row.reorderGapQty > 0 ? formatQty(row.reorderGapQty) : "-"}
                   </span>
                 </td>
@@ -134,7 +158,7 @@ export function StokSkuTable({ rows }: Props) {
         </span>
         <div className="stok-pagination-controls">
           <label className="stok-pagination-size">
-            Sayfa başına
+            {locale === "en" ? "Per page" : "Sayfa başına"}
             <select value={pageSize} onChange={onPageSizeChange}>
               {PAGE_SIZE_OPTIONS.map((size) => (
                 <option key={size} value={size}>
@@ -149,10 +173,10 @@ export function StokSkuTable({ rows }: Props) {
             onClick={() => goTo(clampedPage - 1)}
             disabled={clampedPage <= 0}
           >
-            ‹ Geri
+            {locale === "en" ? "‹ Back" : "‹ Geri"}
           </button>
           <span className="stok-pagination-page">
-            Sayfa {clampedPage + 1} / {pageCount}
+            {locale === "en" ? `Page ${clampedPage + 1} / ${pageCount}` : `Sayfa ${clampedPage + 1} / ${pageCount}`}
           </span>
           <button
             type="button"
@@ -160,7 +184,7 @@ export function StokSkuTable({ rows }: Props) {
             onClick={() => goTo(clampedPage + 1)}
             disabled={clampedPage >= pageCount - 1}
           >
-            İleri ›
+            {locale === "en" ? "Next ›" : "İleri ›"}
           </button>
         </div>
       </div>
@@ -237,33 +261,29 @@ export function StokSkuTable({ rows }: Props) {
   );
 }
 
-function RiskBadge({ tier }: { tier: StockRiskTier }) {
-  const labels: Record<StockRiskTier, string> = {
-    critical: "Kritik",
-    risk: "Risk",
-    watch: "İzle",
-    healthy: "Sağlıklı",
-    unknown: "Belirsiz",
-  };
+function RiskBadge({ tier, locale = "tr" }: { tier: StockRiskTier; locale?: Locale }) {
+  const labels: Record<StockRiskTier, string> = locale === "en"
+    ? { critical: "Critical", risk: "Risk", watch: "Watch", healthy: "Healthy", unknown: "Unknown" }
+    : { critical: "Kritik", risk: "Risk", watch: "İzle", healthy: "Sağlıklı", unknown: "Belirsiz" };
   return <span className={`risk-badge risk-${tier}`}>{labels[tier]}</span>;
 }
 
-function confidenceLabel(value: WietnauerStockSkuRow["stockConfidence"]): string {
-  return {
-    high: "yüksek",
-    medium: "orta",
-    low: "düşük",
-  }[value];
+function confidenceLabel(value: WietnauerStockSkuRow["stockConfidence"], locale: Locale = "tr"): string {
+  return locale === "en"
+    ? { high: "high", medium: "medium", low: "low" }[value]
+    : { high: "yüksek", medium: "orta", low: "düşük" }[value];
 }
 
-function leadTimeSourceLabel(value: WietnauerStockSkuRow["leadTimeSource"]): string {
+function leadTimeSourceLabel(value: WietnauerStockSkuRow["leadTimeSource"], locale: Locale = "tr"): string {
+  if (locale === "en") return value === "dist-table" ? "distributor-defined" : "default";
   return value === "dist-table" ? "distribütör tanımı" : "varsayılan";
 }
 
-function formatDays(days: number | null): string {
+function formatDays(days: number | null, locale: Locale = "tr"): string {
   if (days == null || !Number.isFinite(days)) return "-";
-  if (days < 1) return "<1 gün";
-  return `${days < 10 ? days.toFixed(1) : Math.round(days).toLocaleString("tr-TR")} gün`;
+  const unit = locale === "en" ? "d" : "gün";
+  if (days < 1) return `<1 ${unit}`;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days).toLocaleString("tr-TR")} ${unit}`;
 }
 
 function formatQty(value: number): string {
@@ -273,8 +293,8 @@ function formatQty(value: number): string {
   });
 }
 
-function formatDate(isoDate: string): string {
-  return new Date(`${isoDate}T12:00:00`).toLocaleDateString("tr-TR", {
+function formatDate(isoDate: string, locale: Locale = "tr"): string {
+  return new Date(`${isoDate}T12:00:00`).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
     day: "2-digit",
     month: "short",
   });

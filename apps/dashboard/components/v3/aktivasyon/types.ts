@@ -74,3 +74,55 @@ export const RISK_TIER_LABELS: Record<string, string> = {
   healthy: "Sağlıklı",
   unknown: "Bilinmiyor",
 };
+
+export const RISK_TIER_LABELS_EN: Record<string, string> = {
+  critical: "Critical",
+  risk: "Risk",
+  watch: "Watch",
+  healthy: "Healthy",
+  unknown: "Unknown",
+};
+
+/**
+ * Madde 13 — "visit-order" risk modeli (Wietnauer) 4 tier'ı, kötüden iyiye.
+ * Composite'in (yukarıdaki) YERİNE geçer — aynı panelde ikisi bir arada
+ * gösterilmez, `RiskTierPanel` `riskModel` prop'una göre birini seçer.
+ */
+export const VISIT_ORDER_TIER_ORDER = ["red", "orange", "yellow", "green"] as const;
+
+/** Nokta rengiyle AYNI palet (bkz. components/sales-map.tsx COLOR_VO_*). */
+export const VISIT_ORDER_TIER_COLORS: Record<string, string> = {
+  red: "#F7C1C1",
+  orange: "#FAC775",
+  yellow: "#F5E6A0",
+  green: "#9FE1CB",
+};
+
+export const VISIT_ORDER_TIER_LABELS: Record<string, string> = {
+  red: "🔴 En Riskli",
+  orange: "🟠 Riskli",
+  yellow: "🟡 İzlenmeli",
+  green: "🟢 Sağlıklı",
+};
+
+export const VISIT_ORDER_TIER_LABELS_EN: Record<string, string> = {
+  red: "🔴 Most at risk",
+  orange: "🟠 At risk",
+  yellow: "🟡 Watch",
+  green: "🟢 Healthy",
+};
+
+/** Guide — her tier'ın NEYE göre olduğu (madde 13b). */
+export const VISIT_ORDER_TIER_GUIDE: Record<string, string> = {
+  red: "Ziyaret YOK + sipariş YOK",
+  orange: "Ziyaret YOK, sipariş VAR",
+  yellow: "Ziyaret VAR, sipariş YOK",
+  green: "Ziyaret VAR + sipariş VAR",
+};
+
+export const VISIT_ORDER_TIER_GUIDE_EN: Record<string, string> = {
+  red: "Visit NO + order NO",
+  orange: "Visit NO, order YES",
+  yellow: "Visit YES, order NO",
+  green: "Visit YES + order YES",
+};

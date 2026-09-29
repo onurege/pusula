@@ -7,11 +7,13 @@ import { downloadCsv } from "@/lib/csv";
 import { describeRiskReason } from "@/lib/risk";
 import { Button } from "@/components/ui/button";
 import { CustomerModal } from "@/components/customer-modal";
+import { useLocale } from "@/components/locale/LocaleProvider";
 
 type SortKey = "default" | "unvan" | "sehir" | "prev" | "curr" | "lost";
 type SortDir = "asc" | "desc";
 
 export function RiskCallList({ customers }: { customers: MapCustomer[] }) {
+  const { locale } = useLocale();
   const [q, setQ] = useState("");
   const [city, setCity] = useState<string>("");
   const [selected, setSelected] = useState<MapCustomer | null>(null);
@@ -250,7 +252,7 @@ export function RiskCallList({ customers }: { customers: MapCustomer[] }) {
       </div>
 
       {selected && (
-        <CustomerModal customer={selected} onClose={() => setSelected(null)} />
+        <CustomerModal customer={selected} onClose={() => setSelected(null)} locale={locale} />
       )}
     </div>
   );

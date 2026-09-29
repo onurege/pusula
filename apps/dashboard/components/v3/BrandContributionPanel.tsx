@@ -10,40 +10,74 @@ import { formatCompact } from "@/components/komuta/format";
  * stratejik olmayanlardan önce gelecek şekilde değil — gerçek ciro sırasına
  * göre listelenir; "stratejik" işareti vurgu için. Top 5 stratejik markanın
  * toplam payı üst-banner'da öne çıkarılır.
+ *
+ * Madde 8 — TL↔hacim toggle. Backend her marka satırında `hacim`+
+ * `hacimPayPct`'i `ciro`+`payPct` ile AYNI grain'den (detay satırı) taşır —
+ * `SalesVelocityPanel`/`TopDistributorsPanel` ile AYNI `unit`/`volumeShort`
+ * prop deseni (`unit !== "tl" && volumeShort` → hacim modu). Sıralama HER
+ * ZAMAN ciro'ya göre (backend `aggregateBrands` DESC ciro) — toggle yalnızca
+ * hangi metriğin gösterildiğini değiştirir, sırayı değil.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function BrandContributionPanel({
   brands,
-  periodLabel = "son 30 gün",
+  periodLabel,
+  unit = "tl",
+  volumeShort,
+  locale = "tr",
 }: {
   brands: WietnauerBrandContribution[];
   /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
   periodLabel?: string;
+  /** `"tl"` (varsayılan) → ciro. Tenant hacim birimi anahtarı verilirse hacim. */
+  unit?: string;
+  /** Hacim birimi kısa etiketi (ör. "70cl") — yalnızca `unit !== "tl"` iken kullanılır. */
+  volumeShort?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.yonetim.brands")) return null;
+  const period = periodLabel ?? (locale === "en" ? "last 30 days" : "son 30 gün");
+  const useVolume = unit !== "tl" && Boolean(volumeShort);
   const visible = brands.slice(0, 15);
-  const maxCiro = Math.max(1, ...visible.map((b) => b.ciro));
+  const maxVal = Math.max(1, ...visible.map((b) => (useVolume ? b.hacim : b.ciro)));
   const stratPayToplam = brands
     .filter((b) => b.isStratejik)
-    .reduce((a, b) => a + b.payPct, 0);
+    .reduce((a, b) => a + (useVolume ? b.hacimPayPct : b.payPct), 0);
   const stratList = brands.filter((b) => b.isStratejik);
 
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", "Marka Katkıları")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.yonetim.brands", t(locale, "panel.yonetim.brands", "Marka Katkıları"))}</div>
           <div className="v3-panel-sub">
-            {periodLabel} · Net ciro sıralaması ·{" "}
-            {stratList.length > 0 ? (
+            {locale === "en" ? (
               <>
-                <span className="strat-dot" /> {stratList.length} stratejik
-                marka portföyün <strong>%{stratPayToplam.toFixed(1)}</strong>
-                'sini taşıyor
+                {period} · Ranked by net {useVolume ? "volume" : "revenue"} ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} strategic
+                    brands carry <strong>%{stratPayToplam.toFixed(1)}</strong> of the portfolio
+                  </>
+                ) : (
+                  "no strategic brand defined"
+                )}
               </>
             ) : (
-              "stratejik marka tanımı yok"
+              <>
+                {period} · Net {useVolume ? "hacim" : "ciro"} sıralaması ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} stratejik
+                    marka portföyün <strong>%{stratPayToplam.toFixed(1)}</strong>
+                    'sini taşıyor
+                  </>
+                ) : (
+                  "stratejik marka tanımı yok"
+                )}
+              </>
             )}
           </div>
         </div>
@@ -60,12 +94,14 @@ export function BrandContributionPanel({
             <div className="bar-track">
               <div
                 className="bar-fill"
-                style={{ width: `${(b.ciro / maxCiro) * 100}%` }}
+                style={{ width: `${((useVolume ? b.hacim : b.ciro) / maxVal) * 100}%` }}
               />
             </div>
             <div className="bar-meta">
-              <span className="bar-val">₺{formatCompact(b.ciro)}</span>
-              <span className="bar-pay">%{b.payPct.toFixed(1)}</span>
+              <span className="bar-val">
+                {useVolume ? `${formatCompact(b.hacim)} ${volumeShort}` : `₺${formatCompact(b.ciro)}`}
+              </span>
+              <span className="bar-pay">%{(useVolume ? b.hacimPayPct : b.payPct).toFixed(1)}</span>
               <span className="bar-cust">
                 {b.musteriSayi.toLocaleString("tr-TR")}
               </span>
@@ -75,13 +111,27 @@ export function BrandContributionPanel({
       </div>
 
       <div className="v3-bars-legend">
-        <span><span className="strat-dot" /> stratejik marka</span>
-        <span className="sep">·</span>
-        <span>net ciro</span>
-        <span className="sep">·</span>
-        <span>portföy payı</span>
-        <span className="sep">·</span>
-        <span>distinct müşteri</span>
+        {locale === "en" ? (
+          <>
+            <span><span className="strat-dot" /> strategic brand</span>
+            <span className="sep">·</span>
+            <span>net {useVolume ? "volume" : "revenue"}</span>
+            <span className="sep">·</span>
+            <span>portfolio share</span>
+            <span className="sep">·</span>
+            <span>distinct customers</span>
+          </>
+        ) : (
+          <>
+            <span><span className="strat-dot" /> stratejik marka</span>
+            <span className="sep">·</span>
+            <span>net {useVolume ? "hacim" : "ciro"}</span>
+            <span className="sep">·</span>
+            <span>portföy payı</span>
+            <span className="sep">·</span>
+            <span>distinct müşteri</span>
+          </>
+        )}
       </div>
 
       <style
@@ -102,7 +152,7 @@ export function BrandContributionPanel({
         .bar-track { height: 18px; background: var(--color-surface-2); border-radius: 4px; overflow: hidden; position: relative; }
         .bar-fill { height: 100%; background: var(--color-muted-2); border-radius: 4px; opacity: 0.75; transition: width 0.3s ease-out; }
         .bar-meta { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: 10px; font-variant-numeric: tabular-nums; }
-        .bar-val { color: var(--color-fg); font-weight: 600; min-width: 70px; text-align: right; }
+        .bar-val { color: var(--color-fg); font-weight: 600; min-width: 90px; text-align: right; }
         .bar-pay { color: var(--color-muted); font-size: 11.5px; min-width: 42px; text-align: right; }
         .bar-cust { color: var(--color-muted-2); font-size: 11.5px; min-width: 56px; text-align: right; }
         .v3-bars-legend { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--color-border); font-size: 11px; color: var(--color-muted-2); display: inline-flex; align-items: center; gap: 8px; }

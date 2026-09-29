@@ -5,6 +5,7 @@ import {
   listMapCityYoY,
   listMapCustomers,
   listMapRegions,
+  type VisitOrderRiskTier,
 } from "@/lib/api";
 import { MapFilters } from "@/components/map-filters";
 import { MapPeriodFilter } from "@/components/map-period-filter";
@@ -13,6 +14,7 @@ import { ViewModeToggle } from "@/components/view-mode-toggle";
 import { MapHierarchyBreadcrumb } from "@/components/map-hierarchy-breadcrumb";
 import { CityInsights } from "@/components/city-insights";
 import { getTenantConfig } from "@/lib/tenant";
+import { getLocale, t as translate, type Locale } from "@/lib/i18n";
 
 type Props = {
   searchParams: Record<string, string | string[] | undefined>;
@@ -45,6 +47,7 @@ export async function MapPageBody({
   backLabel,
 }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sehir = typeof sp.sehir === "string" ? sp.sehir : undefined;
   const distKodRaw = typeof sp.distKod === "string" ? sp.distKod : undefined;
   const distKod =
@@ -96,6 +99,34 @@ export async function MapPageBody({
     activityDaysParsed === 60 || activityDaysParsed === 90
       ? activityDaysParsed
       : 30;
+  // Madde 13 — "visit-order" risk modeli ekran-bazlı override'ları (yalnız
+  // `tenant.riskModel === "visit-order"` — composite tenant'larda backend
+  // bunları yok sayar, zararsız). Pencere BİLEREK burada geçirilmez —
+  // `riskWindowDays` verilmezse core `activityDays`'i kullanır, yani üstteki
+  // dönem seçicisi (30/60/90g) risk penceresini de sürükler; ayrı bir "risk
+  // penceresi" kontrolü haritada gösterilmez (tek dönem kaynağı, kafa
+  // karıştırmaz).
+  const riskPriorityRaw =
+    typeof sp.riskPriority === "string" ? sp.riskPriority : undefined;
+  const riskPriority: "visit" | "order" | undefined =
+    riskPriorityRaw === "visit" || riskPriorityRaw === "order"
+      ? riskPriorityRaw
+      : undefined;
+  const riskTiersInScopeRaw =
+    typeof sp.riskTiersInScope === "string" ? sp.riskTiersInScope : undefined;
+  const VISIT_ORDER_TIER_VALUES = ["red", "orange", "yellow", "green"] as const;
+  const riskTiersInScopeParsed = riskTiersInScopeRaw
+    ? riskTiersInScopeRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is VisitOrderRiskTier =>
+          (VISIT_ORDER_TIER_VALUES as readonly string[]).includes(s),
+        )
+    : undefined;
+  const riskTiersInScope =
+    riskTiersInScopeParsed && riskTiersInScopeParsed.length > 0
+      ? riskTiersInScopeParsed
+      : undefined;
 
   // Görünüm modu: customer (default), region veya city.
   //   - region: TR 7 klasik bölgesi polygon fill (YoY renkleriyle)
@@ -133,6 +164,11 @@ export async function MapPageBody({
       // 30 = varsayılan davranış; param hiç gönderilmeyip core'un eski
       // (has_sales kolonu tabanlı) yoluna düşmesi sağlanır — sıfır regresyon.
       ...(activityDays !== 30 ? { activityDays } : {}),
+      // Madde 13 — composite tenant'larda backend bu iki parametreyi yok
+      // sayar (zararsız); Wietnauer'da nokta rengini/`visitOrderRisk`'i
+      // etkiler.
+      ...(riskPriority ? { riskPriority } : {}),
+      ...(riskTiersInScope ? { riskTiersInScope } : {}),
       limit: 30000,
     }),
     listMapRegions({
@@ -189,6 +225,20 @@ export async function MapPageBody({
   const neverSynced =
     sync.lastSyncAt === null && data.customers.length === 0;
 
+  // Madde 13 (B) — "Risk sayılan tier'lar" artık HARİTAYI FİLTRELER: visit-order
+  // tenant'ta (Wietnauer) yalnız seçili tier'daki müşteriler haritada/listede
+  // görünür; işareti kaldırılan tier gizlenir. Composite tenant'larda
+  // (`visitOrderRisk` null) filtre yok — tüm noktalar aynen gösterilir.
+  const effectiveRiskTiers: VisitOrderRiskTier[] =
+    riskTiersInScope ?? (["red", "orange", "yellow", "green"] as VisitOrderRiskTier[]);
+  const isVisitOrderRisk = tenant.riskModel === "visit-order" && viewMode === "customer";
+  const visibleCustomers = isVisitOrderRisk
+    ? data.customers.filter(
+        (c) => c.visitOrderRisk != null && effectiveRiskTiers.includes(c.visitOrderRisk.tier),
+      )
+    : data.customers;
+  const visibleCount = isVisitOrderRisk ? visibleCustomers.length : data.count;
+
   return (
     <div className="fixed inset-0 top-14 flex flex-col bg-bg">
       <header className="bg-surface/80 backdrop-blur border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
@@ -201,10 +251,10 @@ export async function MapPageBody({
           </Link>
           <div className="h-4 w-px bg-border" />
           <h1 className="text-base font-semibold tracking-tight">
-            Satış Haritası
+            {translate(locale, "map.title", "Satış Haritası")}
           </h1>
           <span className="text-xs text-muted hidden lg:inline truncate">
-            tek tık = analiz · çift tık = bir seviye derine in
+            {translate(locale, "map.hint", "tek tık = analiz · çift tık = bir seviye derine in")}
           </span>
           <div className="h-4 w-px bg-border hidden xl:block" />
           <div className="hidden xl:flex min-w-0">
@@ -216,6 +266,7 @@ export async function MapPageBody({
               distKod={distKod}
               customerCount={data.count}
               basePath={basePath}
+              locale={locale}
             />
           </div>
           {region && (
@@ -234,10 +285,13 @@ export async function MapPageBody({
                     params.set("minDaysSinceVisit", String(minDaysSinceVisit));
                   if (activityDays !== 30)
                     params.set("activityDays", String(activityDays));
+                  if (riskPriority) params.set("riskPriority", riskPriority);
+                  if (riskTiersInScope)
+                    params.set("riskTiersInScope", riskTiersInScope.join(","));
                   return `${basePath}?${params.toString()}`;
                 })()}
                 className="ml-0.5 text-accent/70 hover:text-accent"
-                title="Bölge görünümüne geri dön"
+                title={translate(locale, "map.back_to_region", "Bölge görünümüne geri dön")}
               >
                 ×
               </Link>
@@ -245,8 +299,8 @@ export async function MapPageBody({
           )}
         </div>
         <div className="flex items-center gap-3">
-          <MapPeriodFilter current={activityDays} />
-          <ViewModeToggle current={viewMode} />
+          <MapPeriodFilter current={activityDays} locale={locale} />
+          <ViewModeToggle current={viewMode} locale={locale} />
           {/* SyncButton kaldırıldı — global "Veriyi Yenile" navbar'da merkezi. */}
         </div>
       </header>
@@ -257,7 +311,7 @@ export async function MapPageBody({
       {viewMode === "city" &&
         region &&
         citiesData.cities.length > 0 && (
-          <CityInsights cities={citiesData.cities} region={region} />
+          <CityInsights cities={citiesData.cities} region={region} locale={locale} />
         )}
 
       {/* City API hatası — bütün illeri "bayisiz" göstermek yanıltıcı.
@@ -265,13 +319,24 @@ export async function MapPageBody({
       {viewMode === "city" && region && citiesError && (
         <div className="border-b border-bad/40 bg-bad/10 px-5 py-3 text-sm">
           <div className="font-semibold text-bad mb-1">
-            ⚠ Şehir bazlı YoY verisi alınamadı
+            ⚠ {translate(locale, "map.city_yoy_error_title", "Şehir bazlı YoY verisi alınamadı")}
           </div>
           <div className="text-xs text-fg-2 mb-1">
-            Harita illeri sönük gösteriliyor ama bu{" "}
-            <strong>"bayisiz" anlamına gelmiyor</strong> — sadece veri
-            çekilemedi. Backend MSSQL bağlantısı kopmuş olabilir (VPN /
-            network).
+            {locale === "en" ? (
+              <>
+                Province shading is dim, but this{" "}
+                <strong>does not mean &quot;no distributor&quot;</strong> — the data simply
+                could not be fetched. The backend MSSQL connection may be down (VPN /
+                network).
+              </>
+            ) : (
+              <>
+                Harita illeri sönük gösteriliyor ama bu{" "}
+                <strong>&quot;bayisiz&quot; anlamına gelmiyor</strong> — sadece veri
+                çekilemedi. Backend MSSQL bağlantısı kopmuş olabilir (VPN /
+                network).
+              </>
+            )}
           </div>
           <code className="text-[11px] text-muted">{citiesError}</code>
         </div>
@@ -280,9 +345,10 @@ export async function MapPageBody({
       <div className="flex-1 min-h-0 flex">
         <MapFilters
           facets={facets}
-          customers={data.customers}
-          count={data.count}
+          customers={visibleCustomers}
+          count={visibleCount}
           basePath={basePath}
+          locale={locale}
         />
 
         <main className="flex-1 relative bg-surface">
@@ -290,7 +356,7 @@ export async function MapPageBody({
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="rounded-lg border border-bad/40 bg-bad/10 px-5 py-4 text-sm max-w-lg">
                 <div className="font-medium text-bad mb-1">
-                  Harita verisi alınamadı
+                  {translate(locale, "map.data_error", "Harita verisi alınamadı")}
                 </div>
                 <code className="text-xs text-muted">{apiError}</code>
               </div>
@@ -299,26 +365,27 @@ export async function MapPageBody({
             <div className="absolute inset-0 flex items-center justify-center p-8">
               <div className="rounded-lg border border-border bg-surface-2 px-5 py-4 text-sm max-w-md text-center">
                 <div className="font-medium text-fg mb-1">
-                  Yerel veritabanı boş
+                  {translate(locale, "map.empty_db", "Yerel veritabanı boş")}
                 </div>
                 <div className="text-muted text-xs">
                   {tenant.labels.mapEmptyDataSource}
                 </div>
               </div>
             </div>
-          ) : data.customers.length === 0 ? (
+          ) : visibleCustomers.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center p-8 text-muted text-sm">
-              Bu filtrelerle koordinatlı müşteri yok.
+              {translate(locale, "map.no_customers_for_filters", "Bu filtrelerle koordinatlı müşteri yok.")}
             </div>
           ) : (
             <>
               <SalesMap
-                customers={data.customers}
+                customers={visibleCustomers}
                 regions={regionsData.regions}
                 cities={citiesData.cities}
                 viewMode={viewMode}
+                locale={locale}
               />
-              <MapRiskLegend />
+              <MapRiskLegend locale={locale} riskModel={tenant.riskModel} />
             </>
           )}
         </main>
@@ -328,21 +395,54 @@ export async function MapPageBody({
 }
 
 /**
- * Harita nokta renk açıklaması — müşteri noktaları composite "kayıp riski"
- * skoruna (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
- * packages/core/src/map.ts `tierForScore` ile birebir.
+ * Harita nokta renk açıklaması. İki paralel model (Strangler Fig):
+ *   - composite (Pernod/fmcg-demo, AYNEN korunur): "kayıp riski" skoruna
+ *     (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
+ *     packages/core/src/map.ts `tierForScore` ile birebir.
+ *   - visit-order (Wietnauer, madde 13): ziyaret×sipariş ikilisinin 4
+ *     kombinasyonu (kırmızı → yeşil, kötüden iyiye). Guide metni burada —
+ *     legend her zaman görünür (mouse'a bağımlı değil) → erişilebilir
+ *     temel açıklama; nokta hover'ındaki popup (bkz. sales-map.tsx) bunun
+ *     üstüne per-müşteri `reason` ekler.
  */
-function MapRiskLegend() {
+function MapRiskLegend({
+  locale,
+  riskModel,
+}: {
+  locale: Locale;
+  riskModel?: "composite" | "visit-order";
+}) {
+  if (riskModel === "visit-order") {
+    const items = [
+      { c: "#dc2626", t: translate(locale, "map.vo.tier.red", "En riskli"), r: translate(locale, "risk.vo.guide.red", "ziyaret YOK + sipariş YOK") },
+      { c: "#ea580c", t: translate(locale, "map.vo.tier.orange", "Riskli"), r: translate(locale, "risk.vo.guide.orange", "ziyaret YOK, sipariş VAR") },
+      { c: "#eab308", t: translate(locale, "map.vo.tier.yellow", "İzlenmeli"), r: translate(locale, "risk.vo.guide.yellow", "ziyaret VAR, sipariş YOK") },
+      { c: "#16a34a", t: translate(locale, "map.vo.tier.green", "Sağlıklı"), r: translate(locale, "risk.vo.guide.green", "ziyaret VAR + sipariş VAR") },
+    ];
+    return (
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[5] flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-surface/90 backdrop-blur px-3.5 py-2 shadow-md text-[11px] max-w-[95%]">
+        <span className="font-semibold text-muted mr-1">{translate(locale, "map.vo.legend.label", "Ziyaret/sipariş riski")}:</span>
+        {items.map((i) => (
+          <span key={i.t} className="inline-flex items-center gap-1.5 whitespace-nowrap" title={i.r}>
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: i.c }} />
+            <span className="text-fg font-medium">{i.t}</span>
+            <span className="text-muted">{i.r}</span>
+          </span>
+        ))}
+      </div>
+    );
+  }
+
   const items = [
-    { c: "#16a34a", t: "Sağlıklı", r: "skor 0–29" },
-    { c: "#d97706", t: "İzlemede", r: "30–54" },
-    { c: "#ea580c", t: "Riskli", r: "55–74" },
-    { c: "#dc2626", t: "Kritik", r: "75–100" },
-    { c: "#a1a1aa", t: "Bilinmiyor", r: "veri yok" },
+    { c: "#16a34a", t: translate(locale, "map.risk.healthy", "Sağlıklı"), r: translate(locale, "map.risk.score_0_29", "skor 0–29") },
+    { c: "#d97706", t: translate(locale, "map.risk.watch", "İzlemede"), r: "30–54" },
+    { c: "#ea580c", t: translate(locale, "map.risk.risky", "Riskli"), r: "55–74" },
+    { c: "#dc2626", t: translate(locale, "map.risk.critical", "Kritik"), r: "75–100" },
+    { c: "#a1a1aa", t: translate(locale, "map.risk.unknown", "Bilinmiyor"), r: translate(locale, "map.risk.no_data", "veri yok") },
   ];
   return (
     <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[5] flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-surface/90 backdrop-blur px-3.5 py-2 shadow-md text-[11px] max-w-[95%]">
-      <span className="font-semibold text-muted mr-1">Kayıp riski:</span>
+      <span className="font-semibold text-muted mr-1">{translate(locale, "map.risk.label", "Kayıp riski")}:</span>
       {items.map((i) => (
         <span key={i.t} className="inline-flex items-center gap-1.5 whitespace-nowrap">
           <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: i.c }} />

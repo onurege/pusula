@@ -16,10 +16,16 @@ import {
   YAxis,
 } from "recharts";
 import type { KomutaMonthlyBar, ValueUnit } from "@/lib/api";
+import { t as translate, localizeAyAbbr, type Locale } from "@/lib/i18n";
 
 type Props = {
   monthly: KomutaMonthlyBar[];
   unit?: ValueUnit;
+  /** Tenant'ın hacim kısaltması (Pernod "9L", Wietnauer "70cl") — server
+   *  component (`page.tsx`) `getTenantConfig().volume.short` ile okur, buraya
+   *  prop olarak geçirir. Sabit fallback YOK — tenant-nötr KISIT'i. */
+  volumeShort: string;
+  locale?: Locale;
 };
 
 /**
@@ -85,8 +91,8 @@ function readChartColors() {
       };
 }
 
-export function CalendarChart({ monthly, unit = "tl" }: Props) {
-  const unitSuffix = unit === "9le" ? "9L" : "₺";
+export function CalendarChart({ monthly, unit = "tl", volumeShort, locale = "tr" }: Props) {
+  const unitSuffix = unit === "9le" ? volumeShort : "₺";
   const [colors, setColors] = useState(readChartColors);
   useEffect(() => {
     const onChange = () => setColors(readChartColors());
@@ -101,6 +107,10 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
       const monthNum = Number(mo);
       return {
         ...m,
+        // Ay etiketi burada, tek noktada localize edilir — summerRange /
+        // ramazanRange / markers / data hepsi bu değeri paylaşır (Recharts
+        // kategorik X ekseni eşleşmesi için aynı string olmaları şart).
+        ay: localizeAyAbbr(m.ay, locale),
         idx: i,
         monthNum,
         // Recharts'a hem ciro hem ciroPrev'i flat veriyoruz; null'lar legend'ı
@@ -141,9 +151,9 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
     // Bayram/tatil dot işaretçileri
     const markers = enriched
       .map((m) => {
-        if (m.monthNum === 1) return { ay: m.ay, label: "Yılbaşı", ciro: m.ciro };
-        if (m.monthNum === 2) return { ay: m.ay, label: "14 Şub", ciro: m.ciro };
-        if (m.monthNum === 10) return { ay: m.ay, label: "29 Ekim", ciro: m.ciro };
+        if (m.monthNum === 1) return { ay: m.ay, label: translate(locale, "komuta.calendar.new_year", "Yılbaşı"), ciro: m.ciro };
+        if (m.monthNum === 2) return { ay: m.ay, label: translate(locale, "komuta.calendar.feb14", "14 Şub"), ciro: m.ciro };
+        if (m.monthNum === 10) return { ay: m.ay, label: translate(locale, "komuta.calendar.oct29", "29 Ekim"), ciro: m.ciro };
         return null;
       })
       .filter((x): x is { ay: string; label: string; ciro: number } => x !== null);
@@ -158,7 +168,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
     }));
 
     return { data, max, todayIdx, summerRange, ramazanRange, markers };
-  }, [monthly]);
+  }, [monthly, locale]);
 
   if (data.length < 2) return null;
 
@@ -169,7 +179,9 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
 
   return (
     <>
-      <div className="section-eyebrow">Takvim · Bu Yıl vs Geçen Yıl Hizalı</div>
+      <div className="section-eyebrow">
+        {translate(locale, "komuta.calendar.eyebrow", "Takvim · Bu Yıl vs Geçen Yıl Hizalı")}
+      </div>
       <div className="cal-chart-card">
         <div className="cal-chart-wrap">
           <ResponsiveContainer width="100%" height="100%">
@@ -191,7 +203,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                 axisLine={{ stroke: colors.axis }}
               />
               <YAxis
-                tickFormatter={formatCompact}
+                tickFormatter={(v) => formatCompact(v, locale)}
                 tick={{ fill: colors.yTick, fontSize: 10 }}
                 tickLine={false}
                 axisLine={false}
@@ -208,7 +220,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                   fillOpacity={0.06}
                   ifOverflow="visible"
                   label={{
-                    value: "Yaz Pik",
+                    value: translate(locale, "komuta.calendar.summer_peak", "Yaz Pik"),
                     position: "insideTop",
                     fill: colors.summer,
                     fontSize: 10,
@@ -225,7 +237,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                   fill={colors.ramazan}
                   fillOpacity={0.1}
                   label={{
-                    value: "Ramazan",
+                    value: translate(locale, "komuta.calendar.ramadan", "Ramazan"),
                     position: "insideTop",
                     fill: colors.ramazan,
                     fontSize: 10,
@@ -244,7 +256,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                 dot={false}
                 activeDot={{ r: 4, fill: colors.prev, stroke: colors.tooltipBg, strokeWidth: 2 }}
                 connectNulls
-                name="Geçen Yıl"
+                name={translate(locale, "komuta.calendar.last_year", "Geçen Yıl")}
                 isAnimationActive={false}
               />
 
@@ -257,7 +269,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                 fill={colors.primaryFill}
                 dot={{ r: 3, fill: colors.primary, stroke: colors.tooltipBg, strokeWidth: 1.5 }}
                 activeDot={{ r: 5, fill: colors.primary, stroke: colors.tooltipBg, strokeWidth: 2 }}
-                name="Bu Yıl"
+                name={translate(locale, "komuta.calendar.this_year", "Bu Yıl")}
                 isAnimationActive={false}
               />
 
@@ -293,7 +305,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                   strokeWidth={2}
                   ifOverflow="visible"
                   label={{
-                    value: "Bugün",
+                    value: translate(locale, "komuta.calendar.today", "Bugün"),
                     position: "top",
                     fill: colors.today,
                     fontSize: 10,
@@ -316,7 +328,7 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
                 formatter={(v, name) => {
                   if (v === null || v === undefined) return ["—", String(name ?? "")];
                   const num = typeof v === "number" ? v : Number(v);
-                  return [`${formatCompact(num)} ${unitSuffix}`, String(name ?? "")];
+                  return [`${formatCompact(num, locale)} ${unitSuffix}`, String(name ?? "")];
                 }}
               />
               <Legend
@@ -329,9 +341,11 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
         </div>
 
         <div className="cal-hint">
-          Son 12 ay vs 12-ay-önceki aynı pencere. Kaynak: TBLMSDFATURA SUM(DBLNETTUTAR),
-          BYTTUR=0 AND BYTDURUM=0. Ramazan/Yaz bantları takvim master'dan; Bugün
-          son senkron tarihindeki ay.
+          {translate(
+            locale,
+            "komuta.calendar.hint",
+            "Son 12 ay vs 12-ay-önceki aynı pencere. Kaynak: TBLMSDFATURA SUM(DBLNETTUTAR), BYTTUR=0 AND BYTDURUM=0. Ramazan/Yaz bantları takvim master'dan; Bugün son senkron tarihindeki ay.",
+          )}
         </div>
       </div>
 
@@ -358,13 +372,17 @@ export function CalendarChart({ monthly, unit = "tl" }: Props) {
   );
 }
 
-function formatCompact(n: number): string {
+function formatCompact(n: number, locale: Locale = "tr"): string {
   if (typeof n !== "number" || isNaN(n)) return "—";
+  const intl = locale === "en" ? "en-US" : "tr-TR";
+  const suffixBillion = locale === "en" ? "Bn" : "Mr";
+  const suffixMillion = locale === "en" ? "M" : "Mn";
+  const suffixThousand = locale === "en" ? "K" : "B";
   if (Math.abs(n) >= 1_000_000_000)
-    return (n / 1_000_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 2 }) + " Mr";
+    return (n / 1_000_000_000).toLocaleString(intl, { maximumFractionDigits: 2 }) + " " + suffixBillion;
   if (Math.abs(n) >= 1_000_000)
-    return (n / 1_000_000).toLocaleString("tr-TR", { maximumFractionDigits: 1 }) + " Mn";
+    return (n / 1_000_000).toLocaleString(intl, { maximumFractionDigits: 1 }) + " " + suffixMillion;
   if (Math.abs(n) >= 1_000)
-    return (n / 1_000).toLocaleString("tr-TR", { maximumFractionDigits: 0 }) + " B";
-  return n.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
+    return (n / 1_000).toLocaleString(intl, { maximumFractionDigits: 0 }) + " " + suffixThousand;
+  return n.toLocaleString(intl, { maximumFractionDigits: 0 });
 }

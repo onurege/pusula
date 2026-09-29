@@ -16,34 +16,37 @@ export type DistRow = {
  * Aktif temsilci × ziyaret × kapsama × dönüşüm matrisi.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function DistributorComparisonPanel({ rows }: { rows: DistRow[] }) {
+export function DistributorComparisonPanel({ rows, locale = "tr" }: { rows: DistRow[]; locale?: Locale }) {
   if (panelHidden("panel.saha.distcompare")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.saha.distcompare", "Distribütör Karşılaştırma")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.distcompare", t(locale, "panel.saha.distcompare", "Distribütör Karşılaştırma"))}</div>
           <div className="v3-panel-sub">
-            Son 30g · Top {rows.length} distribütör operasyonel performansı
+            {locale === "en"
+              ? `Last 30d · Top ${rows.length} distributors' operational performance`
+              : `Son 30g · Top ${rows.length} distribütör operasyonel performansı`}
           </div>
         </div>
       </div>
 
       {rows.length === 0 ? (
-        <div className="empty">Bu pencerede ziyaret kaydı yok.</div>
+        <div className="empty">{locale === "en" ? "No visit records in this window." : "Bu pencerede ziyaret kaydı yok."}</div>
       ) : (
         <div className="v3-table-wrap">
           <table className="v3-table">
             <thead>
               <tr>
                 <th style={{ width: 36 }}>#</th>
-                <th>Distribütör</th>
-                <th>Bölge</th>
-                <th className="num">Aktif Tem.</th>
-                <th className="num">Ziyaret</th>
-                <th className="num">Kapsanan M.</th>
-                <th className="num">Dönüşüm</th>
+                <th>{t(locale, "col.distributor", "Distribütör")}</th>
+                <th>{t(locale, "col.bolge", "Bölge")}</th>
+                <th className="num">{locale === "en" ? "Active Reps" : "Aktif Tem."}</th>
+                <th className="num">{t(locale, "col.ziyaret", "Ziyaret")}</th>
+                <th className="num">{locale === "en" ? "Covered Cust." : "Kapsanan M."}</th>
+                <th className="num">{locale === "en" ? "Conversion" : "Dönüşüm"}</th>
               </tr>
             </thead>
             <tbody>

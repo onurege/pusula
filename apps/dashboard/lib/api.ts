@@ -1,3 +1,20 @@
+import type {
+  OverdueItem,
+  WinBackItem,
+  CrossSellItem,
+  WalletGapItem as CoreWalletGapItem,
+  PeerCrossSellItem as CorePeerCrossSellItem,
+  ReorderResult as CoreReorderResult,
+  // Madde 10 — segment ekranı 4. boyut (`grupKirilim`) core'da zaten tam
+  // taşınıyor (bkz. `packages/core/src/wietnauer-segment.ts`); burada
+  // duplike etmek yerine tek kaynaktan import edilip aşağıda re-export edilir.
+  WietnauerSegmentSnapshot as CoreWietnauerSegmentSnapshot,
+  // Madde 13 — "visit-order" risk modeli (Wietnauer) sonuç tipi core'da
+  // tanımlı (bkz. `packages/core/src/map.ts` `computeVisitOrderRisk`); FE
+  // burada tekrar tanımlamak yerine tek kaynaktan import edip re-export eder.
+  VisitOrderRiskResult as CoreVisitOrderRiskResult,
+} from "@enroute/core";
+
 const API_URL = process.env.ENROUTE_API_URL ?? "http://localhost:8080";
 
 export type ReportSummary = {
@@ -92,6 +109,26 @@ async function readAuthToken(): Promise<string | null> {
   }
 }
 
+const LOCALE_COOKIE = "insider_locale";
+
+/**
+ * Server component bağlamında istek locale'ini oku ve Hono API'ye `Cookie:
+ * insider_locale=<v>` olarak ilet. API tarafı `localeFromRequest` bu cookie'yi
+ * okuyup dil-duyarlı çıktı üretir (ör. Komuta KPI etiketleri, Finans/Öngörü
+ * ajan metni). SSR fetch tarayıcı cookie'sini otomatik taşımadığı için burada
+ * elle iletiriz; client bağlamında (next/headers yok) sessizce null döner ve
+ * tarayıcı zaten cookie'yi kendisi gönderir.
+ */
+async function readLocaleCookie(): Promise<string | null> {
+  try {
+    const { cookies } = await import("next/headers");
+    const store = await cookies();
+    return store.get(LOCALE_COOKIE)?.value === "en" ? "en" : null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = (init?.method ?? "GET").toUpperCase();
   const isReadOp = method === "GET" || method === "HEAD";
@@ -104,6 +141,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // token'lı okumalar CACHE'LENMEMELİ — aksi halde bir kullanıcının cevabı
   // başkasına sızar. Bu yüzden token varken no-store zorlanır.
   const token = await readAuthToken();
+  const localeCookie = await readLocaleCookie();
 
   // Cache stratejisi:
   //   - Yazma / refresh=1 / token'lı istek → no-store
@@ -122,6 +160,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(localeCookie ? { Cookie: `${LOCALE_COOKIE}=${localeCookie}` } : {}),
       ...(init?.headers ?? {}),
     },
     ...cacheConfig,
@@ -267,6 +306,11 @@ export type CustomerRiskScore = {
   reasons: string[];
 };
 
+/** Madde 13 — "visit-order" risk modeli sonucu (core ile birebir). */
+export type VisitOrderRiskResult = CoreVisitOrderRiskResult;
+/** kötüden iyiye: red (ziyaret+sipariş YOK) → orange → yellow → green. */
+export type VisitOrderRiskTier = VisitOrderRiskResult["tier"];
+
 export type MapCustomer = {
   id: number;
   distKod: number | null;
@@ -287,16 +331,29 @@ export type MapCustomer = {
   hasSales: boolean;
   daysSinceLastSale: number | null;
   daysSinceLastVisit: number | null;
+  /** Madde 13 — son sipariş üzerinden geçen gün (TBLMSDSIPARIS). NULL = hiç
+   *  sipariş yok. `daysSinceLastVisit`'in ikizi — "visit-order" risk modelinin
+   *  ikinci sinyali; composite Risk Score'u etkilemez. */
+  daysSinceLastOrder: number | null;
   ciro30: number;
   ciroPrev30: number;
   /** md11 — üstteki dönem filtresiyle seçilen pencere (30/60/90 gün, varsayılan 30). */
   activityDays: number;
   /** md11 — `activityDays` penceresine göre hesaplanan ciro (haritada gösterilen birincil metrik). */
   activityCiro: number;
+  /** Madde 13 — `activityDays` penceresine göre hesaplanan hacim
+   *  (Σ miktar × TBLURUN.DBLLITRE) — `activityCiro`'nun hacim ikizi. Tenant
+   *  hacim biriminde (`tenant.volume`) gösterilir. */
+  activityHacim: number;
   /** @deprecated Eski 4-tier alan. Yeni UI `riskScore.tier` kullanır. */
   riskTier: RiskTier;
   /** Composite Risk Score — 0..100 + bileşenler + sebepler. */
   riskScore: CustomerRiskScore;
+  /** Madde 13 — "visit-order" risk modeli sonucu (`tenant.riskModel ===
+   *  "visit-order"` seçen tenant'larda dolu — bugün yalnız Wietnauer).
+   *  Composite tenant'larda (Pernod/fmcg-demo) HER ZAMAN null — geriye
+   *  uyumluluk, mevcut composite renk/filtre davranışı bozulmaz. */
+  visitOrderRisk: VisitOrderRiskResult | null;
 };
 
 export async function listMapCustomers(params: {
@@ -312,6 +369,19 @@ export async function listMapCustomers(params: {
   minDaysSinceVisit?: number;
   /** md11 — üstteki dönem filtresi (30/60/90 gün). Verilmezse 30 (mevcut davranış). */
   activityDays?: 30 | 60 | 90;
+  /**
+   * Madde 13 — "visit-order" risk modeli (yalnız `tenant.riskModel ===
+   * "visit-order"` seçen tenant'larda etkili — composite tenant'larda backend
+   * bu 3 parametreyi yok sayar, zararsız) ekran-bazlı override'ları. Verilmezse
+   * tenant'ın `riskConfig` varsayılanı (+ `activityDays` penceresi) kullanılır.
+   */
+  riskPriority?: "visit" | "order";
+  /** Hangi tier'lar "risk" sayılır (`visitOrderRisk.isRisk`) — noktanın
+   *  RENGİNİ değiştirmez, yalnız yorumu değiştirir. */
+  riskTiersInScope?: VisitOrderRiskTier[];
+  /** visit-order risk penceresi (gün) — `activityDays` ile AYNI whitelist
+   *  (30/60/90). Verilmezse `activityDays` (o da yoksa 30) kullanılır. */
+  riskWindowDays?: 30 | 60 | 90;
   limit?: number;
 } = {}): Promise<{ count: number; customers: MapCustomer[] }> {
   const qp = new URLSearchParams();
@@ -324,6 +394,11 @@ export async function listMapCustomers(params: {
   if (params.tier) qp.set("tier", params.tier);
   if (typeof params.minDaysSinceVisit === "number") qp.set("minDaysSinceVisit", String(params.minDaysSinceVisit));
   if (typeof params.activityDays === "number") qp.set("activityDays", String(params.activityDays));
+  if (params.riskPriority) qp.set("riskPriority", params.riskPriority);
+  if (params.riskTiersInScope && params.riskTiersInScope.length > 0) {
+    qp.set("riskTiersInScope", params.riskTiersInScope.join(","));
+  }
+  if (typeof params.riskWindowDays === "number") qp.set("riskWindowDays", String(params.riskWindowDays));
   if (typeof params.limit === "number") qp.set("limit", String(params.limit));
   return request(`/api/map/customers?${qp.toString()}`);
 }
@@ -471,6 +546,44 @@ export type ForesightResult = {
   actions: string[];
 };
 
+// -- SİPARİŞ ÖNERİSİ (reorder) ----------------------------------------------
+// Miktar kasten yok — ürün kararı: satışçı miktarı kendi girer, biz sadece
+// "hangi ürün, ne zaman" sinyalini veririz.
+//
+// Tipler artık `packages/core/src/reorder.ts`/`peer-aggregate.ts`'ten
+// PAYLAŞILIR (Faz 0 D3 borcu kapatıldı — önceden burada BAĞIMSIZ birebir
+// kopya tanımlanıyordu, tek gerçek kaynak backend'e taşındı). İsimler
+// (`ReorderOverdueItem` vb.) geriye-uyum için KORUNUR — bu dosyayı import
+// eden hiçbir yer (ör. `customer-modal.tsx`) değişmek zorunda kalmaz.
+
+export type ReorderOverdueItem = OverdueItem;
+export type ReorderWinBackItem = WinBackItem;
+export type ReorderCrossSellItem = CrossSellItem;
+
+// -- v2 (additive) — wallet-share gap + peer-temelli çapraz-satış ----------
+// Alanlar OPSİYONEL (`ReorderResult.walletGap`/`peerCrossSell`) — backend bu
+// ek-grup+scope için akran-agregatını henüz ısıtmadıysa (cache boş) UI ilgili
+// bölümü gizler (geriye-uyum, bkz. `customer-modal.tsx`).
+
+export type WalletGapItem = CoreWalletGapItem;
+export type PeerCrossSellItem = CorePeerCrossSellItem;
+export type ReorderResult = CoreReorderResult;
+
+/**
+ * Dist-scope sunucu-otoriter uygulanır (auth cookie → Bearer → API guard);
+ * `distKod` burada sadece `getCustomerSales`/`getCustomerForesight` ile aynı
+ * çağrı imzasını korumak için var, endpoint'e iletilmez.
+ */
+export async function getCustomerReorder(
+  id: number,
+  distKod: number | null,
+): Promise<ReorderResult> {
+  void distKod;
+  const qp = new URLSearchParams();
+  qp.set("musteriKod", String(id));
+  return request(`/api/reorder/customer?${qp.toString()}`);
+}
+
 // Komuta Köprüsü types ------------------------------------------------------
 
 export type KomutaKpiCard = {
@@ -606,6 +719,8 @@ export type KomutaCustomerTypeBrandCell = {
   marka: string;
   ciro: number;
   miktar: number;
+  /** Tenant hacim birimi (Pernod 9LE / Wietnauer 70cl). */
+  hacim: number;
 };
 
 export type KomutaCustomerTypeBrandRow = {
@@ -657,6 +772,9 @@ export async function getKomutaSnapshot(
     bolge?: string | null;
     kanal?: string | null;
     urunGrup?: string | null;
+    /** md1 — global periyot kodu ("30g"/"p3"/"p6"/"p12"/"ytd"); backend'de
+     *  `periyotToPeriodDays` ile KPI şeridinin pencere uzunluğuna çevrilir. */
+    periyot?: string | null;
   } = {},
 ): Promise<KomutaSnapshot> {
   const qp = new URLSearchParams();
@@ -666,6 +784,7 @@ export async function getKomutaSnapshot(
   if (options.bolge) qp.set("bolge", options.bolge);
   if (options.kanal) qp.set("kanal", options.kanal);
   if (options.urunGrup) qp.set("urunGrup", options.urunGrup);
+  if (options.periyot) qp.set("periyot", options.periyot);
   const qs = qp.toString() ? `?${qp.toString()}` : "";
   return request<KomutaSnapshot>(`/api/komuta${qs}`);
 }
@@ -812,6 +931,9 @@ export type WietnauerTopDistributor = {
   ad: string;
   bolge: string | null;
   ciro: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer). TL↔hacim toggle; backend payPct
+   *  hacim karşılığını hesaplamaz, gerekirse FE portföy toplamına göre türetir. */
+  hacim: number;
   faturaSayisi: number;
   /** md23: portföydeki aktif müşteri sayısı (BYTDURUM=0) */
   aktifMusteriSayi: number;
@@ -827,8 +949,12 @@ export type WietnauerBrandContribution = {
   marka: string;
   markaKod: string;
   ciro: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer), ciro ile AYNI detay satırından. */
+  hacim: number;
   musteriSayi: number;
   payPct: number;
+  /** Madde 8 — payPct'in hacim karşılığı: toplam hacim içindeki pay (%). */
+  hacimPayPct: number;
   rank: number;
   isStratejik: boolean;
 };
@@ -837,6 +963,9 @@ export type WietnauerDiscountKpi = {
   brut: number;
   iskonto: number;
   net: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer). TL↔hacim toggle'ında hero
+   *  KPI'ın hacim karşılığı; brut/iskonto/net'ten BAĞIMSIZ ayrı join. */
+  netHacim: number;
   iskontoOraniPct: number;
   faturaCount: number;
   aktifMusteriCount: number;
@@ -899,8 +1028,18 @@ export const getWietnauerAktivasyon = <T = unknown>(
 // param'ları destekler — UI'daki distribütör dropdown'u ve tarih aralığı
 // seçicisinden gelir. Hiçbiri verilmezse portföy toplamı + son 30g/son 12 ay
 // varsayılan pencereleri döner.
+// md14 (Faz A4): `urunEkGrup` (Kategori, TBLURUNEKGRUP.TXTKOD) — facet
+// dropdown'dan (bkz. `getIskontoUrunEkGrupFacets`) gelen kod; verilmezse
+// ("Tümü") filtre yok.
 export const getWietnauerIskonto = <T = unknown>(
-  o: { refresh?: boolean; distId?: number | null; dateFrom?: string | null; dateTo?: string | null; donem?: string | null } = {},
+  o: {
+    refresh?: boolean;
+    distId?: number | null;
+    dateFrom?: string | null;
+    dateTo?: string | null;
+    donem?: string | null;
+    urunEkGrup?: string | null;
+  } = {},
 ) => {
   const params = new URLSearchParams();
   if (o.refresh) params.set("refresh", "1");
@@ -909,9 +1048,25 @@ export const getWietnauerIskonto = <T = unknown>(
   if (o.dateTo) params.set("to", o.dateTo);
   // Serbest aralık yoksa preset'i ilet — sunucu anchor'a göre çözer.
   else if (o.donem && o.donem !== "son30g") params.set("donem", o.donem);
+  if (o.urunEkGrup) params.set("urunEkGrup", o.urunEkGrup);
   const qs = params.toString();
   return request<T>(`/api/wietnauer/iskonto${qs ? `?${qs}` : ""}`);
 };
+
+// md14 (Faz A4): İskonto ekranı Ürün Ek Grup (Kategori) filtre dropdown'u
+// için seçenek listesi. Auth ister (oturum yoksa 401), dist-scope gerekmez —
+// facet listesi tüm tenant için tektir (`getMapFacets` deseniyle aynı).
+export type IskontoUrunEkGrupFacet = { kod: string; ad: string };
+export async function getIskontoUrunEkGrupFacets(): Promise<IskontoUrunEkGrupFacet[]> {
+  const res = await request<{ facets: IskontoUrunEkGrupFacet[] }>(
+    "/api/wietnauer/iskonto/facets/urun-ek-grup",
+  );
+  return res.facets ?? [];
+}
+// Madde 10 — segment ekranı 4 kırılıma çıktı (`grupKirilim` yeni alan).
+// Tam tip core'dan re-export edilir (bkz. yukarısı, import) — page.tsx artık
+// kendi ad-hoc `SegmentSnapshot` tipini değil bunu kullanır.
+export type WietnauerSegmentSnapshot = CoreWietnauerSegmentSnapshot;
 export const getWietnauerSegment = <T = unknown>(o: DonemOpts = {}) =>
   fetchV3<T>("segment", o);
 // `getWietnauerSaha` typed signature aşağıda; jenerik kalmasın diye burada
@@ -967,6 +1122,8 @@ export type SatisRepRow = {
   distAd: string | null;
   region: string | null;
   ciro: number;
+  /** md21 (faz A4 ek): temsilcinin 70cl hacmi — `ciro`'nun ikizi. */
+  hacim: number;
   musteriSayi: number;
   faturaSayi: number;
   ortSepet: number;
@@ -980,8 +1137,12 @@ export type DropSizeRow = {
   ad: string;
   region: string | null;
   ciro: number;
+  /** md21 (faz A4 ek): dist toplam hacmi (70cl) — `ciro`'nun ikizi. */
+  hacim: number;
   musteriSayi: number;
   dropSize: number;
+  /** md21 (faz A4 ek): nokta başına ort. drop hacmi — `dropSize`'ın ikizi. */
+  dropSizeHacim: number;
   rank: number;
 };
 

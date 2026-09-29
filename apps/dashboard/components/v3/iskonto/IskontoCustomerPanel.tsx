@@ -22,37 +22,54 @@ const ETIKET_META: Record<
   bagimli: { label: "iskonto bağımlı", color: "#dc2626" },
 };
 
+const ETIKET_META_EN: Record<
+  CustomerRow["etiket"],
+  { label: string; color: string }
+> = {
+  premium: { label: "premium", color: "#16a34a" },
+  saglikli: { label: "healthy", color: "#d97706" },
+  bagimli: { label: "discount dependent", color: "#dc2626" },
+};
+
 /**
  * Panel D — Müşteri ROI Top 20.
  *
  * En çok iskonto verilen 20 müşteri (iskonto DESC). Düşük iskonto oranı +
  * yüksek ciro = premium. Yüksek oran = iskonto bağımlı.
  *
- * Eşikler (backend'de fix):
+ * Eşikler (backend'de fix, satır 41-43 — `wietnauer-iskonto.ts`):
  *   <10%   → premium
  *   10-25% → sağlıklı
  *   >25%   → bağımlı
+ *
+ * Madde 17 — bu eşikler kullanıcıya görünmüyordu (etiket neye göre
+ * anlaşılmıyordu); tablonun altına legend eklendi.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
 export function IskontoCustomerPanel({
   customers,
+  locale = "tr",
 }: {
   customers: CustomerRow[];
+  locale?: Locale;
 }) {
   if (panelHidden("panel.iskonto.customer")) return null;
   const premiumCount = customers.filter((c) => c.etiket === "premium").length;
   const bagimliCount = customers.filter((c) => c.etiket === "bagimli").length;
   const toplamIskonto = customers.reduce((a, c) => a + c.iskonto, 0);
+  const etiketMeta = locale === "en" ? ETIKET_META_EN : ETIKET_META;
 
   return (
     <div className="cust-panel">
       <div className="cust-head">
         <div>
-          <div className="cust-title">{panelTitle("panel.iskonto.customer", "Müşteri ROI · Top 20")}</div>
+          <div className="cust-title">{panelTitle("panel.iskonto.customer", t(locale, "panel.iskonto.customer", "Müşteri ROI · Top 20"))}</div>
           <div className="cust-sub">
-            Son 30g · İskonto tutarı DESC · Toplam ₺
-            {formatCompact(toplamIskonto)} iskonto yatırımı
+            {locale === "en"
+              ? `Last 30d · Discount amount DESC · Total ₺${formatCompact(toplamIskonto)} discount investment`
+              : `Son 30g · İskonto tutarı DESC · Toplam ₺${formatCompact(toplamIskonto)} iskonto yatırımı`}
             {premiumCount > 0 && (
               <>
                 {" · "}
@@ -65,7 +82,7 @@ export function IskontoCustomerPanel({
               <>
                 {" · "}
                 <span style={{ color: "#dc2626", fontWeight: 600 }}>
-                  {bagimliCount} bağımlı
+                  {bagimliCount} {locale === "en" ? "dependent" : "bağımlı"}
                 </span>
               </>
             )}
@@ -78,18 +95,18 @@ export function IskontoCustomerPanel({
           <thead>
             <tr>
               <th style={{ width: 36 }}>#</th>
-              <th>Müşteri</th>
-              <th>Şehir</th>
-              <th className="num">Brüt</th>
-              <th className="num">İskonto</th>
+              <th>{t(locale, "col.musteri_th", "Müşteri")}</th>
+              <th>{locale === "en" ? "City" : "Şehir"}</th>
+              <th className="num">{locale === "en" ? "Gross" : "Brüt"}</th>
+              <th className="num">{t(locale, "col.iskonto", "İskonto")}</th>
               <th className="num">Net</th>
-              <th className="num">Oran</th>
-              <th>Etiket</th>
+              <th className="num">{t(locale, "col.oran", "Oran")}</th>
+              <th>{locale === "en" ? "Label" : "Etiket"}</th>
             </tr>
           </thead>
           <tbody>
             {customers.map((c) => {
-              const meta = ETIKET_META[c.etiket];
+              const meta = etiketMeta[c.etiket];
               return (
                 <tr key={c.id}>
                   <td className="rank">{c.rank}</td>
@@ -113,6 +130,21 @@ export function IskontoCustomerPanel({
             })}
           </tbody>
         </table>
+      </div>
+
+      <div className="cust-legend">
+        <span className="legend-label">{t(locale, "cust.legend_label", "Etiket eşiği (iskonto oranı):")}</span>
+        <span style={{ color: "#16a34a" }}>
+          ● {etiketMeta.premium.label} &lt;10%
+        </span>
+        <span className="sep">·</span>
+        <span style={{ color: "#d97706" }}>
+          ● {etiketMeta.saglikli.label} 10–25%
+        </span>
+        <span className="sep">·</span>
+        <span style={{ color: "#dc2626" }}>
+          ● {etiketMeta.bagimli.label} &gt;25%
+        </span>
       </div>
 
       <style
@@ -145,6 +177,9 @@ export function IskontoCustomerPanel({
         .cust-table td.iskonto { color: var(--color-fg-2); font-weight: 500; }
         .cust-table td.oran { font-weight: 600; }
         .pill { display: inline-block; padding: 2px 8px; font-size: 10.5px; font-weight: 600; border: 1px solid; border-radius: 999px; text-transform: lowercase; letter-spacing: 0.02em; }
+        .cust-legend { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--color-border); font-size: 11px; color: var(--color-muted-2); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .cust-legend .legend-label { color: var(--color-muted); font-weight: 600; }
+        .cust-legend .sep { opacity: 0.4; }
       `,
         }}
       />

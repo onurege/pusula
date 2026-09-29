@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/auth/auth-context";
 import { useTenant } from "@/components/tenant-provider";
@@ -16,6 +16,11 @@ export default function LoginPage() {
 function LoginForm() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  // Çok-DB kurulumunda (Panorama "şirket" seçicisi karşılığı) login'de seçilen
+  // veritabanı. Liste boşsa (tek-DB tenant) dropdown gizlenir ve `dbId`
+  // gönderilmez → backend bugünkü tek-DB yolunu izler.
+  const [databases, setDatabases] = useState<Array<{ id: string; label: string }>>([]);
+  const [dbId, setDbId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -23,12 +28,31 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const tenant = useTenant();
 
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/auth/databases", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        const list = Array.isArray(d?.databases) ? d.databases : [];
+        setDatabases(list);
+        if (list.length > 0) setDbId(list[0].id);
+      })
+      .catch(() => {
+        /* yok say — dropdown gizli kalır, tek-DB gibi davranır */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!username.trim() || !password.trim()) return;
+    if (databases.length > 0 && !dbId) return;
     setLoading(true);
     setError(null);
-    const err = await login(username, password);
+    const err = await login(username, password, databases.length > 0 ? dbId : undefined);
     if (err) {
       setError(err);
       setLoading(false);
@@ -72,12 +96,28 @@ function LoginForm() {
           autoComplete="current-password"
         />
 
+        {databases.length > 0 && (
+          <>
+            <label className="login-label" htmlFor="dbId">Veritabanı</label>
+            <select
+              id="dbId"
+              className="login-input"
+              value={dbId}
+              onChange={(e) => setDbId(e.target.value)}
+            >
+              {databases.map((d) => (
+                <option key={d.id} value={d.id}>{d.label}</option>
+              ))}
+            </select>
+          </>
+        )}
+
         {error && <p className="login-error">{error}</p>}
 
         <button
           className="login-btn"
           type="submit"
-          disabled={loading || !username.trim() || !password.trim()}
+          disabled={loading || !username.trim() || !password.trim() || (databases.length > 0 && !dbId)}
         >
           {loading ? "Giriş yapılıyor…" : "Giriş Yap"}
         </button>

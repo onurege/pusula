@@ -3,10 +3,12 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import type { AllowedDistributor } from "@/lib/api";
+import { t, type Locale } from "@/lib/i18n";
 
 type Props = {
   distributors: AllowedDistributor[];
   selectedDistId: number | null;
+  locale?: Locale;
 };
 
 /**
@@ -19,7 +21,7 @@ type Props = {
  * ticari-yatırım (iskonto) sayfasının kullandığı aynı, önceden var olan
  * kaynak. Yeni endpoint eklenmedi.
  */
-export function AktivasyonDistSelect({ distributors, selectedDistId }: Props) {
+export function AktivasyonDistSelect({ distributors, selectedDistId, locale = "tr" }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -44,7 +46,7 @@ export function AktivasyonDistSelect({ distributors, selectedDistId }: Props) {
   return (
     <div className="aktivasyon-dist-select">
       <label htmlFor="aktivasyon-dist-select" className="lbl">
-        Distribütör
+        {t(locale, "col.distributor", "Distribütör")}
       </label>
       <select
         id="aktivasyon-dist-select"
@@ -53,14 +55,14 @@ export function AktivasyonDistSelect({ distributors, selectedDistId }: Props) {
         disabled={isPending}
         className="sel"
       >
-        <option value="all">Tümü — portföy toplamı</option>
+        <option value="all">{locale === "en" ? "All — portfolio total" : "Tümü — portföy toplamı"}</option>
         {distributors.map((d) => (
           <option key={d.id} value={d.id}>
             {d.ad}
           </option>
         ))}
       </select>
-      {isPending && <span className="loading">yükleniyor…</span>}
+      {isPending && <span className="loading">{t(locale, "donem.loading", "yükleniyor…")}</span>}
 
       <style
         dangerouslySetInnerHTML={{

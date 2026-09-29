@@ -43,6 +43,20 @@ data/wietnauer.sqlite
 data/wietnauer.sqlite-shm
 data/wietnauer.sqlite-wal
 
+# Insider konfigüratör runtime override store — şifreli config/DB-cred
+# katmanı (tenant/mapping-store.ts). Web-root dışı + üretim sırrı, repoda
+# ASLA olmamalı (regenerable: admin panelden yeniden kaydedilir).
+data/tenant-config.*.enc.json
+
+# Konfigüratör audit-trail — kim/ne zaman/hangi alan/eski→yeni (audit-log.ts).
+# Operasyonel log, kod değil; repoda commit edilmez.
+data/config-audit.log
+
+# Kodsuz tenant onboarding — runtime tenant KİMLİĞİ store'u
+# (tenant/tenant-definition-store.ts). Sır DEĞİL (şifreli değil) ama
+# ortama-özel/regenerable admin verisi; kod repoya karışmaz.
+data/tenant-def.*.json
+
 # Geçici doğrulama/dump script'leri (session output)
 scratchpad/
 

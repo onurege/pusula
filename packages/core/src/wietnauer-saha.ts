@@ -49,7 +49,9 @@
 import { runReadOnly } from "./db.js";
 import { sqlNow, resolveWindowBounds } from "./now.js";
 import { withCache } from "./cache.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getRegionBreakdownMeta } from "./tenant/index.js";
+import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
+import { regionBreakdownJoin, regionBreakdownLabelExpr } from "./tenant/region-breakdown-sql.js";
 import { cityFactClause, cityCacheTag } from "./auth.js";
 
 const CACHE_DOMAIN = "wietnauer-saha";
@@ -64,7 +66,19 @@ const CACHE_DOMAIN = "wietnauer-saha";
 // v7: Panel B (fetchCoverage) segment kaynağı TBLMUSTERIGRUP'tan
 // TBLMUSTERIGRUPKIRILIM'e (müşteri grup kırılımı: Prestige/Premium/…)
 // değiştirildi — eski segment değerleriyle cache çakışmasın diye bump.
-const CACHE_VERSION = "v7";
+// v8: md12 — Panel B "aktif" penceresi hardcoded son 90g'den SEÇİLİ DÖNEME
+// (win.lower/win.upper, kapsanan/ziyaret ile AYNI pencere) bağlandı; segment
+// kaynağı zaten Faz A1'den beri (getCustomerBreakdownMeta → eksaha-two-hop)
+// birleşik Ek Saha (Saha1+2) — dokümantasyon güncellendi, davranış aynı kaldı.
+// Pencere değiştiği için stale cache eski 90g'lik "aktif" sayılarını
+// servis etmesin diye bump.
+// v9: md-coverage-fix — fetchCoverage payı ("ziyaretEdilen"/"kapsanan") ham
+// "tüm ziyaret edilen" (aktif kümesinden bağımsız) yerine aktif ∩ ziyaret
+// KESİŞİMİNE değiştirildi (DL doğruladı: canlı DB'de eski oran %207,
+// donut'ta 100'e kırpılıp "herkes ziyaret edilmiş" yanılsaması veriyordu;
+// doğru oran %96.4). Stale cache eski (>100 kırpılmış) yüzdeleri servis
+// etmesin diye bump.
+const CACHE_VERSION = "v9";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -80,15 +94,20 @@ export type VisitDailyRow = {
 };
 
 export type CoverageSegmentRow = {
-  /** TBLMUSTERIGRUPKIRILIM.TXTAD — müşteri grup kırılımı (Prestige/Premium/
-   *  Premium Plus/Standart/Standart Plus/Off Trade C&PS Tedarikçi vb.) veya
-   *  "(Tanımsız)" (TBLMUSTERI.TXTGRUPKIRILIMKOD boş/eşleşmiyorsa). */
+  /** md12 — Birleşik Ek Saha (Saha1+2, `getCustomerBreakdownMeta()` iki-hop:
+   *  TBLMUSTERI → TBLMUSTERIEKSAHA → TBLEKSAHASECENEK, Saha1/Saha2 COALESCE)
+   *  veya "(Tanımsız)" (ikisi de boş/eşleşmiyorsa). */
   segment: string;
-  /** Son 30g'de ziyaret edilen distinct müşteri sayısı (bu segmentte) */
+  /** md-coverage-fix — SEÇİLİ dönemde AKTİF müşteriler arasından ziyaret de
+   *  edilmiş olanların distinct sayısı (aktif ∩ ziyaret KESİŞİMİ, bu
+   *  segmentte). ARTIK ham "tüm ziyaret edilen" DEĞİL — `aktif`'i aşamaz,
+   *  bu yüzden `kapsamaPct` her zaman ≤100'dür. (Alan adı geriye dönük
+   *  uyumluluk için `ziyaretEdilen` kaldı, anlamı "kapsanan"a değişti.) */
   ziyaretEdilen: number;
-  /** Son 90g'de fatura kesilen distinct müşteri sayısı (aktif portföy) */
+  /** md12 — SEÇİLİ dönemde (ziyaretEdilen ile AYNI pencere) fatura kesilen
+   *  distinct müşteri sayısı (aktif portföy). Önceden hardcoded son 90g'ydi. */
   aktif: number;
-  /** ziyaretEdilen / aktif * 100 */
+  /** ziyaretEdilen (kesişim) / aktif * 100 — ≤100 */
   kapsamaPct: number;
 };
 
@@ -164,7 +183,9 @@ export type WietnauerSahaSnapshot = {
   visitDaily: VisitDailyRow[];
   /** Son 7g KPI özet */
   kpi: VisitKpi;
-  /** B panel — segment kırılımı */
+  /** B panel — segment kırılımı. md-coverage-fix: `totalZiyaretEdilen` artık
+   *  aktif ∩ ziyaret KESİŞİMİ (bkz. `CoverageSegmentRow.ziyaretEdilen`) — her
+   *  zaman `totalAktif`'i aşamaz, `kapsamaPct` ≤100. */
   coverage: {
     totalZiyaretEdilen: number;
     totalAktif: number;
@@ -311,26 +332,45 @@ type CoverageRawRow = CoverageSegmentRow & { distId: number | null };
  * geldiğini etiketler; bir müşteri fatura kestiği/ziyaret edildiği HER dist
  * için ayrı satırda sayılabilir — bu Wietnauer'da nadir, kabul edilebilir).
  *
- * Aktif tanımı: son 90g'de en az 1 fatura kesilmiş müşteri.
- * Kapsanan tanımı: son 30g'de en az 1 ziyaret edilmiş müşteri (TRHGIRIS IS NOT NULL).
+ * md12 — Aktif VE kapsanan tanımı ARTIK AYNI SEÇİLİ PENCEREYİ paylaşır
+ * (`win`/`visitUpper`, dashboard'un dateFrom/dateTo'suna bağlı — seçili değilse
+ * anchor-bağıl son 30g). Önceden aktif hardcoded son 90g'ydi (kapsanan'dan
+ * FARKLI bir pencereydi); md12 ile donut %'nin paydası (aktif) ve payı
+ * (ziyaret edilen) tutarlı hale getirildi.
  *
- * Segment = müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD →
- * TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Premium Plus/Standart/
- * Standart Plus/Off Trade C&PS Tedarikçi vb.). Müşterinin kırılım kodu
- * yoksa/eşleşmiyorsa "(Tanımsız)" altında raporlanır.
+ * md-coverage-fix (DL doğruladı, canlı DB son 30g: aktif=5688,
+ * ham-ziyaret=11797, KESİŞİM=5484 → eski oran %207, doğru oran %96.4):
+ * `ziyaretEdilen`/`kapsanan` ARTIK "aktif müşteriler arasında ziyaret de
+ * edilenlerin" KESİŞİM sayısıdır — payda (aktif) ile payın (kapsanan) aynı
+ * kümenin alt kümesi olması garanti edilir, `kapsamaPct` hiçbir zaman
+ * %100'ü aşamaz. Önceki hata: pay = TÜM ziyaret edilen (aktif olsun olmasın),
+ * payda = aktif — farklı kümeler, oran anlamsız (>%100) çıkabiliyordu.
+ *
+ * Aktif tanımı: SEÇİLİ dönemde en az 1 fatura kesilmiş müşteri.
+ * Kapsanan tanımı: SEÇİLİ dönemde AKTİF olan VE en az 1 ziyaret edilmiş
+ * (TRHGIRIS IS NOT NULL) müşteri — aktif ∩ ziyaret.
+ *
+ * Segment = Birleşik Ek Saha (Saha1+2) — `getCustomerBreakdownMeta()` iki-hop
+ * kaynağı (TBLMUSTERI → TBLMUSTERIEKSAHA köprü → TBLEKSAHASECENEK lookup,
+ * Faz A1'de eklendi). Müşterinin ikisi de boş/eşleşmiyorsa "(Tanımsız)"
+ * altında raporlanır. `customerBreakdownJoin/LabelExpr` mode'a göre dallanır;
+ * burada HARDCODE yok.
  */
 async function fetchCoverage(
   cities: string[] | null | undefined,
   win: { lower: string; upper: string },
   visitUpper: string,
 ): Promise<CoverageRawRow[]> {
+  // Segment tablo/kolonu tenant config'ten (`resolveIdentifier` doğrulamalı —
+  // Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD, f.LNGDISTKOD AS dist_id
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <= ${sqlNow()}${cityFactClause(cities)}
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
     ),
     ziyaret AS (
       SELECT DISTINCT z.LNGMUSTERIKOD, o.LNGDISTKOD AS dist_id
@@ -343,29 +383,23 @@ async function fetchCoverage(
     musteri_seg AS (
       SELECT
         m.LNGKOD AS musteri_kod,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
+        ${customerBreakdownLabelExpr(kirilimMeta, "segment")}
       FROM dbo.TBLMUSTERI m
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
-    ),
-    dist_musteri AS (
-      -- Her müşteri × dist kombinasyonu (aktif veya ziyaret kaynaklı).
-      SELECT musteri_kod, dist_id FROM (
-        SELECT LNGMUSTERIKOD AS musteri_kod, dist_id FROM aktif
-        UNION
-        SELECT LNGMUSTERIKOD AS musteri_kod, dist_id FROM ziyaret
-      ) u
+      ${customerBreakdownJoin(kirilimMeta)}
     )
+    -- md-coverage-fix: payda VE payın tabanı aynı küme (aktif) — ziyaret
+    -- sadece "bu aktif müşteri ayrıca ziyaret de edildi mi" için LEFT JOIN
+    -- edilir, ayrı bir birleşim (UNION) kümesi DEĞİL.
     SELECT
-      dm.dist_id,
+      a.dist_id,
       ms.segment,
-      COUNT(DISTINCT CASE WHEN z.LNGMUSTERIKOD IS NOT NULL THEN dm.musteri_kod END) AS ziyaret_edilen,
-      COUNT(DISTINCT CASE WHEN a.LNGMUSTERIKOD IS NOT NULL THEN dm.musteri_kod END) AS aktif
-    FROM dist_musteri dm
-    INNER JOIN musteri_seg ms ON ms.musteri_kod = dm.musteri_kod
-    LEFT JOIN aktif a ON a.LNGMUSTERIKOD = dm.musteri_kod AND a.dist_id = dm.dist_id
-    LEFT JOIN ziyaret z ON z.LNGMUSTERIKOD = dm.musteri_kod AND z.dist_id = dm.dist_id
-    GROUP BY dm.dist_id, ms.segment
-    ORDER BY dm.dist_id, aktif DESC, ziyaret_edilen DESC
+      COUNT(DISTINCT CASE WHEN z.LNGMUSTERIKOD IS NOT NULL THEN a.LNGMUSTERIKOD END) AS ziyaret_edilen,
+      COUNT(DISTINCT a.LNGMUSTERIKOD) AS aktif
+    FROM aktif a
+    INNER JOIN musteri_seg ms ON ms.musteri_kod = a.LNGMUSTERIKOD
+    LEFT JOIN ziyaret z ON z.LNGMUSTERIKOD = a.LNGMUSTERIKOD AND z.dist_id = a.dist_id
+    GROUP BY a.dist_id, ms.segment
+    ORDER BY a.dist_id, aktif DESC, ziyaret_edilen DESC
   `;
   const result = await runReadOnly(sql, { limit: 2000, timeoutMs: 60_000 });
   return result.rows.map((r) => {
@@ -602,9 +636,7 @@ async function fetchDistributorComparison(
 ): Promise<Omit<DistributorComparisonRow, "rank">[]> {
   // Bölge kaynağı tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge,
   // Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge. (komuta fetchHeatmap ile aynı.)
-  const tenant = getTenantConfig();
-  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
-  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
+  const regionMeta = getRegionBreakdownMeta();
   const sql = `
     WITH baz AS (
       SELECT
@@ -627,14 +659,14 @@ async function fetchDistributorComparison(
     SELECT
       b.LNGDISTKOD                                                 AS dist_kod,
       d.TXTAD                                                      AS distributor,
-      g.TXTAD                                                      AS bolge,
+      ${regionBreakdownLabelExpr(regionMeta, "g", "bolge")},
       COUNT(DISTINCT b.LNGSTKOD)                                   AS aktif_rep,
       COUNT(*)                                                     AS ziyaret,
       COUNT(DISTINCT b.LNGMUSTERIKOD)                              AS kapsanan,
       SUM(b.siparis_var)                                           AS siparisli
     FROM baz b
     LEFT JOIN dbo.TBLDIST       d ON d.LNGKOD = b.LNGDISTKOD
-    LEFT JOIN dbo.${distRegionTable} g ON g.TXTKOD = d.${distRegionColumn}
+    ${regionBreakdownJoin(regionMeta, "d", "g", "LEFT")}
     GROUP BY b.LNGDISTKOD, d.TXTAD, g.TXTAD
     ORDER BY COUNT(*) DESC
   `;
@@ -700,7 +732,6 @@ export async function getWietnauerSahaSnapshot(
 ): Promise<WietnauerSahaSnapshot> {
   // strategicBrands şu an saha modülünde kullanılmıyor.
   void options.strategicBrands;
-  void getTenantConfig;
 
   const cities = options.allowedCities ?? null;
   const win = resolveWindowBounds(options.dateFrom, options.dateTo);

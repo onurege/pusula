@@ -3,6 +3,7 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import type { KomutaFacets } from "@/lib/api";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 /**
  * md2 — Cockpit global filtre dropdown'ları: Bölge + Kanal. Seçim URL'e
@@ -15,11 +16,13 @@ export function KomutaFilterDropdowns({
   bolge,
   kanal,
   urunGrup,
+  locale = "tr",
 }: {
   facets: KomutaFacets;
   bolge: string | null;
   kanal: string | null;
   urunGrup: string | null;
+  locale?: Locale;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -37,13 +40,13 @@ export function KomutaFilterDropdowns({
   return (
     <>
       <label className={`kf-chip${bolge ? " on" : ""}`}>
-        <span className="kf-lbl">Bölge</span>
+        <span className="kf-lbl">{translate(locale, "komuta.filter.region", "Bölge")}</span>
         <select
           value={bolge ?? "__all__"}
           onChange={(e) => setParam("bolge", e.target.value)}
           disabled={isPending}
         >
-          <option value="__all__">Tümü</option>
+          <option value="__all__">{translate(locale, "komuta.all", "Tümü")}</option>
           {facets.bolgeler.map((b) => (
             <option key={b.kod} value={b.kod}>{b.ad}</option>
           ))}
@@ -51,13 +54,13 @@ export function KomutaFilterDropdowns({
       </label>
 
       <label className={`kf-chip${kanal ? " on" : ""}`}>
-        <span className="kf-lbl">Grup Kırılımı</span>
+        <span className="kf-lbl">{translate(locale, "komuta.channeltype.filter_label", "Grup Kırılımı")}</span>
         <select
           value={kanal ?? "__all__"}
           onChange={(e) => setParam("kanal", e.target.value)}
           disabled={isPending}
         >
-          <option value="__all__">Tümü</option>
+          <option value="__all__">{translate(locale, "komuta.all", "Tümü")}</option>
           {facets.kanallar.map((k) => (
             <option key={k.kod} value={k.kod}>{k.ad}</option>
           ))}
@@ -65,13 +68,13 @@ export function KomutaFilterDropdowns({
       </label>
 
       <label className={`kf-chip${urunGrup ? " on" : ""}`}>
-        <span className="kf-lbl">Ürün Grubu</span>
+        <span className="kf-lbl">{translate(locale, "komuta.filter.product_group", "Ürün Grubu")}</span>
         <select
           value={urunGrup ?? "__all__"}
           onChange={(e) => setParam("urunGrup", e.target.value)}
           disabled={isPending}
         >
-          <option value="__all__">Tümü</option>
+          <option value="__all__">{translate(locale, "komuta.all", "Tümü")}</option>
           {facets.urunGruplari.map((u) => (
             <option key={u.kod} value={u.kod}>{u.ad}</option>
           ))}

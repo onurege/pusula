@@ -1,5 +1,6 @@
 import { formatCompact } from "@/components/komuta/format";
 import type { StrategicBrandDetail } from "./types";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * Dashboard #4 — Panel D: Stratejik Marka Zoom.
@@ -15,17 +16,21 @@ import type { StrategicBrandDetail } from "./types";
 export function StrategicBrandZoom({
   brands,
   periodLabel = "Son 30g",
+  locale = "tr",
 }: {
   brands: StrategicBrandDetail[];
   periodLabel?: string;
+  locale?: Locale;
 }) {
+  const title = t(locale, "panel.marka.strategic", "Stratejik Marka Zoom");
   if (brands.length === 0) {
     return (
       <div className="v3-panel empty">
-        <div className="v3-panel-title">Stratejik Marka Zoom</div>
+        <div className="v3-panel-title">{title}</div>
         <p className="empty-msg">
-          tenant.strategicBrands listesi boş — stratejik marka takibi
-          tanımlanmamış.
+          {locale === "en"
+            ? "tenant.strategicBrands list is empty — no strategic brand tracking defined."
+            : "tenant.strategicBrands listesi boş — stratejik marka takibi tanımlanmamış."}
         </p>
         <style
           dangerouslySetInnerHTML={{
@@ -47,10 +52,19 @@ export function StrategicBrandZoom({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">Stratejik Marka Zoom</div>
+          <div className="v3-panel-title">{title}</div>
           <div className="v3-panel-sub">
-            {periodLabel} · {aktif.length}/{brands.length} marka aktif · Toplam
-            stratejik ciro <strong>₺{formatCompact(totalCiro)}</strong>
+            {locale === "en" ? (
+              <>
+                {periodLabel} · {aktif.length}/{brands.length} brands active · Total
+                strategic revenue <strong>₺{formatCompact(totalCiro)}</strong>
+              </>
+            ) : (
+              <>
+                {periodLabel} · {aktif.length}/{brands.length} marka aktif · Toplam
+                stratejik ciro <strong>₺{formatCompact(totalCiro)}</strong>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -73,12 +87,12 @@ export function StrategicBrandZoom({
             <div className="card-meta">
               {b.hasData ? (
                 <>
-                  <span>{b.musteriSayi.toLocaleString("tr-TR")} müşteri</span>
+                  <span>{b.musteriSayi.toLocaleString("tr-TR")} {locale === "en" ? "customers" : "müşteri"}</span>
                   <span className="dot">·</span>
-                  <span>{b.faturaSayisi.toLocaleString("tr-TR")} fatura</span>
+                  <span>{b.faturaSayisi.toLocaleString("tr-TR")} {locale === "en" ? "invoices" : "fatura"}</span>
                 </>
               ) : (
-                <span>son 30g satış yok</span>
+                <span>{locale === "en" ? "no sales in the last 30d" : "son 30g satış yok"}</span>
               )}
             </div>
             {b.hasData && b.topSkus.length > 0 && (
@@ -97,7 +111,7 @@ export function StrategicBrandZoom({
               </ol>
             )}
             {b.hasData && b.topSkus.length === 0 && (
-              <div className="card-no-sku">SKU detayı çekilemedi.</div>
+              <div className="card-no-sku">{locale === "en" ? "SKU detail unavailable." : "SKU detayı çekilemedi."}</div>
             )}
           </div>
         ))}

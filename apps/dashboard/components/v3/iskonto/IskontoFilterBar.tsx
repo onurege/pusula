@@ -2,7 +2,8 @@
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
-import type { AllowedDistributor } from "@/lib/api";
+import type { AllowedDistributor, IskontoUrunEkGrupFacet } from "@/lib/api";
+import { t, type Locale } from "@/lib/i18n";
 
 type Props = {
   distributors: AllowedDistributor[];
@@ -12,21 +13,34 @@ type Props = {
   /** Tarih aralığı alanını göster. Dönem seçimi artık ortak GlobalDonemFilter'a
    *  devredildiğinde `false` verilir; yalnız distribütör seçici kalır. */
   showDateRange?: boolean;
+  /** md14 — Ürün Ek Grup (Kategori) facet seçenekleri; boşsa dropdown gizlenir. */
+  urunEkGruplar?: IskontoUrunEkGrupFacet[];
+  selectedUrunEkGrup?: string | null;
+  locale?: Locale;
 };
 
 /**
- * Ticari Yatırım & İskonto filtre çubuğu — tarih aralığı + distribütör.
- * Seçimler URL'e (`?from&to&distId`) yazılır, sayfa RSC olarak yeniden
- * render olur; `getWietnauerIskontoSnapshot` opts'una akar (stok-tukenme
- * `StokDistSelect` deseniyle aynı: URL = tek doğruluk kaynağı, sayfa
- * yenilemesi RSC drill-down).
+ * Ticari Yatırım & İskonto filtre çubuğu — tarih aralığı + distribütör +
+ * (md14) ürün ek grup (Kategori). Seçimler URL'e (`?from&to&distId&urunEkGrup`)
+ * yazılır, sayfa RSC olarak yeniden render olur; `getWietnauerIskontoSnapshot`
+ * opts'una akar (stok-tukenme `StokDistSelect` deseniyle aynı: URL = tek
+ * doğruluk kaynağı, sayfa yenilemesi RSC drill-down).
  *
  * Tarih inputları controlled local state'te tutulur (`fromDraft`/`toDraft`);
  * her tuş vuruşunda navigasyon tetiklenmez — yalnız "Uygula" ile. İkisi de
  * doluysa aralık uygulanır; biri eksikse görmezden gelinir (backend'in
  * `normalizeDateRange` davranışıyla tutarlı).
  */
-export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateTo, showDateRange = true }: Props) {
+export function IskontoFilterBar({
+  distributors,
+  selectedDistId,
+  dateFrom,
+  dateTo,
+  showDateRange = true,
+  urunEkGruplar = [],
+  selectedUrunEkGrup = null,
+  locale = "tr",
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -51,14 +65,23 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
     });
   }
 
+  // md14 — Ürün Ek Grup (Kategori) dropdown. "Tümü" = filtre yok (param silinir).
+  function onUrunEkGrupChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const val = e.target.value;
+    navigate((params) => {
+      if (val === "" || val === "all") params.delete("urunEkGrup");
+      else params.set("urunEkGrup", val);
+    });
+  }
+
   function onApplyRange(e: React.FormEvent) {
     e.preventDefault();
     const f = fromDraft.trim();
-    const t = toDraft.trim();
+    const toVal = toDraft.trim();
     navigate((params) => {
-      if (f && t) {
+      if (f && toVal) {
         params.set("from", f);
-        params.set("to", t);
+        params.set("to", toVal);
       } else {
         params.delete("from");
         params.delete("to");
@@ -82,7 +105,7 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
     <div className="iskonto-filterbar">
       <div className="iskonto-filter-field">
         <label htmlFor="iskonto-dist-select" className="lbl">
-          Distribütör
+          {t(locale, "col.distributor", "Distribütör")}
         </label>
         <select
           id="iskonto-dist-select"
@@ -91,7 +114,7 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
           disabled={isPending}
           className="sel"
         >
-          <option value="all">Tümü — portföy toplamı</option>
+          <option value="all">{locale === "en" ? "All — portfolio total" : "Tümü — portföy toplamı"}</option>
           {distributors.map((d) => (
             <option key={d.id} value={d.id}>
               {d.ad}
@@ -100,10 +123,32 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
         </select>
       </div>
 
+      {urunEkGruplar.length > 0 && (
+        <div className="iskonto-filter-field">
+          <label htmlFor="iskonto-urunekgrup-select" className="lbl">
+            {t(locale, "col.kategori", "Kategori")}
+          </label>
+          <select
+            id="iskonto-urunekgrup-select"
+            value={selectedUrunEkGrup ?? "all"}
+            onChange={onUrunEkGrupChange}
+            disabled={isPending}
+            className="sel"
+          >
+            <option value="all">{t(locale, "filter.kategori_all", "Tümü")}</option>
+            {urunEkGruplar.map((g) => (
+              <option key={g.kod} value={g.kod}>
+                {g.ad}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
       {showDateRange && (
       <form className="iskonto-filter-field iskonto-date-field" onSubmit={onApplyRange}>
         <label htmlFor="iskonto-from" className="lbl">
-          Tarih Aralığı
+          {locale === "en" ? "Date Range" : "Tarih Aralığı"}
         </label>
         <div className="iskonto-date-row">
           <input
@@ -113,7 +158,7 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
             max={toDraft || undefined}
             onChange={(e) => setFromDraft(e.target.value)}
             className="date-input"
-            aria-label="Başlangıç tarihi"
+            aria-label={t(locale, "donem.from_aria", "Başlangıç tarihi")}
           />
           <span className="sep">–</span>
           <input
@@ -123,21 +168,21 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
             min={fromDraft || undefined}
             onChange={(e) => setToDraft(e.target.value)}
             className="date-input"
-            aria-label="Bitiş tarihi"
+            aria-label={t(locale, "donem.to_aria", "Bitiş tarihi")}
           />
           <button type="submit" className="btn-apply" disabled={isPending || !rangeValid}>
-            Uygula
+            {t(locale, "donem.apply", "Uygula")}
           </button>
           {hasRange && (
             <button type="button" className="btn-clear" onClick={onClearRange} disabled={isPending}>
-              Varsayılana dön
+              {locale === "en" ? "Reset to default" : "Varsayılana dön"}
             </button>
           )}
         </div>
       </form>
       )}
 
-      {isPending && <span className="loading">yükleniyor…</span>}
+      {isPending && <span className="loading">{t(locale, "donem.loading", "yükleniyor…")}</span>}
 
       <style
         dangerouslySetInnerHTML={{

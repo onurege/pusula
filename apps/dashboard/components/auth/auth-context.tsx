@@ -28,7 +28,7 @@ export type AuthUser = {
 type AuthContextType = {
   user: AuthUser | null;
   loading: boolean;
-  login: (username: string, password: string) => Promise<string | null>;
+  login: (username: string, password: string, dbId?: string) => Promise<string | null>;
   logout: () => Promise<void>;
 };
 
@@ -72,11 +72,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(
-    async (username: string, password: string): Promise<string | null> => {
+    async (username: string, password: string, dbId?: string): Promise<string | null> => {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, dbId }),
       });
       const data = await res.json();
       if (!res.ok) return data.error || "Giriş başarısız";

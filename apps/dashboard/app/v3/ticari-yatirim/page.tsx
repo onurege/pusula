@@ -1,4 +1,10 @@
-import { getWietnauerIskonto, getAllowedDistributors, type AllowedDistributor } from "@/lib/api";
+import {
+  getWietnauerIskonto,
+  getAllowedDistributors,
+  getIskontoUrunEkGrupFacets,
+  type AllowedDistributor,
+  type IskontoUrunEkGrupFacet,
+} from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { IskontoFilterBar } from "@/components/v3/iskonto/IskontoFilterBar";
@@ -8,8 +14,12 @@ import { IskontoMonthlyTrendPanel } from "@/components/v3/iskonto/IskontoMonthly
 import { IskontoBrandPanel } from "@/components/v3/iskonto/IskontoBrandPanel";
 import { IskontoCustomerPanel } from "@/components/v3/iskonto/IskontoCustomerPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
+import { getLocale, t } from "@/lib/i18n";
 
-export const metadata = { title: "Ticari Yatırım & İskonto · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.iskonto.title", "Ticari Yatırım & İskonto")} · V3 · Insider` };
+}
 
 /**
  * V3 Dashboard #7 — Ticari Yatırım & İskonto.
@@ -53,6 +63,8 @@ type IskontoSnapshot = {
     net: number;
     iskontoOraniPct: number;
     yoyNetPct: number | null;
+    /** Madde 16 — geçen yıl AYNI dönemin iskonto oranı, yoksa null. */
+    iskontoOraniPctPrevYil: number | null;
     rank: number;
     isStratejik: boolean;
   }>;
@@ -90,11 +102,12 @@ function parseDateParam(v: string | undefined): string | null {
 }
 
 type Props = {
-  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string }>;
+  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string; urunEkGrup?: string }>;
 };
 
 export default async function V3TicariYatirimPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
 
   const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
@@ -106,17 +119,20 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
   const dateFrom = fromParsed && toParsed ? fromParsed : null;
   const dateTo = fromParsed && toParsed ? toParsed : null;
   const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
+  // md14: "Tümü" seçeneği param'ı hiç yazmaz/boş bırakır → filtre yok.
+  const urunEkGrup = (sp.urunEkGrup ?? "").trim() || null;
 
   let snap: IskontoSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo, donem });
+    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo, donem, urunEkGrup });
   } catch (e) {
     err = (e as Error).message;
   }
 
-  // Distribütör dropdown'u ayrı, hataya toleranslı — bu çağrı başarısız olsa
-  // bile (ör. yetki listesi alınamazsa) ana snapshot etkilenmesin.
+  // Distribütör dropdown'u ve kategori (ürün ek grup) facet'i ayrı, hataya
+  // toleranslı — bu çağrılar başarısız olsa bile (ör. yetki listesi
+  // alınamazsa) ana snapshot etkilenmesin.
   let distributors: AllowedDistributor[] = [];
   try {
     distributors = await getAllowedDistributors();
@@ -124,22 +140,37 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
     distributors = [];
   }
 
+  let urunEkGruplar: IskontoUrunEkGrupFacet[] = [];
+  try {
+    urunEkGruplar = await getIskontoUrunEkGrupFacets();
+  } catch {
+    urunEkGruplar = [];
+  }
+
   const rangeLabel = dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : null;
 
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 07"
-        title="Ticari Yatırım & İskonto"
+        locale={locale}
+        eyebrow={t(locale, "page.iskonto.eyebrow", "Dashboard 07")}
+        title={t(locale, "page.iskonto.title", "Ticari Yatırım & İskonto")}
         contentKey="page.iskonto.title"
         descKey="page.iskonto.desc"
         description={
-          rangeLabel
-            ? `${tenant.displayName} için ${rangeLabel} aralığında iskonto yatırımı: ` +
-              "brüt → iskonto → net akışı, marka & müşteri & segment ROI'leri."
-            : `${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
-              "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
-              "Sağlıklı iskonto = küçük yatırım, büyük büyüme."
+          locale === "en"
+            ? rangeLabel
+              ? `Discount investment for ${tenant.displayName} in the ${rangeLabel} range: ` +
+                "gross → discount → net flow, brand & customer & segment ROIs."
+              : `Discount investment for ${tenant.displayName}, end to end: ` +
+                "gross → discount → net flow, 12-month trend, brand & customer & segment ROIs. " +
+                "Healthy discount = small investment, large growth."
+            : rangeLabel
+              ? `${tenant.displayName} için ${rangeLabel} aralığında iskonto yatırımı: ` +
+                "brüt → iskonto → net akışı, marka & müşteri & segment ROI'leri."
+              : `${tenant.displayName} için iskonto yatırımı uçtan uca: ` +
+                "brüt → iskonto → net akışı, 12 aylık trend, marka & müşteri & segment ROI'leri. " +
+                "Sağlıklı iskonto = küçük yatırım, büyük büyüme."
         }
         dataNote="TBLMSDFATURA · DBLISKONTOTUTARI + TBLMSDBELGEDETAY · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
@@ -154,13 +185,16 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
         dateFrom={dateFrom}
         dateTo={dateTo}
         showDateRange={false}
+        urunEkGruplar={urunEkGruplar}
+        selectedUrunEkGrup={urunEkGrup}
+        locale={locale}
       />
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.iskonto.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.iskonto.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -174,16 +208,17 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
             iskontoOraniPct={snap.overall.iskontoOraniPct}
             faturaCount={snap.overall.faturaCount}
             aktifMusteriCount={snap.overall.aktifMusteriCount}
+            locale={locale}
           />
 
-          <IskontoMonthlyTrendPanel points={snap.monthly} />
+          <IskontoMonthlyTrendPanel points={snap.monthly} locale={locale} />
 
           <div className="iskonto-twocol">
-            <IskontoBrandPanel brands={snap.brands} />
-            <IskontoSegmentPanel segments={snap.segments} />
+            <IskontoBrandPanel brands={snap.brands} locale={locale} />
+            <IskontoSegmentPanel segments={snap.segments} locale={locale} />
           </div>
 
-          <IskontoCustomerPanel customers={snap.topCustomers} />
+          <IskontoCustomerPanel customers={snap.topCustomers} locale={locale} />
         </div>
       )}
 

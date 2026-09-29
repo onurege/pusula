@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useTenant } from "@/components/tenant-provider";
+import { useLocale } from "@/components/locale/LocaleProvider";
+import { t, localizeVolumeUnit } from "@/lib/i18n";
 
 /**
  * md21 — Satış Performansı birim toggle'ı: TL ↔ hacim (tenant.volume).
@@ -22,6 +24,7 @@ export function SatisUnitToggle() {
   const pathname = usePathname() ?? "/";
   const sp = useSearchParams();
   const tenant = useTenant();
+  const { locale } = useLocale();
 
   const volumeKey = tenant.volume.key;
   const active = sp.get("unit") === volumeKey ? volumeKey : "tl";
@@ -38,11 +41,11 @@ export function SatisUnitToggle() {
     {
       id: "tl",
       label: `${tenant.currencySymbol} TL`,
-      hint: "Ciro (net tutar) bazlı görünüm",
+      hint: t(locale, "unit.tl_hint", "Ciro (net tutar) bazlı görünüm"),
     },
     {
       id: volumeKey,
-      label: tenant.volume.short,
+      label: localizeVolumeUnit(tenant.volume.short, locale),
       hint: tenant.volume.hint,
     },
   ];
@@ -50,11 +53,15 @@ export function SatisUnitToggle() {
   return (
     <div
       role="tablist"
-      aria-label="Birim"
+      aria-label={t(locale, "unit.label", "Birim")}
       className="satis-unit-toggle"
-      title={`TL ↔ ${tenant.volume.short} görünüm anahtarı — sunucu sorgusu değişmez, yalnızca gösterim.`}
+      title={
+        locale === "en"
+          ? `TL ↔ ${localizeVolumeUnit(tenant.volume.short, locale)} view switch — server query unchanged, display only.`
+          : `TL ↔ ${tenant.volume.short} görünüm anahtarı — sunucu sorgusu değişmez, yalnızca gösterim.`
+      }
     >
-      <span className="lbl">Birim</span>
+      <span className="lbl">{t(locale, "unit.label", "Birim")}</span>
       {options.map((opt) => {
         const isActive = active === opt.id;
         return (

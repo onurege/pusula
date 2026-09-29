@@ -1,5 +1,6 @@
 import type { WietnauerDiscountKpi } from "@/lib/api";
 import { formatCompact } from "@/components/komuta/format";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * İskonto KPI kartı — Yönetim Kurulu dashboard'unun finansal sağlık metriği.
@@ -12,7 +13,13 @@ import { formatCompact } from "@/components/komuta/format";
  *   15-25% → nötr (sektör ortalama)
  *   >25%   → kırmızı (aşırı yatırım uyarısı)
  */
-export function DiscountKpiCard({ kpi }: { kpi: WietnauerDiscountKpi }) {
+export function DiscountKpiCard({
+  kpi,
+  locale = "tr",
+}: {
+  kpi: WietnauerDiscountKpi;
+  locale?: Locale;
+}) {
   const o = kpi.iskontoOraniPct;
   const tone =
     o < 15 ? "good" : o < 25 ? "neutral" : "warn";
@@ -20,16 +27,16 @@ export function DiscountKpiCard({ kpi }: { kpi: WietnauerDiscountKpi }) {
     tone === "good" ? "#16a34a" : tone === "warn" ? "#dc2626" : "#78716c";
   const toneText =
     tone === "good"
-      ? "sağlıklı"
+      ? t(locale, "iskonto.kpi.status_good", "sağlıklı")
       : tone === "warn"
-      ? "yüksek — incele"
-      : "sektör ortalaması";
+      ? t(locale, "iskonto.kpi.status_warn", "yüksek — incele")
+      : t(locale, "iskonto.kpi.status_neutral", "sektör ortalaması");
 
   return (
     <div className="v3-dcard">
       <div className="head">
-        <div className="title">İskonto Yatırımı</div>
-        <div className="sub">Son 30g · Fatura başlığı bazlı</div>
+        <div className="title">{t(locale, "iskonto.kpi.title", "İskonto Yatırımı")}</div>
+        <div className="sub">{t(locale, "iskonto.kpi.sub", "Son 30g · Fatura başlığı bazlı")}</div>
       </div>
 
       <div className="hero">
@@ -43,15 +50,15 @@ export function DiscountKpiCard({ kpi }: { kpi: WietnauerDiscountKpi }) {
 
       <div className="flow">
         <div className="flow-row">
-          <span className="flow-label">Brüt ciro</span>
+          <span className="flow-label">{t(locale, "iskonto.kpi.brut", "Brüt ciro")}</span>
           <span className="flow-val">₺{formatCompact(kpi.brut)}</span>
         </div>
         <div className="flow-row neg">
-          <span className="flow-label">− İskonto</span>
+          <span className="flow-label">{t(locale, "iskonto.kpi.minus", "− İskonto")}</span>
           <span className="flow-val">₺{formatCompact(kpi.iskonto)}</span>
         </div>
         <div className="flow-row total">
-          <span className="flow-label">Net ciro</span>
+          <span className="flow-label">{t(locale, "iskonto.kpi.net", "Net ciro")}</span>
           <span className="flow-val">₺{formatCompact(kpi.net)}</span>
         </div>
       </div>

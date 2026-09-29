@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useLocale } from "@/components/locale/LocaleProvider";
+import { t } from "@/lib/i18n";
 
 type Props = {
   /** Kart başlığı (örn. "Nasıl hesaplandı?") */
@@ -25,7 +27,9 @@ type Props = {
  * Erişilebilirlik: <button type="button"> + aria-label. Esc + dış tıklama
  * kapatır. Focus trap yok (popover küçük, dismissible).
  */
-export function InfoHint({ title = "Nasıl hesaplandı?", source, window, base, notes, sql }: Props) {
+export function InfoHint({ title, source, window, base, notes, sql }: Props) {
+  const { locale } = useLocale();
+  const resolvedTitle = title ?? t(locale, "komuta.infohint.default_title", "Nasıl hesaplandı?");
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
 
@@ -51,7 +55,7 @@ export function InfoHint({ title = "Nasıl hesaplandı?", source, window, base, 
       <button
         type="button"
         className={`ih-btn${open ? " open" : ""}`}
-        aria-label={title}
+        aria-label={resolvedTitle}
         aria-expanded={open}
         onClick={(e) => {
           e.stopPropagation();
@@ -62,13 +66,13 @@ export function InfoHint({ title = "Nasıl hesaplandı?", source, window, base, 
       </button>
       {open && (
         <div className="ih-popover" role="dialog">
-          <div className="ih-pop-title">{title}</div>
+          <div className="ih-pop-title">{resolvedTitle}</div>
           <dl className="ih-pop-list">
-            <dt>Kaynak</dt>
+            <dt>{t(locale, "komuta.infohint.source", "Kaynak")}</dt>
             <dd>{source}</dd>
-            <dt>Pencere</dt>
+            <dt>{t(locale, "komuta.infohint.window", "Pencere")}</dt>
             <dd>{window}</dd>
-            <dt>Baz</dt>
+            <dt>{t(locale, "komuta.infohint.base", "Baz")}</dt>
             <dd>{base}</dd>
           </dl>
           {notes && notes.length > 0 && (
@@ -80,7 +84,7 @@ export function InfoHint({ title = "Nasıl hesaplandı?", source, window, base, 
           )}
           {sql && (
             <details className="ih-pop-sql">
-              <summary>SQL özeti</summary>
+              <summary>{t(locale, "komuta.infohint.sql_summary", "SQL özeti")}</summary>
               <pre>{sql}</pre>
             </details>
           )}

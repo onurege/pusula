@@ -24,9 +24,12 @@ import { sqlNow } from "./now.js";
 import { currentDate } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getLocalDb } from "./local-db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getProductBreakdownMeta, getTenantConfig } from "./tenant/index.js";
+import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
+import { productBreakdownJoin, productBreakdownTableSql } from "./tenant/product-breakdown-sql.js";
 import { fileURLToPath } from "node:url";
 import { cityFactClause, cityCacheTag } from "./auth.js";
+import { computeVisitOrderRisk, type VisitOrderRiskCfg } from "./map.js";
 
 const CACHE_DOMAIN = "wietnauer-aktivasyon";
 // v4: cache-key scope fragmentation düzeltmesi (VYK-01) — MSSQL fetcher'lar
@@ -141,9 +144,11 @@ type ActiveCustomers90dRawRow = {
  * hesaplanabilsin diye. `f.LNGDISTKOD` her satırda mevcut.
  */
 async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<ActiveCustomers90dRawRow[]> {
-  // Segment = müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD →
-  // TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige/Premium/Premium Plus/Standart/
-  // Standart Plus/Off Trade C&PS Tedarikçi vb.).
+  // Segment = müşteri grup kırılımı: TBLMUSTERI.<joinColumn> →
+  // <table>.<labelColumn> (Prestige/Premium/Premium Plus/Standart/Standart
+  // Plus/Off Trade C&PS Tedarikçi vb.). Tablo/kolon tenant config'ten
+  // (`resolveIdentifier` doğrulamalı — Faz 0 C1).
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH aktif AS (
       SELECT DISTINCT f.LNGMUSTERIKOD AS musteri_id, f.LNGDISTKOD AS dist_id
@@ -169,12 +174,12 @@ async function fetchActiveCustomers90dRaw(cities?: string[] | null): Promise<Act
       c.dist_id,
       CASE WHEN a.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_aktif,
       CASE WHEN o.musteri_id IS NOT NULL THEN 1 ELSE 0 END AS is_onceki,
-      ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS segment
+      ${customerBreakdownLabelExpr(kirilimMeta, "segment")}
     FROM combos c
     LEFT JOIN aktif a ON a.musteri_id = c.musteri_id AND a.dist_id = c.dist_id
     LEFT JOIN onceki o ON o.musteri_id = c.musteri_id AND o.dist_id = c.dist_id
     LEFT JOIN dbo.TBLMUSTERI m ON m.LNGKOD = c.musteri_id
-    LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+    ${customerBreakdownJoin(kirilimMeta)}
   `;
   // ~8-9K distinct müşteri (90g aktif) — wietnauer-stok.ts cardinality ile
   // aynı mertebede.
@@ -227,13 +232,7 @@ type SilentCustomerRawRow = Omit<SilentCustomer, "sessizGun"> & { distId: number
  * API'de hesaplanır.
  */
 async function fetchSilentCustomersRaw(cities?: string[] | null): Promise<SilentCustomerRawRow[]> {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   const sql = `
     WITH son_90 AS (
@@ -286,7 +285,7 @@ async function fetchSilentCustomersRaw(cities?: string[] | null): Promise<Silent
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin(productMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, -90, ${sqlNow()})
@@ -367,13 +366,7 @@ async function fetchStrategicBrandSilenceRaw(
 ): Promise<StrategicBrandSilenceRawRow[]> {
   if (strategicBrands.length === 0) return [];
 
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
+  const productMeta = getProductBreakdownMeta();
 
   // Marka isim listesi inline SQL'e quote-escape ile yazılır — SQL injection
   // emniyeti: tek tek REPLACE ile tek tırnak kaçırma.
@@ -384,7 +377,7 @@ async function fetchStrategicBrandSilenceRaw(
   const sql = `
     WITH strat AS (
       SELECT TXTKOD, TXTAD
-      FROM dbo.${brandTable}
+      FROM ${productBreakdownTableSql(productMeta)}
       WHERE UPPER(TXTAD) IN (${escaped.toUpperCase()})
     ),
     son_90 AS (
@@ -398,7 +391,7 @@ async function fetchStrategicBrandSilenceRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
+      INNER JOIN strat b ON b.TXTKOD = u.${productMeta.joinColumn}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -90, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
@@ -415,7 +408,7 @@ async function fetchStrategicBrandSilenceRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN strat b ON b.TXTKOD = u.${joinCol}
+      INNER JOIN strat b ON b.TXTKOD = u.${productMeta.joinColumn}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= DATEADD(day, -180, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}
@@ -484,7 +477,12 @@ function citySqliteFilter(cities: string[] | null | undefined): string {
   return `AND TRIM(sehir) IN (${esc})`;
 }
 
-function fetchRiskTierDistribution(
+/**
+ * Composite risk tier dağılımı (healthy/watch/risk/critical/unknown) — SQLite
+ * tek-pass GROUP BY, `risk_tier_v2` bake edilmiş kolonundan. Pernod/fmcg-demo
+ * (composite tenant'lar) bu yolu kullanır — AYNEN korunur.
+ */
+function fetchCompositeRiskTierDistribution(
   allowedDistKods: number[] | null,
   cities: string[] | null,
 ): RiskTierBucket[] {
@@ -520,6 +518,85 @@ function fetchRiskTierDistribution(
     // map_customers henüz oluşturulmamış olabilir → fail-soft.
     return [];
   }
+}
+
+/** md13 — "visit-order" risk modeli dağılım penceresi. Bu panel kullanıcı
+ *  seçili bir dönem taşımadığından (5 panelli sabit snapshot) 30g'de sabit —
+ *  DB doğrulaması bu pencereyle yapıldı (bkz. fonksiyon dokümantasyonu). */
+const RISK_DISTRIBUTION_WINDOW_DAYS = 30;
+
+/**
+ * "visit-order" risk modeli (`tenant.riskModel === "visit-order"` — bugün
+ * Wietnauer) için tier dağılımı: `risk_tier_v2` (composite) GROUP BY YERİNE
+ * müşteri başına bake edilmiş `days_since_last_visit`/`days_since_last_order`
+ * çekilip JS'te `computeVisitOrderRisk` ile bucketlanır — birkaç bin satır,
+ * ucuz (DB doğrulandı, bkz. brief madde 13).
+ *
+ * Pencere `RISK_DISTRIBUTION_WINDOW_DAYS` (30g) sabit — dağılım kanıtı:
+ * 🔴 red 3956 / 🟠 orange 129 / 🟡 yellow 5866 / 🟢 green 5067 (toplam 15018,
+ * `scripts/probe-a2-scratch.ts` ile canlı ölçüldü, bkz. Faz A2 raporu).
+ */
+function fetchVisitOrderRiskTierDistribution(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+  riskConfig: VisitOrderRiskCfg,
+): RiskTierBucket[] {
+  const db = getLocalDb(DEFAULT_REPO_ROOT);
+  try {
+    const distFilter =
+      allowedDistKods == null
+        ? ""
+        : allowedDistKods.length === 0
+          ? "AND 1=0"
+          : `AND dist_kod IN (${allowedDistKods.join(",")})`;
+    const rows = db
+      .prepare(
+        `SELECT days_since_last_visit AS dVisit, days_since_last_order AS dOrder
+         FROM map_customers
+         WHERE 1=1 ${distFilter} ${citySqliteFilter(cities)}`,
+      )
+      .all() as Array<{ dVisit: number | null; dOrder: number | null }>;
+
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const { tier } = computeVisitOrderRisk(
+        { daysSinceLastVisit: r.dVisit ?? null, daysSinceLastOrder: r.dOrder ?? null },
+        riskConfig,
+      );
+      counts.set(tier, (counts.get(tier) ?? 0) + 1);
+    }
+    const toplam = rows.length;
+    return [...counts.entries()].map(([tier, sayi]) => ({
+      tier,
+      musteriSayi: sayi,
+      payPct: toplam > 0 ? (sayi / toplam) * 100 : 0,
+    }));
+  } catch {
+    // map_customers henüz oluşturulmamış olabilir → fail-soft.
+    return [];
+  }
+}
+
+/**
+ * D) Risk Tier Dağılımı — tenant modeline göre iki paralel yoldan biri
+ * (Strangler Fig): composite tenant'lar (Pernod/fmcg-demo) AYNEN eski yolu
+ * kullanır; `riskModel: "visit-order"` seçen tenant'lar (Wietnauer) canlı
+ * `computeVisitOrderRisk` bucketlamasına geçer.
+ */
+function fetchRiskTierDistribution(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+): RiskTierBucket[] {
+  const tenant = getTenantConfig();
+  if (tenant.riskModel === "visit-order") {
+    const cfg: VisitOrderRiskCfg = {
+      priority: tenant.riskConfig?.priority ?? "visit",
+      riskTiers: tenant.riskConfig?.riskTiers ?? ["red", "orange"],
+      windowDays: RISK_DISTRIBUTION_WINDOW_DAYS,
+    };
+    return fetchVisitOrderRiskTierDistribution(allowedDistKods, cities, cfg);
+  }
+  return fetchCompositeRiskTierDistribution(allowedDistKods, cities);
 }
 
 /**

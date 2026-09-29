@@ -12,10 +12,13 @@
  *     distId gönderse bile kendi izinli dist'lerinin dışına çıkamaz
  *   - `distFilterClause`: SQL'e `AND <alias> IN (...)` enjekte eder
  *
- * Şifre doğrulama: Univera şifreleri statik-anahtar AES-128-ECB ile şifreli
- * (base64, 16 byte tek blok, salt yok). Anahtar `UNIVERA_PW_KEY` env
- * değişkeninden gelir; verilmezse veya boot self-test'i tutmazsa DEMO MODU'na
- * düşer (kullanıcı aktifse şifre kontrol edilmez — text-to-sql davranışı).
+ * Şifre doğrulama: Univera şifreleri `clsString.CustomEncrypt` şemasıyla
+ * saklanır — AES-128-CBC, sabit public key/IV (`P@ssw0rd`/`%1Az=-@qT`), cp1252,
+ * PKCS7, base64 (bkz. `univeraCustomEncrypt`). Doğrulama app'te
+ * `encrypt(girilen) === stored` ile yapılır; env anahtarı GEREKMEZ. Şema
+ * self-test'i (`pwReady`) tutmazsa doğrulama FAIL-CLOSED'dur (giriş reddedilir);
+ * eski "demo modu = her şifre kabul" davranışı kaldırılmıştır. (Yalnız
+ * `demoData` tenant'ları ayrı bir statik `DEMO_LOGIN_*` yolu kullanır.)
  */
 import crypto from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
@@ -72,6 +75,12 @@ export type UserSession = {
   role: UserRole;
   /** Kullanıcının erişebildiği aktif distribütör kodları. */
   allowedDistKods: number[];
+  /**
+   * Çok-DB kurulumunda (login'de DB seçimi) seçili veritabanı kimliği
+   * (`TenantConfig.databases[].id`). Tek-DB tenant'larda undefined. JWT'ye
+   * gömülür → sonraki her istek bu DB'ye yönlenir (bkz. `request-context.ts`).
+   */
+  dbId?: string;
 };
 
 /**
@@ -87,103 +96,79 @@ export type TenantScope =
   | { type: "dist"; distKods: number[]; cities: string[] | null };
 
 // ---------------------------------------------------------------------------
-// Şifre doğrulama (AES-128-ECB pluggable + demo fallback)
+// Şifre doğrulama — Univera legacy CustomEncrypt (AES-128-CBC, sabit key/IV)
 // ---------------------------------------------------------------------------
+//
+// Panorama, TBLKULLANICI.TXTPASSWORD'u Univera'nın clsString.CustomEncrypt
+// (Univera.Framework.Extensions.dll, 2015) şemasıyla saklar:
+//   AES-128-CBC · PKCS7 · sabit anahtar "P@ssw0rd"+0 (16B) · sabit IV
+//   "%1Az=-@qT"+0 (16B) · düz metin cp1252(≈latin1) · çıktı base64.
+// Anahtar ve IV programa gömülü, herkese açık sabitlerdir (gerçek gizlilik
+// değil, eski-veri uyumluluğu) — bu yüzden env anahtarı GEREKMEZ. Doğrulama:
+// encrypt(girilen) === stored (sabit IV → deterministik). Şema kaynak spec'in
+// test vektörleriyle bit-bazında doğrulandı; "321" → SELFTEST_CIPHER boot'ta
+// teyit edilir.
+//
+// cp1252 notu: Türkçe'ye özgü ğ ş İ ı harfleri cp1252'de yoktur (orijinal DLL
+// bunları '?' yapar); şifreler tipik olarak ASCII olduğundan latin1 yeterli.
 
-// Bilinen açık/şifreli çift — anahtar doğru yüklendiğinde boot self-test'i.
+/** clsString.CustomEncrypt'in "zaten base64 ise dokunma" kısayolu. */
+function looksBase64(s: string): boolean {
+  const t = s.replace(/[ \t\r\n]/g, "");
+  return t.length > 0 && t.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(t);
+}
+
+// Sabit anahtar/IV — 16 bayta sıfırla sağdan doldurulur (Rijndael min 128 bit).
+const PW_KEY = ((): Buffer => {
+  const b = Buffer.alloc(16);
+  Buffer.from("P@ssw0rd", "latin1").copy(b);
+  return b;
+})();
+const PW_IV = ((): Buffer => {
+  const b = Buffer.alloc(16);
+  Buffer.from("%1Az=-@qT", "latin1").copy(b);
+  return b;
+})();
+
+/**
+ * Univera clsString.CustomEncrypt birebir taklidi. Girdi geçerli base64 ise
+ * (orijinal kısayol) olduğu gibi döner; aksi halde AES-128-CBC/PKCS7 ile
+ * şifreleyip base64 döner.
+ */
+export function univeraCustomEncrypt(plain: string): string {
+  if (looksBase64(plain)) return plain;
+  const c = crypto.createCipheriv("aes-128-cbc", PW_KEY, PW_IV);
+  return Buffer.concat([c.update(Buffer.from(plain, "latin1")), c.final()]).toString("base64");
+}
+
+// Bilinen açık/şifreli çift — boot self-test'i (CustomEncrypt CBC vektörü).
 const SELFTEST_PLAIN = "321";
 const SELFTEST_CIPHER = "NHZI8nQ3ijIGZVRW2jwShg==";
 
-/** UNIVERA_PW_KEY'i hex / base64 / utf8 olarak yorumlayıp 16/24/32 bayta çevir. */
-function loadPwKey(): Buffer | null {
-  const raw = process.env.UNIVERA_PW_KEY;
-  if (!raw) return null;
-  // hex mi?
-  if (/^[0-9a-fA-F]+$/.test(raw) && (raw.length === 32 || raw.length === 48 || raw.length === 64)) {
-    return Buffer.from(raw, "hex");
-  }
-  // base64 mü? (16/24/32 bayta çözülüyorsa)
-  try {
-    const b = Buffer.from(raw, "base64");
-    if ([16, 24, 32].includes(b.length)) return b;
-  } catch {
-    /* düş */
-  }
-  // ham utf8 (16/24/32 karakter)
-  if ([16, 24, 32].includes(Buffer.byteLength(raw, "utf8"))) {
-    return Buffer.from(raw, "utf8");
-  }
-  return null;
-}
-
-function aesEcbEncryptBase64(plain: string, key: Buffer, enc: BufferEncoding): string | null {
-  const algo = key.length === 16 ? "aes-128-ecb" : key.length === 24 ? "aes-192-ecb" : "aes-256-ecb";
-  try {
-    const c = crypto.createCipheriv(algo, key, null);
-    c.setAutoPadding(true);
-    return Buffer.concat([c.update(Buffer.from(plain, enc)), c.final()]).toString("base64");
-  } catch {
-    return null;
-  }
-}
-
-let pwModeCache: { mode: "aes"; key: Buffer; enc: BufferEncoding } | { mode: "demo" } | null = null;
-
-/**
- * Şifre modunu bir kez çöz: geçerli anahtar + self-test tutan encoding varsa
- * "aes", yoksa "demo". Sonuç cache'lenir (process ömrü boyunca).
- */
-function resolvePwMode(): { mode: "aes"; key: Buffer; enc: BufferEncoding } | { mode: "demo" } {
-  if (pwModeCache) return pwModeCache;
-  const key = loadPwKey();
-  if (key) {
-    for (const enc of ["utf8", "utf16le"] as BufferEncoding[]) {
-      if (aesEcbEncryptBase64(SELFTEST_PLAIN, key, enc) === SELFTEST_CIPHER) {
-        console.log(`[auth] Şifre doğrulama AKTİF (AES-ECB, ${enc}). Self-test geçti.`);
-        pwModeCache = { mode: "aes", key, enc };
-        return pwModeCache;
-      }
+let pwSelftestOk: boolean | null = null;
+/** Şema self-test'ini bir kez koşar; tutmazsa doğrulama fail-closed olur. */
+function pwReady(): boolean {
+  if (pwSelftestOk === null) {
+    pwSelftestOk = univeraCustomEncrypt(SELFTEST_PLAIN) === SELFTEST_CIPHER;
+    if (pwSelftestOk) {
+      console.log("[auth] Şifre doğrulama AKTİF (Univera CustomEncrypt, AES-128-CBC). Self-test geçti.");
+    } else {
+      console.error(
+        "[auth] ŞİFRE SELF-TEST TUTMADI — CustomEncrypt beklenen vektörü üretmedi; tüm girişler reddedilecek.",
+      );
     }
   }
-
-  // Anahtar yok veya self-test tutmadı → demo moduna düşülecek. Üretimde bu,
-  // "her şifre kabul edilir" demek olduğundan varsayılan olarak durdurulur;
-  // yalnızca ALLOW_DEMO_AUTH=1 ile bilinçli override edilebilir.
-  const isProd = process.env.NODE_ENV === "production";
-  const demoOverride = process.env.ALLOW_DEMO_AUTH === "1";
-  const reason = key
-    ? "UNIVERA_PW_KEY verildi ama self-test tutmadı (321 → beklenen cipher üretilemedi)"
-    : "UNIVERA_PW_KEY yok";
-
-  if (isProd && !demoOverride) {
-    throw new Error(
-      `UNIVERA_PW_KEY üretimde zorunlu — şifre doğrulaması yapılamıyor (${reason}). ` +
-        "Bilinçli olarak demo moduna izin vermek için ALLOW_DEMO_AUTH=1 ayarlayın.",
-    );
-  }
-
-  if (isProd && demoOverride) {
-    console.warn(
-      `[auth] ÜRETİMDE DEMO MODU AÇIK (ALLOW_DEMO_AUTH=1) — ${reason}. Aktif kullanıcı için şifre doğrulanmıyor. Bu bilinçli bir override.`,
-    );
-  } else {
-    console.warn(`[auth] ${reason} — DEMO MODU: aktif kullanıcı için şifre doğrulanmaz. Üretimde anahtarı ekleyin.`);
-  }
-
-  pwModeCache = { mode: "demo" };
-  return pwModeCache;
+  return pwSelftestOk;
 }
 
 /**
- * Girilen şifreyi DB'deki şifreli değerle karşılaştır.
- * - AES modu: encrypt(girilen) === stored
- * - Demo modu: her zaman true (çağıran, kullanıcının aktifliğini ayrıca kontrol eder)
+ * Girilen şifreyi DB'deki şifreli değerle karşılaştır: encrypt(girilen) ===
+ * stored. Env anahtarı gerekmez (şema sabit). Self-test tutmazsa fail-closed
+ * — eski "demo modu = her şifre kabul" davranışı kaldırıldı.
  */
 export function verifyUniveraPassword(plain: string, storedCipher: string | null): boolean {
-  const mode = resolvePwMode();
-  if (mode.mode === "demo") return true;
-  if (!storedCipher) return false;
-  return aesEcbEncryptBase64(plain, mode.key, mode.enc) === storedCipher.trim();
+  if (!storedCipher || !pwReady()) return false;
+  return univeraCustomEncrypt(plain) === storedCipher.trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -196,8 +181,8 @@ function escapeSqlLiteral(s: string): string {
 
 /**
  * Kullanıcıyı doğrula. Başarılıysa oturum bilgisini döner, aksi halde null.
- * Şifre AES modunda gerçek doğrulanır; demo modunda yalnızca kullanıcının
- * aktif (BYTDURUM=0) olması yeterlidir.
+ * Şifre `verifyUniveraPassword` ile gerçek doğrulanır (fail-closed); yalnız
+ * `demoData` tenant'ları ayrı statik `DEMO_LOGIN_*` yoluyla girer.
  */
 export async function authenticateUser(
   username: string,
@@ -283,6 +268,7 @@ export async function signSession(user: UserSession): Promise<string> {
     displayName: user.displayName,
     role: user.role,
     allowedDistKods: user.allowedDistKods,
+    dbId: user.dbId ?? null,
   })
     .setProtectedHeader({ alg: "HS256" })
     .setExpirationTime("24h")
@@ -299,6 +285,7 @@ export async function verifySession(token: string | null | undefined): Promise<U
       displayName: (payload.displayName as string | null) ?? null,
       role: payload.role as UserRole,
       allowedDistKods: (payload.allowedDistKods as number[]) ?? [],
+      dbId: (payload.dbId as string | null) ?? undefined,
     };
   } catch {
     return null;

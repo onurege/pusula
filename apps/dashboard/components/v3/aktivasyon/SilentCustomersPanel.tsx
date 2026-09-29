@@ -9,16 +9,19 @@ import type { SilentCustomer } from "./types";
  * + sessizleştiği gün sayısı + bölge bilgisi.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
+export function SilentCustomersPanel({ items, locale = "tr" }: { items: SilentCustomer[]; locale?: Locale }) {
   if (panelHidden("panel.risk.silent")) return null;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.risk.silent", "Sessizleşen Müşteriler")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.risk.silent", t(locale, "panel.risk.silent", "Sessizleşen Müşteriler"))}</div>
           <div className="v3-panel-sub">
-            Önceki 90g aktif ama son 90g sıfır · {items.length} müşteri
+            {locale === "en"
+              ? `Active in the previous 90d but zero in the last 90d · ${items.length} customers`
+              : `Önceki 90g aktif ama son 90g sıfır · ${items.length} müşteri`}
           </div>
         </div>
       </div>
@@ -27,19 +30,19 @@ export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
         <table className="v3-table">
           <thead>
             <tr>
-              <th>Müşteri</th>
-              <th>Şehir</th>
-              <th>Son Satış</th>
-              <th className="num">Sessiz Gün</th>
-              <th className="num">Önceki 90g Ciro</th>
-              <th>Son Marka</th>
+              <th>{t(locale, "col.musteri_th", "Müşteri")}</th>
+              <th>{locale === "en" ? "City" : "Şehir"}</th>
+              <th>{locale === "en" ? "Last Sale" : "Son Satış"}</th>
+              <th className="num">{locale === "en" ? "Silent Days" : "Sessiz Gün"}</th>
+              <th className="num">{locale === "en" ? "Previous 90d Revenue" : "Önceki 90g Ciro"}</th>
+              <th>{locale === "en" ? "Last Brand" : "Son Marka"}</th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 && (
               <tr>
                 <td colSpan={6} className="empty">
-                  Bu dönem için sessizleşen müşteri yok.
+                  {locale === "en" ? "No customers went silent this period." : "Bu dönem için sessizleşen müşteri yok."}
                 </td>
               </tr>
             )}
@@ -49,7 +52,7 @@ export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
                   {c.unvan.length > 48 ? c.unvan.slice(0, 45) + "…" : c.unvan}
                 </td>
                 <td>{c.sehir || "—"}</td>
-                <td className="num">{formatDate(c.sonSatisTarihi)}</td>
+                <td className="num">{formatDate(c.sonSatisTarihi, locale)}</td>
                 <td className="num">
                   <span
                     className="silent-days"
@@ -57,7 +60,7 @@ export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
                       color: c.sessizGun > 150 ? "#dc2626" : c.sessizGun > 120 ? "#d97706" : "var(--color-fg)",
                     }}
                   >
-                    {c.sessizGun}g
+                    {c.sessizGun}{locale === "en" ? "d" : "g"}
                   </span>
                 </td>
                 <td className="num">₺{formatCompact(c.oncekiCiro)}</td>
@@ -92,10 +95,10 @@ export function SilentCustomersPanel({ items }: { items: SilentCustomer[] }) {
   );
 }
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null, locale: Locale = "tr"): string {
   if (!iso) return "—";
   try {
-    return new Date(iso).toLocaleDateString("tr-TR", {
+    return new Date(iso).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
       day: "2-digit",
       month: "short",
       year: "2-digit",

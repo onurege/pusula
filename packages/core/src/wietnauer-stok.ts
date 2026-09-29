@@ -9,7 +9,10 @@
 import { withCache } from "./cache.js";
 import { runReadOnly } from "./db.js";
 import { currentDate, demoDate, sqlNow } from "./now.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getProductBreakdownMeta, getRegionBreakdownMeta } from "./tenant/index.js";
+import { PRODUCT_BREAKDOWN_TABLES, PRODUCT_BREAKDOWN_JOIN_COLUMNS } from "./tenant/identifier.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
+import { regionBreakdownJoin, regionBreakdownLabelExpr } from "./tenant/region-breakdown-sql.js";
 
 const CACHE_DOMAIN = "wietnauer-stok";
 const CACHE_VERSION = "v5";
@@ -204,18 +207,26 @@ export type WietnauerStockSnapshot = {
 
 type RawStockRow = Record<string, unknown>;
 
+/**
+ * Marka meta'sı Faz B'den itibaren `getProductBreakdownMeta()` (→
+ * `resolveProductBreakdown`, allowlist + admin-override) üzerinden gelir.
+ * `categoryTable`/`categoryJoinCol` — brandTable'ın "diğer" ikilisi — ürün
+ * kırılımının PARÇASI değil (konfigüratör yalnız markayı, admin panelden
+ * seçilebilir kılar); zaten allowlist'ten geçmiş `brandTable`'dan türetildiği
+ * için o da güvenlidir (iki değerden biri her zaman `PRODUCT_BREAKDOWN_TABLES`
+ * üyesi).
+ */
 function getBrandAndCategoryMeta() {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const brandJoinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(brandJoinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${brandJoinCol}`);
+  const meta = getProductBreakdownMeta();
+  const brandTable = meta.table;
+  const brandJoinCol = meta.joinColumn;
 
-  const categoryTable = brandTable === "TBLURUNGRUP" ? "TBLURUNEKGRUP" : "TBLURUNGRUP";
+  const categoryTable =
+    brandTable === PRODUCT_BREAKDOWN_TABLES[1] ? PRODUCT_BREAKDOWN_TABLES[0] : PRODUCT_BREAKDOWN_TABLES[1];
   const categoryJoinCol =
-    brandJoinCol === "TXTURUNGRUPKOD" ? "TXTURUNEKGRUPKOD" : "TXTURUNGRUPKOD";
+    brandJoinCol === PRODUCT_BREAKDOWN_JOIN_COLUMNS[1]
+      ? PRODUCT_BREAKDOWN_JOIN_COLUMNS[0]
+      : PRODUCT_BREAKDOWN_JOIN_COLUMNS[1];
   return { brandTable, brandJoinCol, categoryTable, categoryJoinCol };
 }
 
@@ -568,8 +579,7 @@ async function fetchStockRows(
   const { brandTable, brandJoinCol, categoryTable, categoryJoinCol } = getBrandAndCategoryMeta();
   // Bölge etiketi tenant'a göre TERS: Pernod TBLDISTGRUP(TXTGRUP), Wietnauer
   // TBLDISTEKGRUP(TXTEKGRUP). (komuta/saha ile aynı desen.)
-  const distRegionTable = getTenantConfig().distRegionTable ?? "TBLDISTGRUP";
-  const distRegionColumn = getTenantConfig().distRegionColumn ?? "TXTGRUP";
+  const regionMeta = getRegionBreakdownMeta();
   // Dist filter için WHERE fragment'ları — SQL injection risksiz (parametre int).
   const stockDistFilter = distIdFilter != null
     ? `AND ((f.LNGDISTKOD = ${distIdFilter}) OR (h.LNGDISTKOD = ${distIdFilter}))`
@@ -726,12 +736,12 @@ async function fetchStockRows(
     FROM combos cb
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = cb.sku_id AND u.BYTDURUM = 0
     INNER JOIN dbo.TBLDIST dst ON dst.LNGKOD = cb.dist_id
-    LEFT JOIN dbo.${distRegionTable} dg ON dg.TXTKOD = dst.${distRegionColumn}
+    ${regionBreakdownJoin(regionMeta, "dst", "dg", "LEFT")}
     LEFT JOIN stock st ON st.sku_id = cb.sku_id AND st.dist_id = cb.dist_id
     LEFT JOIN sales s ON s.sku_id = cb.sku_id AND s.dist_id = cb.dist_id
     LEFT JOIN open_orders oo ON oo.sku_id = cb.sku_id AND oo.dist_id = cb.dist_id
     LEFT JOIN lead_times lt ON lt.dist_id = cb.dist_id
-    LEFT JOIN dbo.${brandTable} b ON b.TXTKOD = u.${brandJoinCol}
+    ${productBreakdownJoin({ table: brandTable, joinColumn: brandJoinCol, labelColumn: "TXTAD" }, { joinType: "LEFT" })}
     LEFT JOIN dbo.${categoryTable} c ON c.TXTKOD = u.${categoryJoinCol}
     ORDER BY
       -- Yaklaşık ön-sıralama; kısa custom pencerelerde WINDOW_DAYS sabit

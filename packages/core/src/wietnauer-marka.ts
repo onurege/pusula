@@ -3,7 +3,8 @@
  *
  * Pernod'dan TERS yapı: Wietnauer'da `TBLURUNGRUP` = marka (JAGERMEISTER,
  * BELUGA, MACALLAN…), `TBLURUNEKGRUP` = kategori (VISKI, VODKA, CIN…).
- * Bu modül `tenant.brandTable` / `brandJoinColumn` soyutlamasını kullanır;
+ * Bu modül `getProductBreakdownMeta()` (`dimensions.productBreakdown` — Faz B
+ * öncesi `tenant.brandTable`/`brandJoinColumn`) soyutlamasını kullanır;
  * Pernod'da da aynı şema ile çalışır (sadece tablolar yer değiştirir).
  *
  * Sayfaya beslediği 5 panel:
@@ -21,7 +22,8 @@
 import { withCache } from "./cache.js";
 import { sqlNow, resolveWindowBounds } from "./now.js";
 import { runReadOnly } from "./db.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getProductBreakdownMeta } from "./tenant/index.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
 import { foldOther, sumBy } from "./fold-other.js";
 import { cityFactClause, cityCacheTag } from "./auth.js";
 
@@ -136,18 +138,14 @@ export type WietnauerMarkaSnapshot = {
 // ---------- Helpers ---------------------------------------------------------
 
 /**
- * Tenant config'inden brandTable + joinColumn'u alıp doğrular. SQL string
- * interpolation'a girmeden önce hardcoded enum güvencesi.
+ * Tenant config'inden brandTable + joinColumn'u alıp doğrular. Faz B:
+ * `getProductBreakdownMeta()` (→ `resolveProductBreakdown`, `tenant/
+ * identifier.ts`) SQL string interpolasyonuna girmeden önce hem allowlist
+ * hem admin-panel-override desteği sağlar.
  */
 function getBrandTableMeta() {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
-  return { brandTable, joinCol };
+  const meta = getProductBreakdownMeta();
+  return { brandTable: meta.table, joinCol: meta.joinColumn };
 }
 
 function buildStratSet(strategicBrands: string[]): Set<string> {
@@ -187,7 +185,7 @@ async function fetchBrandPortfolioRaw(win: { lower: string; upper: string }, cit
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin({ table: brandTable, joinColumn: joinCol, labelColumn: "TXTAD" })}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= ${win.lower}
       AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
@@ -321,7 +319,7 @@ async function fetchTopSkusRaw(win: { lower: string; upper: string }, cities?: s
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin({ table: brandTable, joinColumn: joinCol, labelColumn: "TXTAD" })}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= ${win.lower}
       AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
@@ -460,7 +458,7 @@ async function fetchBrandPenetrationRaw(win: { lower: string; upper: string }, c
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin({ table: brandTable, joinColumn: joinCol, labelColumn: "TXTAD" })}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= ${win.lower}
       AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
@@ -620,7 +618,7 @@ async function fetchStrategicBrandsDetailRaw(
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      ${productBreakdownJoin({ table: brandTable, joinColumn: joinCol, labelColumn: "TXTAD" })}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND f.TRHISLEMTARIHI >= ${win.lower}
         AND f.TRHISLEMTARIHI <  ${win.upper}
@@ -807,7 +805,7 @@ async function fetchBrand3MonthYtdRaw(cities?: string[] | null): Promise<BrandWi
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-    INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+    ${productBreakdownJoin({ table: brandTable, joinColumn: joinCol, labelColumn: "TXTAD" })}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= DATEFROMPARTS(YEAR(${sqlNow()}), 1, 1)
       AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})${cityFactClause(cities)}

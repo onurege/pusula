@@ -5,6 +5,10 @@ import { getLocalDb } from "./local-db.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince } from "./tr-regions.js";
 import { getTenantConfig } from "./tenant/index.js";
 import { distFilterClause, type TenantScope } from "./auth.js";
+// `RiskTier` ismi bu dosyada zaten eski 4-tier model için kullanılıyor
+// (satır ~47) — tenant tarafındaki "visit-order" tier setiyle (red/orange/
+// yellow/green) çakışmasın diye alias'lanır.
+import type { RiskTier as VisitOrderRiskTier, RiskConfig } from "./tenant/types.js";
 
 /**
  * `allowedDistKods` (null → merkez, dizi → dist scope) SQLite `dist_kod`
@@ -74,6 +78,10 @@ export type MapCustomer = {
   daysSinceLastSale: number | null;
   /** Days since most recent recorded visit. NULL = never visited. */
   daysSinceLastVisit: number | null;
+  /** Days since most recent order (TBLMSDSIPARIS, BYTTUR=0 AND BYTDURUM=0).
+   *  NULL = never ordered. `daysSinceLastVisit`'in ikizi — "visit-order" risk
+   *  modelinin (madde 13) ikinci sinyali; composite modeli etkilemez. */
+  daysSinceLastOrder: number | null;
   /** 30-day ciro and the prior 30-day ciro — feed momentum view. */
   ciro30: number;
   ciroPrev30: number;
@@ -91,12 +99,31 @@ export type MapCustomer = {
    * devam eder.
    */
   activityCiro: number;
+  /**
+   * md13 — `activityDays` penceresine göre hesaplanan hacim (Σ miktar ×
+   * TBLURUN.DBLLITRE). `activityCiro`'nun hacim ikizi — aynı 30/60/90
+   * pencere birleştirme mantığı (60g = 0-30 + 30-60, 90g = ayrıca toplanan
+   * sync-zamanı 90g toplamı).
+   */
+  activityHacim: number;
   /** @deprecated Tek-tier eski model. Yeni UI `riskScore.tier` kullanır.
    *  Sync hâlâ doldurur; geriye dönük uyumluluk için bir süre kalır. */
   riskTier: RiskTier;
   /** Composite Risk Score (0..100) + bileşen kırılımı + sebepler.
-   *  Sync zamanı `computeCustomerRiskScore` ile hesaplanır. */
+   *  Sync zamanı `computeCustomerRiskScore` ile hesaplanır. Tenant modeli
+   *  ne olursa olsun HER ZAMAN bake edilir/döner (Strangler Fig — composite
+   *  Pernod/fmcg'de birincil kalır, wietnauer'da `visitOrderRisk` yanında
+   *  ikincil/legacy bilgi olarak durur). */
   riskScore: CustomerRiskScore;
+  /**
+   * "visit-order" risk modeli (madde 13, `riskModel: "visit-order"` seçen
+   * tenant'lar — bugün yalnız Wietnauer) sonucu; `computeVisitOrderRisk` ile
+   * İSTEK ANINDA (bake edilmez) hesaplanır — bake edilen yalnız girdiler
+   * (`daysSinceLastVisit`/`daysSinceLastOrder`), pencere/öncelik/scope
+   * ekran filtresine göre değişebildiği için sonuç sabitlenmez.
+   * Composite tenant'larda (`riskModel !== "visit-order"`) her zaman `null`.
+   */
+  visitOrderRisk: VisitOrderRiskResult | null;
 };
 
 /**
@@ -563,6 +590,89 @@ function reasonForComponent(
   }
 }
 
+// ---------------------------------------------------------------------------
+// "visit-order" Risk Modeli (madde 13 — Strangler Fig, composite'in YANINDA)
+// ---------------------------------------------------------------------------
+//
+// Composite model (yukarıda) 4 ağırlıklı bileşenden 0..100 bir skor üretir;
+// bazı tenant'lar (bugün: Wietnauer) için bu fazla soyut kaldı — kullanıcı
+// yalnız iki somut sinyal istedi: "bu müşteriye X gündür UĞRANMADI MI" ve
+// "X gündür SİPARİŞ VERMEDİ Mİ". `riskModel: "visit-order"` seçen tenant'lar
+// bu modeli kullanır; composite SİLİNMEZ (Pernod/fmcg-demo AYNEN kalır).
+
+/**
+ * `RiskConfig` (tenant/types.ts) BİLEREK pencereyi taşımaz — pencere ekranda
+ * seçilen dönemden (30/60/90g) gelir, tenant config'e sabitlenmez (bkz.
+ * `RiskConfig` dokümantasyonu). `computeVisitOrderRisk` ikisini birleştirmiş
+ * haliyle çağrılır; bu yüzden `RiskConfig & { windowDays }` — `types.ts`'e
+ * dokunulmadan (Faz A2 kapsamı dışı) `RiskConfig`'in yapısal bir üst-kümesi.
+ */
+export type VisitOrderRiskCfg = RiskConfig & {
+  /** Ekranda seçili aktivite penceresi (gün) — `activityDays` ile aynı
+   *  whitelist (30/60/90). */
+  windowDays: number;
+};
+
+export type VisitOrderRiskResult = {
+  /** kötüden iyiye: red (ziyaret YOK + sipariş YOK) → orange (ziyaret YOK,
+   *  sipariş var) → yellow (ziyaret var, sipariş YOK) → green (ikisi de var).
+   *  Tier ismi aynı zamanda UI rengidir (kırmızı/turuncu/sarı/yeşil). */
+  tier: VisitOrderRiskTier;
+  /** 0/40/60/100 — `cfg.priority`'ye göre ağırlıklandırılmış "eksik sinyal"
+   *  skoru (bkz. fonksiyon dokümantasyonu). Tier'ı DEĞİŞTİRMEZ, yalnız
+   *  şiddeti ifade eder. */
+  score: number;
+  /** `cfg.riskTiers` bu tier'ı kapsıyor mu — dashboard'un "risk" filtresi/
+   *  sayacı bunu kullanır. */
+  isRisk: boolean;
+  /** TR açıklama — "<pencere>g içinde ziyaret YOK/var, sipariş YOK/var". */
+  reason: string;
+};
+
+/**
+ * "visit-order" risk modelinin saf hesaplayıcısı — DB'ye dokunmaz, sync
+ * zamanı bake edilen `daysSinceLastVisit`/`daysSinceLastOrder` girdilerinden
+ * İSTEK ANINDA (`listMapCustomers`) çağrılır; böylece pencere/öncelik/scope
+ * ekran filtresi değiştiğinde yeniden sync gerekmez.
+ *
+ * Tier — kötüden iyiye, iki ikili sinyalin 4 kombinasyonu:
+ *   red    = ziyaret YOK + sipariş YOK   (ikisi de pencerede yok)
+ *   orange = ziyaret YOK + sipariş VAR
+ *   yellow = ziyaret VAR + sipariş YOK
+ *   green  = ziyaret VAR + sipariş VAR   (ikisi de pencerede var)
+ *
+ * Skor — `cfg.priority` hangi sinyalin ağırlığının 0.6 (diğeri 0.4) olacağını
+ * seçer (varsayılan öncelik "visit"): eksik olan birincil sinyal skoru 0.6,
+ * ikincil 0.4 artırır; ikisi eksikse skor her zaman 100, ikisi de varsa 0 —
+ * yalnız tek sinyal eksikken (orange/yellow) `priority` skorun 40 mı 60 mı
+ * olacağını belirler (tier'ı DEĞİŞTİRMEZ).
+ */
+export function computeVisitOrderRisk(
+  input: { daysSinceLastVisit: number | null; daysSinceLastOrder: number | null },
+  cfg: VisitOrderRiskCfg,
+): VisitOrderRiskResult {
+  const { daysSinceLastVisit: dVisit, daysSinceLastOrder: dOrder } = input;
+  const noVisit = !(dVisit != null && dVisit <= cfg.windowDays);
+  const noOrder = !(dOrder != null && dOrder <= cfg.windowDays);
+
+  let tier: VisitOrderRiskTier;
+  if (noVisit && noOrder) tier = "red";
+  else if (noVisit && !noOrder) tier = "orange";
+  else if (!noVisit && noOrder) tier = "yellow";
+  else tier = "green";
+
+  const orderIsPrimary = cfg.priority === "order";
+  const primaryMissing = (orderIsPrimary ? noOrder : noVisit) ? 1 : 0;
+  const secondaryMissing = (orderIsPrimary ? noVisit : noOrder) ? 1 : 0;
+  const score = Math.round(100 * (0.6 * primaryMissing + 0.4 * secondaryMissing));
+
+  const reason =
+    `${cfg.windowDays}g içinde ziyaret ${noVisit ? "YOK" : "var"}, ` +
+    `sipariş ${noOrder ? "YOK" : "var"}`;
+
+  return { tier, score, isRisk: cfg.riskTiers.includes(tier), reason };
+}
+
 export type MapCustomerFilters = {
   sehir?: string;
   distKod?: number;
@@ -604,6 +714,25 @@ export type MapCustomerFilters = {
   allowedDistKods?: number[] | null;
   /** Şehir-bazlı veri izolasyonu (kullanıcı yetkisi). null → kısıt yok. */
   allowedCities?: string[] | null;
+  /**
+   * md13 — "visit-order" risk modeli (yalnız `tenant.riskModel ===
+   * "visit-order"` — bugün Wietnauer) için ekran-bazlı override'lar.
+   * Composite tenant'larda (Pernod/fmcg-demo) YOK SAYILIR, hiçbir etkisi
+   * yoktur. Verilmezse tenant'ın `riskConfig` varsayılanı kullanılır.
+   *
+   * Sunucu-otoriter whitelist parse — `isActivityDays`/`isRiskPriority`/
+   * `isVisitOrderTierArray` guard'larından geçmeyen değerler yok sayılır
+   * (regresyonsuz düşüş, `activityDays` ile AYNI desen).
+   */
+  riskPriority?: "visit" | "order";
+  /** Hangi tier'lar "risk" sayılır (`VisitOrderRiskResult.isRisk`).
+   *  Verilmezse `tenant.riskConfig.riskTiers`. */
+  riskTiersInScope?: VisitOrderRiskTier[];
+  /** visit-order risk penceresi (gün) — `activityDays` ile AYNI whitelist
+   *  (30/60/90). Verilmezse `activityDays` (verilmemişse 30) kullanılır —
+   *  yani ekranın dönem seçicisi risk penceresini de sürükler, ayrıca
+   *  seçilmek istenirse bu alanla override edilebilir. */
+  riskWindowDays?: 30 | 60 | 90;
 };
 
 /** md11 dönem filtresi — yalnızca bu üç değer kabul edilir. */
@@ -612,6 +741,28 @@ type ActivityDays = (typeof ACTIVITY_DAY_OPTIONS)[number];
 
 function isActivityDays(n: unknown): n is ActivityDays {
   return typeof n === "number" && (ACTIVITY_DAY_OPTIONS as readonly number[]).includes(n);
+}
+
+/** md13 — "visit-order" risk modeli öncelik whitelist'i. */
+function isRiskPriority(v: unknown): v is "visit" | "order" {
+  return v === "visit" || v === "order";
+}
+
+const VISIT_ORDER_TIER_OPTIONS: readonly VisitOrderRiskTier[] = [
+  "red",
+  "orange",
+  "yellow",
+  "green",
+];
+
+/** md13 — "visit-order" risk modeli `riskTiers` whitelist'i (boş olmayan,
+ *  yalnızca bilinen 4 tier'dan oluşan dizi). */
+function isVisitOrderTierArray(v: unknown): v is VisitOrderRiskTier[] {
+  return (
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every((x) => (VISIT_ORDER_TIER_OPTIONS as readonly string[]).includes(x as string))
+  );
 }
 
 export type MapFacets = {
@@ -746,9 +897,13 @@ export async function listMapCustomers(
            ilce, distributor, bolge, lat, lng, has_sales AS hasSales,
            days_since_last_sale  AS daysSinceLastSale,
            days_since_last_visit AS daysSinceLastVisit,
+           days_since_last_order AS daysSinceLastOrder,
            ciro_30d              AS ciro30,
            ciro_prev_30d         AS ciroPrev30,
            ciro_t90              AS ciroT90,
+           hacim_30d             AS hacim30,
+           hacim_prev_30d        AS hacimPrev30,
+           hacim_t90             AS hacimT90,
            risk_tier             AS riskTier,
            risk_score            AS riskScore,
            risk_tier_v2          AS riskTierV2,
@@ -779,9 +934,13 @@ export async function listMapCustomers(
     hasSales: number;
     daysSinceLastSale: number | null;
     daysSinceLastVisit: number | null;
+    daysSinceLastOrder: number | null;
     ciro30: number | null;
     ciroPrev30: number | null;
     ciroT90: number | null;
+    hacim30: number | null;
+    hacimPrev30: number | null;
+    hacimT90: number | null;
     riskTier: string | null;
     riskScore: number | null;
     riskTierV2: string | null;
@@ -801,6 +960,34 @@ export async function listMapCustomers(
     if (activityDays === 90) return r.ciroT90 ?? 0;
     return r.ciro30 ?? 0;
   };
+  // md13 — `activityCiro`'nun hacim ikizi, AYNI pencere birleştirme mantığı.
+  const activityHacimFor = (r: { hacim30: number | null; hacimPrev30: number | null; hacimT90: number | null }): number => {
+    if (activityDays === 60) return (r.hacim30 ?? 0) + (r.hacimPrev30 ?? 0);
+    if (activityDays === 90) return r.hacimT90 ?? 0;
+    return r.hacim30 ?? 0;
+  };
+
+  // md13 — "visit-order" risk modeli yalnız `riskModel: "visit-order"` seçen
+  // tenant'larda (bugün Wietnauer) devreye girer; composite tenant'larda
+  // (Pernod/fmcg-demo) `riskCfg` null kalır → `visitOrderRisk` her satırda
+  // null döner, mevcut davranış AYNEN korunur (Strangler Fig, regresyonsuz).
+  const tenant = getTenantConfig();
+  const riskCfg: VisitOrderRiskCfg | null =
+    tenant.riskModel === "visit-order"
+      ? {
+          priority: isRiskPriority(filters.riskPriority)
+            ? filters.riskPriority
+            : (tenant.riskConfig?.priority ?? "visit"),
+          riskTiers: isVisitOrderTierArray(filters.riskTiersInScope)
+            ? filters.riskTiersInScope
+            : (tenant.riskConfig?.riskTiers ?? ["red", "orange"]),
+          // Açıkça verilmemişse ekranın dönem seçicisini (activityDays)
+          // takip eder — kullanıcı ayrıca risk penceresini override edebilir.
+          windowDays: isActivityDays(filters.riskWindowDays)
+            ? filters.riskWindowDays
+            : activityDays,
+        }
+      : null;
 
   return rows.map((r) => ({
     id: r.id,
@@ -819,12 +1006,20 @@ export async function listMapCustomers(
     hasSales: r.hasSales === 1,
     daysSinceLastSale: r.daysSinceLastSale ?? null,
     daysSinceLastVisit: r.daysSinceLastVisit ?? null,
+    daysSinceLastOrder: r.daysSinceLastOrder ?? null,
     ciro30: r.ciro30 ?? 0,
     ciroPrev30: r.ciroPrev30 ?? 0,
     activityDays,
     activityCiro: activityCiroFor(r),
+    activityHacim: activityHacimFor(r),
     riskTier: (r.riskTier as RiskTier) ?? "low",
     riskScore: rehydrateRiskScore(r),
+    visitOrderRisk: riskCfg
+      ? computeVisitOrderRisk(
+          { daysSinceLastVisit: r.daysSinceLastVisit ?? null, daysSinceLastOrder: r.daysSinceLastOrder ?? null },
+          riskCfg,
+        )
+      : null,
   }));
 }
 
@@ -1290,6 +1485,58 @@ export async function syncMapData(
       FROM dbo.TBLPMPZIYARETBASLIK AS z
       WHERE z.TRHGIRIS IS NOT NULL
       GROUP BY z.LNGMUSTERIKOD
+    ),
+    -- md7 — harita hacim (Σ miktar × TBLURUN.DBLLITRE). "ciro_30"/"ciro_prev_30"/
+    -- "ciro_t90"'ın BİREBİR ikizi — aynı 3-tablo JOIN + aynı üst-sınırlı pencere
+    -- deseni (probe ölçümü: her biri <1sn, sync-time, request path'te MSSQL yok).
+    hacim_30 AS (
+      SELECT f.LNGMUSTERIKOD, SUM(bd.DBLMIKTAR * u.DBLLITRE) AS hacim
+      FROM dbo.TBLMSDFATURA AS f
+      INNER JOIN dbo.TBLMSDBELGEDETAY AS bd
+        ON bd.LNGYIL = f.LNGYIL
+       AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND bd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN AS u ON u.LNGKOD = bd.LNGURUNKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    hacim_prev_30 AS (
+      SELECT f.LNGMUSTERIKOD, SUM(bd.DBLMIKTAR * u.DBLLITRE) AS hacim
+      FROM dbo.TBLMSDFATURA AS f
+      INNER JOIN dbo.TBLMSDBELGEDETAY AS bd
+        ON bd.LNGYIL = f.LNGYIL
+       AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND bd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN AS u ON u.LNGKOD = bd.LNGURUNKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    hacim_t90 AS (
+      SELECT f.LNGMUSTERIKOD, SUM(bd.DBLMIKTAR * u.DBLLITRE) AS hacim
+      FROM dbo.TBLMSDFATURA AS f
+      INNER JOIN dbo.TBLMSDBELGEDETAY AS bd
+        ON bd.LNGYIL = f.LNGYIL
+       AND bd.LNGFATURAKOD = f.LNGBELGEKOD
+       AND bd.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN AS u ON u.LNGKOD = bd.LNGURUNKOD
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -90, GETDATE())
+        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, GETDATE())
+      GROUP BY f.LNGMUSTERIKOD
+    ),
+    -- md13 — "visit-order" risk modelinin 2. sinyali ("son_ziyaret"'in
+    -- ikizi). Sınırsız MAX (tüm zamanların son siparişi) — daysSinceLastOrder
+    -- için gerekli; DB doğrulandı (TBLMSDSIPARIS BYTTUR=0/BYTDURUM=0 en yaygın
+    -- kombinasyon, ~164K satır).
+    son_siparis AS (
+      SELECT sp.LNGMUSTERIKOD, MAX(sp.TRHISLEMTARIHI) AS son
+      FROM dbo.TBLMSDSIPARIS AS sp
+      WHERE sp.BYTTUR = 0 AND sp.BYTDURUM = 0
+      GROUP BY sp.LNGMUSTERIKOD
     )
     SELECT
       m.LNGKOD       AS id,
@@ -1314,6 +1561,7 @@ export async function syncMapData(
       CASE WHEN c30.LNGMUSTERIKOD IS NULL THEN 0 ELSE 1 END AS hasSales,
       CASE WHEN s.son IS NULL THEN NULL ELSE DATEDIFF(day, s.son, GETDATE()) END AS daysSinceLastSale,
       CASE WHEN z.son IS NULL THEN NULL ELSE DATEDIFF(day, z.son, GETDATE()) END AS daysSinceLastVisit,
+      CASE WHEN so.son IS NULL THEN NULL ELSE DATEDIFF(day, so.son, GETDATE()) END AS daysSinceLastOrder,
       ISNULL(c30.ciro,   0)   AS ciro30,
       ISNULL(c30.fatura, 0)   AS fatura30,
       ISNULL(cp30.ciro,  0)   AS ciroPrev30,
@@ -1323,7 +1571,10 @@ export async function syncMapData(
       ISNULL(cyoy.ciro,  0)   AS ciroYoy30,
       ISNULL(ug30.grupSayi,  0) AS urunGrup30,
       ISNULL(ugp30.grupSayi, 0) AS urunGrupPrev30,
-      ISNULL(z.ziyaret90, 0)    AS ziyaret90
+      ISNULL(z.ziyaret90, 0)    AS ziyaret90,
+      ISNULL(h30.hacim,  0)   AS hacim30,
+      ISNULL(hp30.hacim, 0)   AS hacimPrev30,
+      ISNULL(ht90.hacim, 0)   AS hacimT90
     FROM dbo.TBLMUSTERI AS m
     LEFT JOIN dbo.TBLDIST    AS d   ON d.LNGKOD = m.LNGDISTKOD
     LEFT JOIN dbo.TBLDISTEKGRUP AS g  ON g.TXTKOD = d.TXTEKGRUP
@@ -1335,6 +1586,10 @@ export async function syncMapData(
     LEFT JOIN urun_grup_30     AS ug30  ON ug30.LNGMUSTERIKOD  = m.LNGKOD
     LEFT JOIN urun_grup_prev_30 AS ugp30 ON ugp30.LNGMUSTERIKOD = m.LNGKOD
     LEFT JOIN son_ziyaret      AS z    ON z.LNGMUSTERIKOD    = m.LNGKOD
+    LEFT JOIN son_siparis      AS so   ON so.LNGMUSTERIKOD   = m.LNGKOD
+    LEFT JOIN hacim_30         AS h30  ON h30.LNGMUSTERIKOD  = m.LNGKOD
+    LEFT JOIN hacim_prev_30    AS hp30 ON hp30.LNGMUSTERIKOD = m.LNGKOD
+    LEFT JOIN hacim_t90        AS ht90 ON ht90.LNGMUSTERIKOD = m.LNGKOD
     -- md19: sadece AKTİF müşteri + AKTİF distribütör altındakiler.
     -- Pasif müşteri (m.BYTDURUM) veya pasif/eksik dist (d.BYTDURUM) haritaya
     -- girmesin — aksi halde nokta sayısı gerçek aktiften fazla çıkıyordu.
@@ -1368,22 +1623,24 @@ export async function syncMapData(
     INSERT INTO map_customers
       (id, dist_kod, unvan, kisa_ad, musteri_kodu, takip_kodu, adres, sehir, ilce, distributor, bolge,
        lat, lng, has_sales,
-       days_since_last_sale, days_since_last_visit,
+       days_since_last_sale, days_since_last_visit, days_since_last_order,
        ciro_30d, ciro_prev_30d, risk_tier,
        ciro_t90, ciro_yoy_30d,
        fatura_30d, fatura_prev_30d, fatura_t90,
        urun_grup_30d, urun_grup_prev_30d,
        ziyaret_90d,
+       hacim_30d, hacim_prev_30d, hacim_t90,
        risk_score, risk_tier_v2, risk_components, risk_reasons)
     VALUES
       (@id, @distKod, @unvan, @kisaAd, @musteriKodu, @takipKodu, @adres, @sehir, @ilce, @distributor, @bolge,
        @lat, @lng, @hasSales,
-       @daysSinceLastSale, @daysSinceLastVisit,
+       @daysSinceLastSale, @daysSinceLastVisit, @daysSinceLastOrder,
        @ciro30, @ciroPrev30, @riskTier,
        @ciroT90, @ciroYoy30d,
        @fatura30, @faturaPrev30, @faturaT90,
        @urunGrup30, @urunGrupPrev30,
        @ziyaret90,
+       @hacim30, @hacimPrev30, @hacimT90,
        @riskScore, @riskTierV2, @riskComponents, @riskReasons)
   `);
   const insCity = db.prepare("INSERT OR IGNORE INTO map_cities (sehir) VALUES (?)");
@@ -1396,6 +1653,7 @@ export async function syncMapData(
     for (const r of customersRes.rows) {
       const daysSinceLastSale = r.daysSinceLastSale == null ? null : Number(r.daysSinceLastSale);
       const daysSinceLastVisit = r.daysSinceLastVisit == null ? null : Number(r.daysSinceLastVisit);
+      const daysSinceLastOrder = r.daysSinceLastOrder == null ? null : Number(r.daysSinceLastOrder);
       const ciro30 = Number(r.ciro30 ?? 0);
       const ciroPrev30 = Number(r.ciroPrev30 ?? 0);
       const ciroT90 = Number(r.ciroT90 ?? 0);
@@ -1406,6 +1664,9 @@ export async function syncMapData(
       const urunGrup30 = Number(r.urunGrup30 ?? 0);
       const urunGrupPrev30 = Number(r.urunGrupPrev30 ?? 0);
       const ziyaret90 = Number(r.ziyaret90 ?? 0);
+      const hacim30 = Number(r.hacim30 ?? 0);
+      const hacimPrev30 = Number(r.hacimPrev30 ?? 0);
+      const hacimT90 = Number(r.hacimT90 ?? 0);
 
       // Yeni composite skor — saf JS fonksiyonu, MSSQL'e geri dönmez
       const score = computeCustomerRiskScore({
@@ -1440,6 +1701,7 @@ export async function syncMapData(
         hasSales: Number(r.hasSales) === 1 ? 1 : 0,
         daysSinceLastSale,
         daysSinceLastVisit,
+        daysSinceLastOrder,
         ciro30,
         ciroPrev30,
         riskTier: computeRiskTier({
@@ -1456,6 +1718,9 @@ export async function syncMapData(
         urunGrup30,
         urunGrupPrev30,
         ziyaret90,
+        hacim30,
+        hacimPrev30,
+        hacimT90,
         riskScore: score.score,
         riskTierV2: score.tier,
         riskComponents: JSON.stringify(score.components),

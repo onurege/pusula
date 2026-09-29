@@ -1,4 +1,5 @@
 import type { KomutaMatrixRow, ProductTier, ValueUnit } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { InfoHint } from "../InfoHint";
 import { Val, truncate, trendEmoji } from "../format";
 
@@ -15,6 +16,9 @@ export function MatrixPanel({
   matrix: KomutaMatrixRow[];
   unit?: ValueUnit;
 }) {
+  // Hacim birimi tenant'a göre değişir (Pernod "9L", Wietnauer "70cl") —
+  // sabit fallback YOK, tenant-nötr KISIT'i.
+  const volumeShort = getTenantConfig().volume.short;
   return (
     <div className="panel matrix-panel">
       <div className="panel-header">
@@ -56,18 +60,18 @@ export function MatrixPanel({
                   {truncate(row.grup, 28)}
                   <TierBadge tier={row.tier} />
                 </td>
-                <td className="matrix-cell-current"><Val n={row.buAy} unit={unit} /></td>
-                <td><Val n={row.gecenAy} unit={unit} /></td>
-                <td><Val n={row.ucAyOnce} unit={unit} /></td>
+                <td className="matrix-cell-current"><Val n={row.buAy} unit={unit} volumeShort={volumeShort} /></td>
+                <td><Val n={row.gecenAy} unit={unit} volumeShort={volumeShort} /></td>
+                <td><Val n={row.ucAyOnce} unit={unit} volumeShort={volumeShort} /></td>
                 <td>
-                  <Val n={row.gecenYil} unit={unit} />
+                  <Val n={row.gecenYil} unit={unit} volumeShort={volumeShort} />
                   {row.yoyPct != null && (
                     <span className={`delta-pill ${row.yoyPct >= 0 ? "up" : "down"}`}>
                       {row.yoyPct >= 0 ? "+" : ""}%{row.yoyPct.toFixed(0)}
                     </span>
                   )}
                 </td>
-                <td><Val n={row.ikiYilOnce} unit={unit} /></td>
+                <td><Val n={row.ikiYilOnce} unit={unit} volumeShort={volumeShort} /></td>
                 <td>{trendEmoji(row.trend)}</td>
               </tr>
             ))}

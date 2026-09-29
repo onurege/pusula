@@ -3,10 +3,12 @@
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useTransition } from "react";
 import type { WietnauerStockDistributorSummary } from "@/lib/api";
+import { t, type Locale } from "@/lib/i18n";
 
 type Props = {
   distributors: WietnauerStockDistributorSummary[];
   selectedDistId: number | null;
+  locale?: Locale;
 };
 
 /**
@@ -17,7 +19,7 @@ type Props = {
  * Distribütörler kritik+risk sayısına göre azalan sırada gelir; kullanıcı
  * ilk açtığında en yüksek risk taşıyan dist'i görür.
  */
-export function StokDistSelect({ distributors, selectedDistId }: Props) {
+export function StokDistSelect({ distributors, selectedDistId, locale = "tr" }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -42,7 +44,7 @@ export function StokDistSelect({ distributors, selectedDistId }: Props) {
   return (
     <div className="stok-dist-select">
       <label htmlFor="dist-select" className="lbl">
-        Distribütör
+        {t(locale, "col.distributor", "Distribütör")}
       </label>
       <select
         id="dist-select"
@@ -52,7 +54,9 @@ export function StokDistSelect({ distributors, selectedDistId }: Props) {
         className="sel"
       >
         <option value="all">
-          Tümü — portföy toplamı ({totalCritical} kritik+risk)
+          {locale === "en"
+            ? `All — portfolio total (${totalCritical} critical+risk)`
+            : `Tümü — portföy toplamı (${totalCritical} kritik+risk)`}
         </option>
         {distributors.map((d) => {
           const alarm = d.criticalCount + d.riskCount;
@@ -62,14 +66,16 @@ export function StokDistSelect({ distributors, selectedDistId }: Props) {
               {d.distName}
               {regionTxt}
               {" — "}
-              {alarm > 0 ? `${alarm} kritik+risk` : "sağlıklı"}
+              {alarm > 0
+                ? `${alarm} ${locale === "en" ? "critical+risk" : "kritik+risk"}`
+                : locale === "en" ? "healthy" : "sağlıklı"}
               {" · "}
               {d.skuCount} SKU
             </option>
           );
         })}
       </select>
-      {isPending && <span className="loading">yükleniyor…</span>}
+      {isPending && <span className="loading">{t(locale, "donem.loading", "yükleniyor…")}</span>}
 
       <style
         dangerouslySetInnerHTML={{

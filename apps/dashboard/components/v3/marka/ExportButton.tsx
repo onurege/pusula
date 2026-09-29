@@ -2,6 +2,7 @@
 
 import { FileSpreadsheet } from "lucide-react";
 import type { MarkaPortfolioRow, TopSkuRow } from "./types";
+import { t, type Locale } from "@/lib/i18n";
 
 /**
  * md28 — "Excel'e Aktar" butonu, Marka & SKU sayfası.
@@ -18,9 +19,11 @@ import type { MarkaPortfolioRow, TopSkuRow } from "./types";
 export function MarkaSkuExportButton({
   portfolio,
   topSkus,
+  locale = "tr",
 }: {
   portfolio: MarkaPortfolioRow[];
   topSkus: TopSkuRow[];
+  locale?: Locale;
 }) {
   function handleExport() {
     const csv = buildCsv(portfolio, topSkus);
@@ -43,11 +46,11 @@ export function MarkaSkuExportButton({
     <button
       type="button"
       onClick={handleExport}
-      title="Marka portföyü ve Top SKU tablolarını CSV olarak indir (Excel'de doğrudan açılır)"
+      title={t(locale, "marka.export_title", "Marka portföyü ve Top SKU tablolarını CSV olarak indir (Excel'de doğrudan açılır)")}
       className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-md text-[11px] font-semibold border bg-surface-2 text-fg-2 border-border transition-colors hover:border-accent/40 hover:text-accent"
     >
       <FileSpreadsheet size={12} />
-      Excel&rsquo;e Aktar
+      {t(locale, "marka.export", "Excel'e Aktar")}
     </button>
   );
 }

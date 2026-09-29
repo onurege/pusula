@@ -13,7 +13,15 @@ import {
 import { currentDate, demoDate, sqlNow } from "./now.js";
 import { canonicalProvince, loadRegionMaster, normalizeProvince, regionForCitySync } from "./tr-regions.js";
 import { distFilterClause, cityFactClause, cityCacheTag, type TenantScope } from "./auth.js";
-import { getTenantConfig } from "./tenant/index.js";
+import { getTenantConfig, getCustomerBreakdownMeta, getProductBreakdownMeta, getRegionBreakdownMeta } from "./tenant/index.js";
+import {
+  customerBreakdownJoin,
+  customerBreakdownLabelExpr,
+  customerBreakdownFacetSql,
+  customerBreakdownFilterClause,
+} from "./tenant/customer-breakdown-sql.js";
+import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
+import { regionBreakdownJoin, regionBreakdownCodeExpr, regionBreakdownLabelExpr } from "./tenant/region-breakdown-sql.js";
 import { foldOther, sumBy } from "./fold-other.js";
 
 /**
@@ -34,6 +42,94 @@ import { foldOther, sumBy } from "./fold-other.js";
  */
 
 const CACHE_DOMAIN = "komuta";
+
+// ---------------------------------------------------------------------------
+// md1 — Periyot → gün sayısı eşlemesi (Cockpit global periyot dropdown)
+// ---------------------------------------------------------------------------
+//
+// `KomutaPeriyotDropdown.tsx` kodları ("30g"/"p3"/"p6"/"p12"/"ytd") burada
+// `getKomutaSnapshot({ periodDays })` girdisine çevrilir — server.ts/page.tsx
+// bu fonksiyonu çağırıp sonucu core'a geçirir (core kendi URL/query param
+// bilmez). Bilinmeyen/boş kod → 30 (KPI şeridinin bugünkü sabit "-30 gün"
+// davranışı — mevcut davranış AYNEN korunur).
+
+export type KomutaPeriyotKodu = "30g" | "p3" | "p6" | "p12" | "ytd";
+
+export function periyotToPeriodDays(periyot: string | null | undefined): number {
+  switch (periyot) {
+    case "p3":
+      return 90;
+    case "p6":
+      return 180;
+    case "p12":
+      return 365;
+    case "ytd": {
+      const today = currentDate();
+      const startOfYear = new Date(today.getFullYear(), 0, 1);
+      const days = Math.round((today.getTime() - startOfYear.getTime()) / 86_400_000);
+      return Math.max(1, days);
+    }
+    case "30g":
+    default:
+      return 30;
+  }
+}
+
+/** `getKomutaSnapshot`'un varsayılan `periodDays`'i — mevcut hardcode "-30
+ *  gün" davranışını KORUR (periyot parametresi verilmezse). */
+const DEFAULT_PERIOD_DAYS = 30;
+
+/** Üst sınır — birkaç fetcher (Matrix/Portfolio/PeriodScales) "geçen yıl"/
+ *  "2 yıl önce" kıyas pencerelerini SABİT 800 günlük bir taban tarama
+ *  penceresi içinde tutar (bkz. `periodWindows`); `periyotToPeriodDays`'in
+ *  en büyük çıktısı zaten 365/366 (p12/ytd artık yıl) olduğundan bu sınır
+ *  mevcut eşlemeyle birebir uyumludur. Daha büyük bir değer (elle geçirilen
+ *  bozuk bir sayı) o taban pencereyi sessizce taşırıp veriyi kırpardı —
+ *  fail-closed olarak burada sertçe kapatılır. */
+const MAX_PERIOD_DAYS = 366;
+
+/** `options.periodDays` girdisini güvenli aralığa indirger — geçersiz
+ *  (NaN/≤0/eksik) girdi sessizce varsayılana düşer, aşırı büyük girdi
+ *  `MAX_PERIOD_DAYS`'e kırpılır (fail-closed; throw etmez — Cockpit KPI
+ *  şeridi bozuk bir query param yüzünden çökmemeli). */
+function resolvePeriodDays(periodDays: number | undefined): number {
+  if (periodDays == null || !Number.isFinite(periodDays) || periodDays <= 0) {
+    return DEFAULT_PERIOD_DAYS;
+  }
+  return Math.min(Math.floor(periodDays), MAX_PERIOD_DAYS);
+}
+
+/**
+ * md1 — periodDays'e göre standart SQL pencere sınırları (gün ofseti,
+ * `sqlNow()`'a göre, `DATEADD(day, <ofset>, ...)` şeklinde kullanılır). Tüm
+ * fetcher'lar aynı dört pencere biçimini paylaşır:
+ *   - `son`    : seçili dönem              [-periodDays, +1)
+ *   - `onceki` : bitişik ÖNCEKİ dönem      [-2×periodDays, -periodDays)  (MoM)
+ *   - `yoy`    : geçen yıl AYNI UZUNLUKTA  [-(365+periodDays), -365)
+ *   - `twoYr`  : 2 yıl önce AYNI UZUNLUKTA [-(730+periodDays), -730)
+ *
+ * Kıyas pencereleri (`onceki`/`yoy`/`twoYr`) `son` ile AYNI genişlikte
+ * tutulur — aksi halde yüzdelik kıyaslar (MoM/yoyPct/twoYrPct) farklı
+ * uzunluktaki iki pencereyi bölerdi ("yanlış/çift pencere", brief madde 1).
+ * Bir fetcher'ın kıyas HESAPLAMADIĞI, salt bilgi amaçlı sabit-tarih kolonu
+ * varsa (ör. Matrix'in "3 Ay Önce"/"2 Yıl Önce" kolonları — hiçbir yüzde
+ * bunlardan türetilmiyor) o kolon BİLİNÇLİ OLARAK burada kullanılmaz, sabit
+ * kalır (genel-trend çapası; periyottan bağımsız).
+ *
+ * `outerScanDays`: raw/CTE taramalarının bu pencerelerin EN GENİŞİNİ (`twoYr`
+ * alt sınırı) kapsaması için gereken taban gün sayısı + 40g tampon —
+ * varsayılan periodDays=30'da eski sabit `800` ile BİREBİR aynı sonucu verir
+ * (730+30+40=800).
+ */
+function periodWindows(periodDays: number) {
+  return {
+    son: { lower: -periodDays, upper: 1 },
+    onceki: { lower: -2 * periodDays, upper: -periodDays },
+    yoy: { lower: -(365 + periodDays), upper: -365 },
+    twoYr: { lower: -(730 + periodDays), upper: -730 },
+    outerScanDays: periodDays + 770,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Product tier classifier (data/brands/tier-classification.json'dan)
@@ -99,6 +195,11 @@ export type KomutaKpiCard = {
   delta?: number;
   deltaSub?: string;
 };
+
+/** Cockpit KPI şeridi çıktı dili — `insider_locale` cookie'sinden server.ts
+ *  çözer. Varsayılan "tr" — mevcut davranış AYNEN korunur. `ay` (ay kısaltma)
+ *  alanları BUNDAN ETKİLENMEZ, frontend ayrı localize ediyor. */
+export type KomutaLocale = "tr" | "en";
 
 /** Bir bölge içindeki bir şehrin (il) YoY kırılımı — Komuta haritası
  *  drill-down'unda kullanılır. */
@@ -239,7 +340,10 @@ export type KomutaUpcomingEvent = {
 export type KomutaCustomerTypeBrandCell = {
   marka: string;
   ciro: number;
+  /** Ham adet (DBLMIKTAR toplamı). */
   miktar: number;
+  /** Tenant hacim birimi (Pernod 9LE, Wietnauer 70cl) — global birim=hacim iken gösterilir. */
+  hacim: number;
 };
 
 export type KomutaCustomerTypeBrandRow = {
@@ -285,7 +389,7 @@ export type KomutaSnapshot = {
   reps: KomutaRep[];
   topDists: KomutaTopDist[];
   portfolio: KomutaPortfolioRow[];
-  /** md34 — Müşteri Tipi × Marka kırılımı (ciro + hacim), son 30g. */
+  /** md34 — Müşteri Tipi × Marka kırılımı (ciro + hacim), seçili dönem (md1: `periodDays`). */
   customerTypeBrand: KomutaCustomerTypeBrandSnapshot;
   brief?: string;
 };
@@ -298,25 +402,34 @@ async function fetchKpis(
   unit: ValueUnit,
   distClause: string,
   grupCat: string | null = null,
+  locale: KomutaLocale = "tr",
+  periodDays: number = DEFAULT_PERIOD_DAYS,
 ): Promise<KomutaKpiCard[]> {
-  // Son 30 gün vs önceki 30 gün karşılaştırma için tek seferde 4 metriği döner.
-  // SQL unit'ten bağımsız — hem ciro (TL) hem miktar (9LE) her zaman hesaplanır.
-  // Birim swap'i sadece UI çıktısında yapılır (primary KPI'nın value/label/unit'i).
+  // md1: seçili dönem vs bitişik ÖNCEKİ (aynı uzunlukta) dönem karşılaştırması
+  // için tek seferde 4 metriği döner. SQL unit'ten bağımsız — hem ciro (TL)
+  // hem miktar (9LE) her zaman hesaplanır. Birim swap'i sadece UI çıktısında
+  // yapılır (primary KPI'nın value/label/unit'i).
+  const pw = periodWindows(periodDays);
+  // md6: Ürün Grubu filtresi artık TBLURUNGRUP (Marka, ör. Macallan) — eski
+  // TBLURUNEKGRUP (Kategori) DEĞİL. Tablo/kolon tenant config'ten
+  // (resolveProductBreakdown doğrulamalı — admin override buradan geçer).
+  const productMeta = getProductBreakdownMeta();
   //
   // md2 Ürün Grubu (line-level): grupCat verilirse Net Ciro fatura başlığından
-  // (f.DBLNETTUTAR) DEĞİL, seçili kategorinin DETAY satırlarından (dk.DBLNETFIYAT)
-  // KESİN hesaplanır — 'Viski cirosu gerçekten Viski'. Fatura sayısı DISTINCT
-  // fatura, müşteri DISTINCT müşteri (detay join çoğullamasını düzeltir). Hacim
-  // ve top-marka/detay-total CTE'leri de kategoriye (u.TXTURUNEKGRUPKOD) daralır.
-  // grupCat null iken davranış birebir eskisi (fatura-tabanı). distClause burada
-  // BASE (grup EXISTS'siz) — kategori filtresi join ile uygulanır, çift filtre yok.
+  // (f.DBLNETTUTAR) DEĞİL, seçili ürün grubunun DETAY satırlarından
+  // (dk.DBLNETFIYAT) KESİN hesaplanır — 'Macallan cirosu gerçekten Macallan'.
+  // Fatura sayısı DISTINCT fatura, müşteri DISTINCT müşteri (detay join
+  // çoğullamasını düzeltir). Hacim ve top-marka/detay-total CTE'leri de ürün
+  // grubuna (u.${productMeta.joinColumn}) daralır. grupCat null iken davranış
+  // birebir eskisi (fatura-tabanı). distClause burada BASE (grup EXISTS'siz)
+  // — ürün grubu filtresi join ile uygulanır, çift filtre yok.
   const gJoin = grupCat
     ? `INNER JOIN dbo.TBLMSDBELGEDETAY dk ON dk.LNGYIL = f.LNGYIL AND dk.LNGFATURAKOD = f.LNGBELGEKOD AND dk.LNGDISTKOD = f.LNGDISTKOD
        INNER JOIN dbo.TBLURUN uk ON uk.LNGKOD = dk.LNGURUNKOD`
     : "";
-  const gWhere = grupCat ? ` AND LTRIM(RTRIM(uk.TXTURUNEKGRUPKOD)) = N'${grupCat}'` : "";
+  const gWhere = grupCat ? ` AND LTRIM(RTRIM(uk.${productMeta.joinColumn})) = N'${grupCat}'` : "";
   // miktar/top_grup/detay_total CTE'leri urun'u `u` alias'ıyla join'liyor.
-  const gWhereU = grupCat ? ` AND LTRIM(RTRIM(u.TXTURUNEKGRUPKOD)) = N'${grupCat}'` : "";
+  const gWhereU = grupCat ? ` AND LTRIM(RTRIM(u.${productMeta.joinColumn})) = N'${grupCat}'` : "";
   // detay_total urun'u join'lemiyor — kategori aktifken join ekle ki payda da
   // (top-marka payı için) o kategoriye daralsın.
   const gDetayJoin = grupCat ? "INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD" : "";
@@ -333,8 +446,8 @@ async function fetchKpis(
       FROM dbo.TBLMSDFATURA f
       ${gJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}${gWhere}
     ),
     onceki AS (
@@ -344,8 +457,8 @@ async function fetchKpis(
       FROM dbo.TBLMSDFATURA f
       ${gJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.onceki.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.onceki.upper}, ${sqlNow()})
         ${distClause}${gWhere}
     ),
     -- 9LE (9-Litre-Equivalent) — Pernod kendi resmi katsayısını TBLURUNEKSAHA
@@ -372,8 +485,8 @@ async function fetchKpis(
       LEFT JOIN dbo.TBLURUNEKSAHA ue
         ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}${gWhereU}
     ),
     miktar_onceki AS (
@@ -392,8 +505,8 @@ async function fetchKpis(
       LEFT JOIN dbo.TBLURUNEKSAHA ue
         ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -30, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.onceki.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.onceki.upper}, ${sqlNow()})
         ${distClause}${gWhereU}
     ),
     top_grup AS (
@@ -409,8 +522,8 @@ async function fetchKpis(
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}${gWhereU}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
       ORDER BY ciro DESC
@@ -427,8 +540,8 @@ async function fetchKpis(
        AND d.LNGDISTKOD = f.LNGDISTKOD
       ${gDetayJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}${gWhereU}
     )
     SELECT
@@ -466,11 +579,27 @@ async function fetchKpis(
   // md6: KPI şeridinin İLK kartı her zaman Hacim (70cl). İkinci kart TL modda
   // Net Ciro, 9LE modda toplam fatura. Birim etiketi tenant'tan (wietnauer "70cl").
   const volShort = getTenantConfig().volume.short;
+  const isEn = locale === "en";
+  // Sayılar/₺/birim token'ları (70cl, 9L) AYNI kalır — yalnız kelimeler
+  // değişir. Demo tenant'ın "ad" (adet) kısaltması EN'de "units" olur;
+  // diğer tenant'ların birim kısaltmaları (örn. wietnauer "70cl") olduğu
+  // gibi kalır (zaten dile bağlı değil).
+  const volShortDisplay = isEn && volShort === "ad" ? "units" : volShort;
+  /** TR/EN metin seçici — kısa kullanım için. */
+  const t = (tr: string, en: string) => (isEn ? en : tr);
+
+  // md1 — etiketler ARTIK sabit "30 gün" değil, seçili periodDays'i yansıtır
+  // (aksi halde 90/180/365 günlük veriye "Son 30 gün" yazmak yanıltıcı olurdu).
+  const pdTr = `${periodDays} gün`;
+  const pdEn = `${periodDays}d`;
+  const pdShortTr = `${periodDays}g`;
 
   return [
     {
       id: "hacim",
-      label: `Toplam Hacim (${volShort}) · 30 gün`,
+      label: isEn
+        ? `Total Volume (${volShortDisplay}) · ${pdEn}`
+        : `Toplam Hacim (${volShort}) · ${pdTr}`,
       value: sonAdet,
       format: "count",
       unit: volShort,
@@ -480,14 +609,16 @@ async function fetchKpis(
           : (null as never),
       deltaSub:
         oncekiAdet > 0
-          ? `vs önceki 30g (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShort})`
-          : "geçmiş veri yok",
+          ? isEn
+            ? `vs prev ${pdEn} (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShortDisplay})`
+            : `vs önceki ${pdShortTr} (${Math.round(oncekiAdet).toLocaleString("tr-TR")} ${volShort})`
+          : t("geçmiş veri yok", "no prior data"),
     },
     // İkinci KPI — TL modda Net Ciro, 9LE modda toplam fatura (hacim yukarıda).
     isVolume
       ? {
           id: "fatura",
-          label: "Toplam Fatura · 30 gün",
+          label: t(`Toplam Fatura · ${pdTr}`, `Total Invoices · ${pdEn}`),
           value: sonFatura,
           format: "count" as const,
           delta:
@@ -496,11 +627,13 @@ async function fetchKpis(
                   Number(r.onceki_fatura)) *
                 100
               : (null as never),
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura`,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura`,
         }
       : {
           id: "ciro",
-          label: "Toplam Net Ciro · 30 gün",
+          label: t(`Toplam Net Ciro · ${pdTr}`, `Total Net Revenue · ${pdEn}`),
           value: sonCiro,
           format: "compact" as const,
           unit: "₺",
@@ -510,46 +643,56 @@ async function fetchKpis(
               : (null as never),
           deltaSub:
             oncekiCiro > 0
-              ? `vs önceki 30g (${formatCompact(oncekiCiro)} ₺)`
-              : "geçmiş veri yok",
+              ? isEn
+                ? `vs prev ${pdEn} (${formatCompact(oncekiCiro)} ₺)`
+                : `vs önceki ${pdShortTr} (${formatCompact(oncekiCiro)} ₺)`
+              : t("geçmiş veri yok", "no prior data"),
         },
     {
       id: "top_marka",
-      label: "Top Marka Payı · 30 gün",
+      label: t(`Top Marka Payı · ${pdTr}`, `Top Brand Share · ${pdEn}`),
       value: topGrupPct,
       format: "percent",
-      // Görsel tutarlılık için top grup'un proportional fatura cirosunu
-      // göster (detay tabanı yerine fatura tabanı): son ciro × pay yüzdesi.
-      deltaSub: `${(r.top_grup_ad as string) ?? "—"} (${formatCompact(sonCiro * (topGrupPct / 100))} ₺)`,
+      // Görsel tutarlılık için top grup'un proportional fatura değerini göster
+      // (detay tabanı yerine fatura tabanı): son toplam × pay yüzdesi. Birim
+      // global toggle'ı takip eder — hacim modunda hacim (70cl), TL modunda ₺.
+      // Marka adı (r.top_grup_ad) veri değeri — çevrilmez, TR/EN aynı.
+      deltaSub: `${(r.top_grup_ad as string) ?? "—"} (${formatCompact((isVolume ? sonAdet : sonCiro) * (topGrupPct / 100))} ${isVolume ? volShort : "₺"})`,
     },
     {
       id: "musteri",
-      label: "Aktif Satış Noktası · 30 gün",
+      label: t(`Aktif Satış Noktası · ${pdTr}`, `Active Outlets · ${pdEn}`),
       value: sonMusteri,
       format: "count",
       delta: oncekiMusteri > 0
         ? ((sonMusteri - oncekiMusteri) / oncekiMusteri) * 100
         : null as never,
       deltaSub: oncekiMusteri > 0
-        ? `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs önceki 30g`
-        : "geçmiş veri yok",
+        ? isEn
+          ? `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs prev ${pdEn}`
+          : `${sonMusteri - oncekiMusteri >= 0 ? "+" : ""}${(sonMusteri - oncekiMusteri).toLocaleString("tr-TR")} vs önceki ${pdShortTr}`
+        : t("geçmiş veri yok", "no prior data"),
     },
     isVolume
       ? {
           id: "sepet",
-          label: "Fatura başına 9L · 30 gün",
+          label: t(`Fatura başına ${volShort} · ${pdTr}`, `${volShortDisplay} per Invoice · ${pdEn}`),
           value: sonFatura > 0 ? Math.round((sonAdet / sonFatura) * 10) / 10 : 0,
           format: "count" as const,
-          unit: "9L",
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
+          unit: volShort,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices basis`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
         }
       : {
           id: "sepet",
-          label: "Ortalama Sepet · 30 gün",
+          label: t(`Ortalama Sepet · ${pdTr}`, `Avg. Basket · ${pdEn}`),
           value: Math.round(sepet),
           format: "currency" as const,
           unit: "₺",
-          deltaSub: `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
+          deltaSub: isEn
+            ? `${sonFatura.toLocaleString("tr-TR")} invoices basis`
+            : `${sonFatura.toLocaleString("tr-TR")} fatura üzerinden`,
         },
   ];
 }
@@ -563,7 +706,11 @@ async function fetchKpis(
 // distribütör network'ü zaten bölgeye atanmış.
 // ---------------------------------------------------------------------------
 
-async function fetchRegions(unit: ValueUnit, distClause: string): Promise<KomutaRegionRow[]> {
+async function fetchRegions(
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaRegionRow[]> {
   // /map sayfası ile tutarlılık için şehir-bazlı agregasyon. TBLDISTGRUP
   // (bayi grubu adı) yerine TBLMUSTERI.TXTSEHIR (müşterinin şehri) → klasik
   // 7 bölge mapping'i yapıyoruz. Kaynak: data/geo/tr-province-region.json.
@@ -571,6 +718,11 @@ async function fetchRegions(unit: ValueUnit, distClause: string): Promise<Komuta
   // Avantaj: Pernod'un Doğu Anadolu bayi grubu olmasa bile Van/Erzurum'daki
   // müşteriler "Doğu Anadolu"ya doğru agregat olur. Alias hack'i yok,
   // resmi 81 il → 8 bölge eşlemesi tek master üzerinden.
+  //
+  // md1: "onceki" YoY penceresi (geçen yılın AYNI UZUNLUKTAKİ dönemi) "son"
+  // ile aynı genişliği (periodDays) taşır — aksi halde deltaPct farklı
+  // uzunluktaki iki toplamı bölerdi (bkz. `periodWindows`).
+  const pw = periodWindows(periodDays);
   const valueExpr = unitValueExpr(unit, {
     faturaTL: "f.DBLNETTUTAR",
     miktarAlias: "d9.DBLMIKTAR",
@@ -587,8 +739,8 @@ async function fetchRegions(unit: ValueUnit, distClause: string): Promise<Komuta
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL
         ${distClause}
       GROUP BY m.TXTSEHIR
@@ -601,8 +753,8 @@ async function fetchRegions(unit: ValueUnit, distClause: string): Promise<Komuta
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.yoy.upper}, ${sqlNow()})
         AND m.TXTSEHIR IS NOT NULL
         ${distClause}
       GROUP BY m.TXTSEHIR
@@ -708,7 +860,12 @@ async function fetchRegions(unit: ValueUnit, distClause: string): Promise<Komuta
 
 const CHANNEL_COLORS = ["#d4a857", "#58a6ff", "#c084fc", "#3fb950", "#f0c674"];
 
-async function fetchChannels(unit: ValueUnit, distClause: string): Promise<KomutaChannelSlice[]> {
+async function fetchChannels(
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaChannelSlice[]> {
+  const pw = periodWindows(periodDays);
   const valueExpr = unitValueExpr(unit, {
     faturaTL: "f.DBLNETTUTAR",
     miktarAlias: "d9.DBLMIKTAR",
@@ -716,7 +873,7 @@ async function fetchChannels(unit: ValueUnit, distClause: string): Promise<Komut
     urunAlias: "u",
   });
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
-  // Bu ay (last 30 gün) — müşteri grubuna göre Top 5 kanal
+  // md1: seçili dönem (periodDays) — müşteri grubuna göre Top 5 kanal
   const sql = `
     SELECT TOP 5
       ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Grupsuz)') AS ad,
@@ -727,8 +884,8 @@ async function fetchChannels(unit: ValueUnit, distClause: string): Promise<Komut
     ${joins}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND m.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
       ${distClause}
     GROUP BY ISNULL(NULLIF(LTRIM(RTRIM(g.TXTAD)), ''), '(Grupsuz)')
     ORDER BY ciro DESC
@@ -743,8 +900,8 @@ async function fetchChannels(unit: ValueUnit, distClause: string): Promise<Komut
     ${joins}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND m.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
       ${distClause}
   `;
   const totOut = await runReadOnly(totSql, { limit: 1, timeoutMs: 20_000 });
@@ -850,18 +1007,20 @@ async function fetchChannelByCustomerType(unit: ValueUnit, distClause: string): 
     ? `d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
     : "f.DBLNETTUTAR";
   const joins = unit9leJoins(unit, { detayAlias: "d9", faturaAlias: "f" });
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH base AS (
       SELECT
         DATEPART(year,  f.TRHISLEMTARIHI) AS yil,
         DATEPART(month, f.TRHISLEMTARIHI) AS ay,
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS kanal,
+        ${customerBreakdownLabelExpr(kirilimMeta, "kanal")},
         ${rowExpr} AS tutar
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski
-      -- ek-saha(8) müşteri tipi yerine (TBLMUSTERI.TXTGRUPKIRILIMKOD → kırılım adı).
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      -- ek-saha(8) müşteri tipi yerine. Tablo/kolon tenant config'ten
+      -- (resolveIdentifier doğrulamalı — Faz 0 C1).
+      ${customerBreakdownJoin(kirilimMeta)}
       ${joins}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
@@ -1036,23 +1195,10 @@ async function fetchUpcomingEvent(): Promise<KomutaUpcomingEvent | null> {
 /** Hacim böleni (tenant): Pernod 9LE→9, Wietnauer 70cl→1 (DBLLITRE zaten 70cl-eşdeğeri). md7. */
 function vd(): string { return String(getTenantConfig().volume.divisor ?? 9); }
 
-/**
- * Tenant config'inden marka tablosu (`brandTable`) + join kolonunu
- * (`brandJoinColumn`) alıp doğrular — SQL string interpolasyonuna girmeden
- * önce hardcoded enum güvencesi (wietnauer-marka.ts `getBrandTableMeta` ile
- * aynı desen; komuta.ts kendi kopyasını tutar, cross-module private import
- * yapılmıyor).
- */
-function getBrandTableMeta(): { brandTable: string; joinCol: string } {
-  const tenant = getTenantConfig();
-  const brandTable = tenant.brandTable;
-  const joinCol = tenant.brandJoinColumn;
-  if (!["TBLURUNEKGRUP", "TBLURUNGRUP"].includes(brandTable))
-    throw new Error(`Geçersiz brandTable: ${brandTable}`);
-  if (!["TXTURUNEKGRUPKOD", "TXTURUNGRUPKOD"].includes(joinCol))
-    throw new Error(`Geçersiz brandJoinColumn: ${joinCol}`);
-  return { brandTable, joinCol };
-}
+// `getBrandTableMeta()` (bu dosyanın eski `tenant.brandTable` hardcoded enum
+// guard'ı) Faz B'de kaldırıldı — tek çağıran (`fetchCustomerTypeBrand`) artık
+// doğrudan `getProductBreakdownMeta()` (→ `resolveProductBreakdown`, `tenant/
+// identifier.ts`) çağırıyor; admin panel override'ı bu sink'te de etkili olur.
 
 function unitValueExpr(unit: ValueUnit, opts: {
   /** Fatura toplam alias'ı (örn. `f.DBLNETTUTAR`) — TL modunda kullanılır. */
@@ -1103,35 +1249,46 @@ type PeriodScales = {
   ikiYilOnce: number;
 };
 
-async function fetchPeriodScales(distClause: string): Promise<PeriodScales> {
+async function fetchPeriodScales(
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<PeriodScales> {
+  // md1: buAy/gecenAy/gecenYil/ikiYilOnce periodDays'e göre ölçeklenir —
+  // bunlar Matrix/Portfolio'daki yüzdelik kıyaslara (yoyPct/twoYrPct) giren
+  // fatura↔detay taban dönüştürme oranları, dolayısıyla AYNI pencere
+  // genişliğinde hesaplanmaları gerekir (bkz. `periodWindows`). ucAyOnce
+  // ("3 ay önce") HİÇBİR yüzdelik kıyasta kullanılmıyor (Matrix'te salt
+  // bilgi kolonu) — genel-trend çapası olarak SABİT kalır.
+  const pw = periodWindows(periodDays);
+  const outer = pw.outerScanDays;
   const sql = `
     WITH fatura_per_period AS (
       SELECT
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS bu_fat,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -30, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS gecen_ay_fat,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS bu_fat,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.onceki.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.onceki.upper}, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS gecen_ay_fat,
         SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -120, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -90, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS uc_ay_fat,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS gecen_yil_fat,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -760, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -730, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS iki_yil_fat
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS gecen_yil_fat,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.twoYr.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.twoYr.upper}, ${sqlNow()}) THEN f.DBLNETTUTAR ELSE 0 END) AS iki_yil_fat
       FROM dbo.TBLMSDFATURA f
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -${outer}, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         ${distClause}
     ),
     detay_per_period AS (
       SELECT
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS bu_det,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -60, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -30, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS gecen_ay_det,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS bu_det,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.onceki.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.onceki.upper}, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS gecen_ay_det,
         SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -120, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -90, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS uc_ay_det,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS gecen_yil_det,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -760, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -730, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS iki_yil_det
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS gecen_yil_det,
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.twoYr.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.twoYr.upper}, ${sqlNow()}) THEN d.DBLNETFIYAT ELSE 0 END) AS iki_yil_det
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMSDBELGEDETAY d
         ON d.LNGYIL = f.LNGYIL
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -${outer}, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         ${distClause}
     )
@@ -1211,7 +1368,12 @@ function toMatrixRow(
  * deseninden farklı ama aynı sonucu üretir — burada tek pass yeterli çünkü
  * seçim kriteri [bu ay ciro] zaten aggregate sonucun bir sütunu).
  */
-async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaMatrixRow[]> {
+async function fetchMatrix(
+  scales: PeriodScales,
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaMatrixRow[]> {
   // Detay-bazlı per-row value — TL ise DBLNETFIYAT, 9LE ise DBLMIKTAR × çarpan.
   const rowExpr = unit === "9le"
     ? `d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})`
@@ -1219,8 +1381,13 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: st
   const eksahaJoin = unit === "9le"
     ? "LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26"
     : "";
-  // Tek pass, 800g pencere: TÜM ürün grupları × 5 dönem. Top-8 + "Diğer"
-  // seçimi SQL'de değil JS'de (foldOther) yapılır.
+  // md1: bu_ay/gecen_ay ("Bu Dönem"/"Önceki Dönem") + gecen_yil (yoyPct'nin
+  // paydası — toMatrixRow) periodDays'e göre ölçeklenir. uc_ay_once/
+  // iki_yil_once HİÇBİR yüzdelik hesaba girmiyor (salt görüntü kolonu) —
+  // genel-trend çapası olarak SABİT kalır (bkz. `periodWindows` üstü not).
+  const pw = periodWindows(periodDays);
+  // Tek pass, periodDays'e göre büyüyen taban pencere: TÜM ürün grupları × 5
+  // dönem. Top-8 + "Diğer" seçimi SQL'de değil JS'de (foldOther) yapılır.
   const sql = `
     WITH raw AS (
       SELECT
@@ -1237,17 +1404,17 @@ async function fetchMatrix(scales: PeriodScales, unit: ValueUnit, distClause: st
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       ${eksahaJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -${pw.outerScanDays}, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
         ${distClause}
     )
     SELECT
       grup,
-      SUM(CASE WHEN tarih >= DATEADD(day, -30, ${sqlNow()})  THEN satir ELSE 0 END) AS bu_ay,
-      SUM(CASE WHEN tarih >= DATEADD(day, -60, ${sqlNow()})  AND tarih < DATEADD(day, -30, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_ay,
+      SUM(CASE WHEN tarih >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})  THEN satir ELSE 0 END) AS bu_ay,
+      SUM(CASE WHEN tarih >= DATEADD(day, ${pw.onceki.lower}, ${sqlNow()})  AND tarih < DATEADD(day, ${pw.onceki.upper}, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_ay,
       SUM(CASE WHEN tarih >= DATEADD(day, -120, ${sqlNow()}) AND tarih < DATEADD(day, -90, ${sqlNow()}) THEN satir ELSE 0 END) AS uc_ay_once,
-      SUM(CASE WHEN tarih >= DATEADD(day, -395, ${sqlNow()}) AND tarih < DATEADD(day, -365, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_yil,
+      SUM(CASE WHEN tarih >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()}) AND tarih < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}) THEN satir ELSE 0 END) AS gecen_yil,
       SUM(CASE WHEN tarih >= DATEADD(day, -760, ${sqlNow()}) AND tarih < DATEADD(day, -730, ${sqlNow()}) THEN satir ELSE 0 END) AS iki_yil_once
     FROM raw
     GROUP BY grup
@@ -1311,13 +1478,19 @@ function heatmapBucket(yoyPct: number | null): KomutaHeatmapCell["bucket"] {
   return "cold";
 }
 
-async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<KomutaHeatmapRow[]> {
+async function fetchHeatmap(
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaHeatmapRow[]> {
   // Top bölgeler ve top gruplar tespit edilir, sonra pivot.
   // dist_grup CTE: distribütör → coğrafi bölge eşlemesi. Kaynak tenant'a göre
   // TERS: Pernod TBLDISTGRUP(TXTGRUP)=bölge, Wietnauer TBLDISTEKGRUP(TXTEKGRUP)=bölge.
-  const tenant = getTenantConfig();
-  const distRegionTable = tenant.distRegionTable ?? "TBLDISTGRUP";
-  const distRegionColumn = tenant.distRegionColumn ?? "TXTGRUP";
+  const regionMeta = getRegionBreakdownMeta();
+  // md1: bu panel TAMAMEN yoyPct'e (son vs onceki) dayanıyor (heatmapBucket) —
+  // iki pencere AYNI genişlikte olmak ZORUNDA, aksi halde renk skalası (fire/
+  // hot/cold) anlamsızlaşır. `onceki` = geçen yılın AYNI UZUNLUKTAKİ dönemi.
+  const pw = periodWindows(periodDays);
   // 9LE modunda her aggregation TBLURUNEKSAHA (saha 26) çarpanına ihtiyaç duyar.
   const valExpr = unit === "9le"
     ? `SUM(dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()}))`
@@ -1333,9 +1506,9 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
     : "";
   const sql = `
     WITH dist_grup AS (
-      SELECT d.LNGKOD AS distKod, dg.TXTKOD AS bolgeKod, dg.TXTAD AS bolge
+      SELECT d.LNGKOD AS distKod, ${regionBreakdownCodeExpr("dg", "bolgeKod")}, ${regionBreakdownLabelExpr(regionMeta, "dg", "bolge")}
       FROM dbo.TBLDIST d
-      INNER JOIN dbo.${distRegionTable} dg ON dg.TXTKOD = d.${distRegionColumn}
+      ${regionBreakdownJoin(regionMeta, "d", "dg", "INNER")}
       WHERE d.BYTDURUM = 0
     ),
     top_bolge AS (
@@ -1352,8 +1525,8 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
        AND dd.LNGDISTKOD = f.LNGDISTKOD
       ${topBolgeUrunJoin}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}
       GROUP BY dg.bolge, dg.bolgeKod
       ORDER BY ciro DESC
@@ -1372,8 +1545,8 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
         ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
@@ -1394,12 +1567,12 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       SELECT
         dg2.bolgeKod,
         ISNULL(tgk.grup, N'Diğer') AS grup,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-                  AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+                  AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
                  THEN ${unit === "9le" ? `dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})` : "dd.DBLNETFIYAT"}
                  ELSE 0 END) AS son,
-        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()})
-                  AND f.TRHISLEMTARIHI <  DATEADD(day, -365, ${sqlNow()})
+        SUM(CASE WHEN f.TRHISLEMTARIHI >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()})
+                  AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.yoy.upper}, ${sqlNow()})
                  THEN ${unit === "9le" ? `dd.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})` : "dd.DBLNETFIYAT"}
                  ELSE 0 END) AS onceki
       FROM dist_grup dg2
@@ -1413,9 +1586,9 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
       LEFT JOIN top_grup tgk ON tgk.grup = COALESCE(g.TXTAD, u.TXTAD)
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND (
-          (f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})  AND f.TRHISLEMTARIHI < DATEADD(day, 1, ${sqlNow()}))
+          (f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})  AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.son.upper}, ${sqlNow()}))
           OR
-          (f.TRHISLEMTARIHI >= DATEADD(day, -395, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, -365, ${sqlNow()}))
+          (f.TRHISLEMTARIHI >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()}) AND f.TRHISLEMTARIHI < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}))
         )
         AND dg2.bolgeKod IN (SELECT bolgeKod FROM top_bolge)
         ${distClause}
@@ -1471,7 +1644,12 @@ async function fetchHeatmap(unit: ValueUnit, distClause: string): Promise<Komuta
 // Top Satış Temsilcileri (Bölge Müdürü yerine)
 // ---------------------------------------------------------------------------
 
-async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<KomutaRep[]> {
+async function fetchTopReps(
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaRep[]> {
+  const pw = periodWindows(periodDays);
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
     ? `ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})), 0)`
@@ -1502,8 +1680,8 @@ async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<Komuta
     LEFT JOIN dbo.TBLDIST d ON d.LNGKOD = st.LNGDISTKOD
     ${joins9le}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
       AND st.TXTSTAD IS NOT NULL
       ${distClause}
     GROUP BY st.TXTSTAD, d.TXTAD
@@ -1523,7 +1701,12 @@ async function fetchTopReps(unit: ValueUnit, distClause: string): Promise<Komuta
 // Top Distribütörler — son 30g, net ciro sırası
 // ---------------------------------------------------------------------------
 
-async function fetchTopDists(unit: ValueUnit, distClause: string): Promise<KomutaTopDist[]> {
+async function fetchTopDists(
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaTopDist[]> {
+  const pw = periodWindows(periodDays);
   // 9LE modunda fatura toplamını detay × ek saha 26 ile değiştir.
   const valueExpr = unit === "9le"
     ? `ISNULL(SUM(d9.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()})), 0)`
@@ -1551,8 +1734,8 @@ async function fetchTopDists(unit: ValueUnit, distClause: string): Promise<Komut
     ${joins9le}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND d.BYTDURUM = 0
-      AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-      AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+      AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+      AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
       ${distClause}
     GROUP BY d.TXTAD, d.TXTGRUP
     ORDER BY ciro DESC
@@ -1571,7 +1754,16 @@ async function fetchTopDists(unit: ValueUnit, distClause: string): Promise<Komut
 // Marka Portföyü · 2 Yıllık Yörünge
 // ---------------------------------------------------------------------------
 
-async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause: string): Promise<KomutaPortfolioRow[]> {
+async function fetchPortfolio(
+  scales: PeriodScales,
+  unit: ValueUnit,
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaPortfolioRow[]> {
+  // md1: `bu`/`one_y`/`two_y` ÜÇÜ de periodDays'e göre AYNI genişlikte
+  // ölçeklenir — yoyPct (bu vs one_y) VE twoYrPct (bu vs two_y) ikisi de bu
+  // üç pencereyi karşılaştırıyor (bkz. `periodWindows`).
+  const pw = periodWindows(periodDays);
   // 9LE: detay miktar × ek saha 26 çarpanı; TL: detay net fiyat.
   // top10 + raw CTE'leri için ortak satır ifadesi.
   const satirExpr = unit === "9le"
@@ -1598,8 +1790,8 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         AND COALESCE(g.TXTAD, u.TXTAD) IS NOT NULL
         ${distClause}
       GROUP BY COALESCE(g.TXTAD, u.TXTAD)
@@ -1620,16 +1812,16 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
       LEFT JOIN dbo.TBLURUNGRUP g
         ON g.TXTKOD = u.TXTURUNGRUPKOD
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -800, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, -${pw.outerScanDays}, ${sqlNow()})
         AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
         ${distClause}
     )
     SELECT grup, bu, one_y, two_y FROM (
       SELECT
         t.grup AS grup,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()})  AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()})  AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()})  AND raw.tarih < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.twoYr.lower}, ${sqlNow()})  AND raw.tarih < DATEADD(day, ${pw.twoYr.upper}, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
         t.ciro AS sort_ciro, 0 AS is_other
       FROM top8 t
       LEFT JOIN raw ON raw.grup = t.grup
@@ -1638,9 +1830,9 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
       -- md18: Top8 dışı tüm gruplar tek "Diğer" satırında.
       SELECT
         N'Diğer' AS grup,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -30, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -395, ${sqlNow()})  AND raw.tarih < DATEADD(day, -365, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
-        SUM(CASE WHEN raw.tarih >= DATEADD(day, -760, ${sqlNow()})  AND raw.tarih < DATEADD(day, -730, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})   THEN raw.satir ELSE 0 END) AS bu,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.yoy.lower}, ${sqlNow()})  AND raw.tarih < DATEADD(day, ${pw.yoy.upper}, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS one_y,
+        SUM(CASE WHEN raw.tarih >= DATEADD(day, ${pw.twoYr.lower}, ${sqlNow()})  AND raw.tarih < DATEADD(day, ${pw.twoYr.upper}, ${sqlNow()}) THEN raw.satir ELSE 0 END) AS two_y,
         -1 AS sort_ciro, 1 AS is_other
       FROM raw
       WHERE raw.grup IS NOT NULL AND raw.grup NOT IN (SELECT grup FROM top8)
@@ -1683,34 +1875,42 @@ async function fetchPortfolio(scales: PeriodScales, unit: ValueUnit, distClause:
 // ciroya göre) + "Diğer" (fold-other.ts deseni); her hücrede hem ciro hem
 // hacim (adet) taşınır ki UI refetch olmadan Hacim/Ciro toggle yapabilsin.
 
-type CustomerTypeBrandRaw = { tip: string; marka: string; ciro: number; miktar: number };
+type CustomerTypeBrandRaw = { tip: string; marka: string; ciro: number; miktar: number; hacim: number };
 
-async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustomerTypeBrandSnapshot> {
-  const { brandTable, joinCol } = getBrandTableMeta();
+async function fetchCustomerTypeBrand(
+  distClause: string,
+  periodDays: number = DEFAULT_PERIOD_DAYS,
+): Promise<KomutaCustomerTypeBrandSnapshot> {
+  const pw = periodWindows(periodDays);
+  const productMeta = getProductBreakdownMeta();
+  const kirilimMeta = getCustomerBreakdownMeta();
   const sql = `
     WITH base AS (
       SELECT
-        ISNULL(NULLIF(LTRIM(RTRIM(k.TXTAD)), ''), '(Tanımsız)') AS tip,
+        ${customerBreakdownLabelExpr(kirilimMeta, "tip")},
         b.TXTAD AS marka,
         d.DBLNETFIYAT AS ciro,
-        d.DBLMIKTAR AS miktar
+        d.DBLMIKTAR AS miktar,
+        -- Tenant hacim birimi: Pernod ek_saha_26 (9LE), Wietnauer DBLLITRE/1 (70cl).
+        d.DBLMIKTAR * COALESCE(TRY_CONVERT(decimal(18,8), ue.TXTEKSAHAACIKLAMA), ISNULL(u.DBLLITRE, 0) / ${vd()}) AS hacim
       FROM dbo.TBLMSDFATURA f
       INNER JOIN dbo.TBLMSDBELGEDETAY d
         ON d.LNGYIL = f.LNGYIL
        AND d.LNGFATURAKOD = f.LNGBELGEKOD
        AND d.LNGDISTKOD = f.LNGDISTKOD
       INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
-      INNER JOIN dbo.${brandTable} b ON b.TXTKOD = u.${joinCol}
+      LEFT JOIN dbo.TBLURUNEKSAHA ue ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+      ${productBreakdownJoin(productMeta)}
       INNER JOIN dbo.TBLMUSTERI m ON m.LNGKOD = f.LNGMUSTERIKOD
       -- md34: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — eski ek-saha(8) yerine.
-      LEFT JOIN dbo.TBLMUSTERIGRUPKIRILIM k ON k.TXTKOD = m.TXTGRUPKIRILIMKOD
+      ${customerBreakdownJoin(kirilimMeta)}
       WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
         AND m.BYTDURUM = 0
-        AND f.TRHISLEMTARIHI >= DATEADD(day, -30, ${sqlNow()})
-        AND f.TRHISLEMTARIHI <  DATEADD(day, 1, ${sqlNow()})
+        AND f.TRHISLEMTARIHI >= DATEADD(day, ${pw.son.lower}, ${sqlNow()})
+        AND f.TRHISLEMTARIHI <  DATEADD(day, ${pw.son.upper}, ${sqlNow()})
         ${distClause}
     )
-    SELECT tip, marka, SUM(ciro) AS ciro, SUM(miktar) AS miktar
+    SELECT tip, marka, SUM(ciro) AS ciro, SUM(miktar) AS miktar, SUM(hacim) AS hacim
     FROM base
     GROUP BY tip, marka
     ORDER BY SUM(ciro) DESC
@@ -1721,6 +1921,7 @@ async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustome
     marka: String(r.marka ?? ""),
     ciro: Number(r.ciro ?? 0),
     miktar: Number(r.miktar ?? 0),
+    hacim: Number(r.hacim ?? 0),
   }));
 
   // Sütun seçimi: toplam ciroya göre Top 8 marka + "Diğer" (fold-other.ts).
@@ -1743,13 +1944,14 @@ async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustome
   const tipOrder = [...tipTotals.entries()].sort((a, b) => b[1] - a[1]).map(([tip]) => tip);
 
   // Hücreler: Top-8 dışı markalar "Diğer" sütununda katlanır (per-row).
-  const cellMap = new Map<string, { ciro: number; miktar: number }>();
+  const cellMap = new Map<string, { ciro: number; miktar: number; hacim: number }>();
   for (const r of raw) {
     const col = topMarkaSet.has(r.marka) ? r.marka : "Diğer";
     const key = `${r.tip}|${col}`;
-    const cur = cellMap.get(key) ?? { ciro: 0, miktar: 0 };
+    const cur = cellMap.get(key) ?? { ciro: 0, miktar: 0, hacim: 0 };
     cur.ciro += r.ciro;
     cur.miktar += r.miktar;
+    cur.hacim += r.hacim;
     cellMap.set(key, cur);
   }
 
@@ -1757,18 +1959,19 @@ async function fetchCustomerTypeBrand(distClause: string): Promise<KomutaCustome
     musteriTipi: tip,
     cells: markalar.map((marka) => {
       const c = cellMap.get(`${tip}|${marka}`);
-      return { marka, ciro: c?.ciro ?? 0, miktar: c?.miktar ?? 0 };
+      return { marka, ciro: c?.ciro ?? 0, miktar: c?.miktar ?? 0, hacim: c?.hacim ?? 0 };
     }),
   }));
 
   // Dip toplam satırı — her sütunun tüm müşteri tiplerindeki toplamı.
-  const totalsByCol = new Map<string, { ciro: number; miktar: number }>();
-  for (const marka of markalar) totalsByCol.set(marka, { ciro: 0, miktar: 0 });
+  const totalsByCol = new Map<string, { ciro: number; miktar: number; hacim: number }>();
+  for (const marka of markalar) totalsByCol.set(marka, { ciro: 0, miktar: 0, hacim: 0 });
   for (const row of rows) {
     for (const cell of row.cells) {
       const agg = totalsByCol.get(cell.marka)!;
       agg.ciro += cell.ciro;
       agg.miktar += cell.miktar;
+      agg.hacim += cell.hacim;
     }
   }
   rows.push({
@@ -2020,8 +2223,11 @@ async function applyReelTL(
 export type KomutaFacets = {
   bolgeler: { kod: string; ad: string }[];
   kanallar: { kod: string; ad: string }[];
-  /** Ürün Grubu = TBLURUNEKGRUP (Kategori: Viski/Votka/Likör…). Marka
-   *  (TBLURUNGRUP) DEĞİL — o zaten Marka ekranı/KPI'sında. */
+  /** md6 — Ürün Grubu = TBLURUNGRUP (Marka, ör. Macallan/Bottega/
+   *  Jägermeister) — Faz B öncesi TBLURUNEKGRUP (Kategori: Viski/Votka/
+   *  Likör…) idi; `config.productBreakdown` ile ARTIK AYNI boyut (bkz.
+   *  `getProductBreakdownMeta()`). `kod` = TXTKOD (TXTURUNGRUPKOD ile eşleşir,
+   *  `getKomutaSnapshot({ urunGrup })` filtresi budur). */
   urunGruplari: { kod: string; ad: string }[];
 };
 
@@ -2064,34 +2270,37 @@ export async function getKomutaFacets(): Promise<KomutaFacets> {
       .filter((x) => x.kod && x.ad);
   const result = await withCache<KomutaFacets>(
     CACHE_DOMAIN,
-    "facets-v4",
+    "facets-v5",
     async () => {
-      const [regionMap, kirilim, kategori] = await Promise.all([
+      const kirilimMeta = getCustomerBreakdownMeta();
+      // md6 — Ürün Grubu facet artık TBLURUNGRUP (Marka) üzerinden, eski
+      // TBLURUNEKGRUP (Kategori) DEĞİL. Tablo/kolon config-driven
+      // (`getProductBreakdownMeta()` → allowlist doğrulamalı) — join
+      // `productBreakdownJoin` üreticisiyle (komuta.ts'in KPI/panel
+      // fetcher'larıyla AYNI, zaten prod'da doğrulanmış join deseni).
+      const productMeta = getProductBreakdownMeta();
+      const [regionMap, kirilim, urunGrubu] = await Promise.all([
         // Bölge: müşterisi olan 8 coğrafi bölge (region master sırası korunur).
         getRegionCityMap(),
         // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle
-        // aynı boyut (TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM), ≥5 müşterili.
+        // aynı boyut (tenant config'ten, `resolveIdentifier` doğrulamalı), ≥5 müşterili.
         runReadOnly(
-          `SELECT LTRIM(RTRIM(k.TXTKOD)) kod, MAX(k.TXTAD) ad, COUNT(DISTINCT m.LNGKOD) n
-           FROM dbo.TBLMUSTERIGRUPKIRILIM k
-           INNER JOIN dbo.TBLMUSTERI m ON LTRIM(RTRIM(m.TXTGRUPKIRILIMKOD)) = LTRIM(RTRIM(k.TXTKOD)) AND m.BYTDURUM = 0
-           WHERE k.TXTAD IS NOT NULL AND LTRIM(RTRIM(k.TXTKOD)) <> ''
-           GROUP BY LTRIM(RTRIM(k.TXTKOD)) HAVING COUNT(DISTINCT m.LNGKOD) >= 5
-           ORDER BY COUNT(DISTINCT m.LNGKOD) DESC`,
+          customerBreakdownFacetSql(kirilimMeta),
           { limit: 100, timeoutMs: 20_000 },
         ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
-        // Ürün Grubu: TBLURUNEKGRUP (Kategori — Viski/Likör/Tekila…). ≥4 aktif
-        // ürünü olan gerçek kategoriler; junk (FATURA/POSM/STANT/TEST) ve
-        // marka-yanlış-sınıflanmış '0x' kodlu satırlar (01 JAGERMEISTER vb.) elenir.
+        // Ürün Grubu: TBLURUNGRUP (Marka — Macallan/Bottega/Jägermeister…). ≥4
+        // aktif ürünü olan gerçek markalar; junk grupları (RAKİP ÜRÜN/FATURA/
+        // POSM/PAKET/ekipman/test — canlı DB'de doğrulandı, bkz. rapor) elenir.
         runReadOnly(
-          `SELECT LTRIM(RTRIM(eg.TXTKOD)) kod, MAX(eg.TXTAD) ad, COUNT(u.LNGKOD) n
-           FROM dbo.TBLURUNEKGRUP eg
-           INNER JOIN dbo.TBLURUN u ON LTRIM(RTRIM(u.TXTURUNEKGRUPKOD)) = LTRIM(RTRIM(eg.TXTKOD)) AND u.BYTDURUM = 0
-           WHERE eg.TXTAD IS NOT NULL AND LTRIM(RTRIM(eg.TXTKOD)) <> ''
-             AND LTRIM(RTRIM(eg.TXTKOD)) NOT LIKE '0%'
-             AND UPPER(LTRIM(RTRIM(eg.TXTAD))) NOT IN (N'FATURA', N'POSM', N'PAKET', N'HİZMET BEDELİ', N'RAKİP ÜRÜN', N'GAZOZ')
-             AND eg.TXTAD NOT LIKE N'%TEST%' AND eg.TXTAD NOT LIKE N'%STANT%'
-           GROUP BY LTRIM(RTRIM(eg.TXTKOD)) HAVING COUNT(u.LNGKOD) >= 4
+          `SELECT LTRIM(RTRIM(g.TXTKOD)) kod, MAX(g.${productMeta.labelColumn}) ad, COUNT(u.LNGKOD) n
+           FROM dbo.TBLURUN u
+           ${productBreakdownJoin(productMeta, { parentAlias: "u", lookupAlias: "g" })}
+           WHERE u.BYTDURUM = 0
+             AND g.${productMeta.labelColumn} IS NOT NULL AND LTRIM(RTRIM(g.TXTKOD)) <> ''
+             AND UPPER(LTRIM(RTRIM(g.${productMeta.labelColumn}))) NOT IN (N'FATURA', N'POSM', N'PAKET', N'HİZMET BEDELİ', N'RAKİP ÜRÜN', N'GAZOZ')
+             AND g.${productMeta.labelColumn} NOT LIKE N'%TEST%' AND g.${productMeta.labelColumn} NOT LIKE N'%STANT%'
+             AND g.${productMeta.labelColumn} NOT LIKE N'%TAP MACHINE%'
+           GROUP BY LTRIM(RTRIM(g.TXTKOD)) HAVING COUNT(u.LNGKOD) >= 4
            ORDER BY COUNT(u.LNGKOD) DESC`,
           { limit: 100, timeoutMs: 20_000 },
         ).catch(() => ({ rows: [] as Record<string, unknown>[] })),
@@ -2101,7 +2310,7 @@ export async function getKomutaFacets(): Promise<KomutaFacets> {
       const bolgeler = [...master.byRegion.keys()]
         .filter((rg) => (regionMap.get(rg)?.length ?? 0) > 0)
         .map((rg) => ({ kod: rg, ad: rg }));
-      return { bolgeler, kanallar: clean(kirilim.rows), urunGruplari: clean(kategori.rows) };
+      return { bolgeler, kanallar: clean(kirilim.rows), urunGruplari: clean(urunGrubu.rows) };
     },
   );
   return result.value;
@@ -2128,14 +2337,25 @@ export async function getKomutaSnapshot(
     /** md2 — Cockpit global filtre: Kanal (TBLMUSTERIGRUP.TXTKOD müşteri grup
      *  kodu, ör. ON/OFF TRADE). Verilirse tüm paneller o kanala sınırlanır. */
     kanal?: string | null;
-    /** md2 — Cockpit global filtre: Ürün Grubu = TBLURUNEKGRUP.TXTKOD (Kategori:
-     *  Viski/Votka/Likör…). Line-level: KPI Net Ciro & Hacim seçili kategorinin
-     *  DETAY satırlarından (d.DBLNETFIYAT) kesin hesaplanır; alt paneller
-     *  kategoriyi İÇEREN faturalarla (EXISTS semi-join) invoice-scoped sınırlanır. */
+    /** md6 — Cockpit global filtre: Ürün Grubu = TBLURUNGRUP.TXTKOD (Marka,
+     *  ör. Macallan/Bottega/Jägermeister — Faz B öncesi TBLURUNEKGRUP
+     *  (Kategori: Viski/Votka/Likör…) idi, artık DEĞİL). Line-level: KPI Net
+     *  Ciro & Hacim seçili ürün grubunun DETAY satırlarından (d.DBLNETFIYAT)
+     *  kesin hesaplanır; alt paneller ürün grubunu İÇEREN faturalarla (EXISTS
+     *  semi-join) invoice-scoped sınırlanır. */
     urunGrup?: string | null;
+    /** Cockpit KPI şeridi çıktı dili — `insider_locale` cookie'sinden
+     *  server.ts çözer. Varsayılan "tr" — mevcut davranış AYNEN korunur. */
+    locale?: KomutaLocale;
+    /** md1 — Cockpit global periyot dropdown'undan `periyotToPeriodDays()`
+     *  ile çözülmüş gün sayısı. Verilmezse (ya da geçersizse) 30 — KPI
+     *  şeridinin bugünkü sabit "-30 gün" davranışı AYNEN korunur. */
+    periodDays?: number;
   } = {},
 ): Promise<KomutaSnapshot> {
   const unit: ValueUnit = options.unit === "9le" ? "9le" : "tl";
+  const locale: KomutaLocale = options.locale === "en" ? "en" : "tr";
+  const periodDays = resolvePeriodDays(options.periodDays);
 
   // Scope hesabı — wietnauer-satis.ts ile aynı desen: distId varsa tek dist,
   // yoksa allowedDistKods (dist scope) ya da null (merkez, filtresiz).
@@ -2164,20 +2384,26 @@ export async function getKomutaSnapshot(
       ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTSEHIR)) IN (${cities.map((c) => `N'${escSql(c)}'`).join(",")}))`
       : " AND 1=0";
   }
-  // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle aynı boyut.
+  // Kanal: Müşteri Grup Kırılımı (Premium/Prestige/Standart…) — panellerle aynı
+  // boyut. Kolon adı tenant config'ten (`resolveIdentifier` doğrulamalı); DEĞER
+  // (`kanal`, facet dropdown'dan) escSql ile ayrıca kaçışlanır.
   const kanalClause = kanal
-    ? ` AND f.LNGMUSTERIKOD IN (SELECT LNGKOD FROM dbo.TBLMUSTERI WHERE BYTDURUM = 0 AND LTRIM(RTRIM(TXTGRUPKIRILIMKOD)) = N'${escSql(kanal)}')`
+    ? customerBreakdownFilterClause(getCustomerBreakdownMeta(), escSql(kanal))
     : "";
-  // Ürün Grubu (Kategori): base distClause dist+şehir+bölge+kanal içerir (grup
-  // HARİÇ). İki yol:
-  //  - grupExists → kategoriyi içeren faturaları seçen EXISTS semi-join; alt
-  //    panellere (bölge/matris/ısı/temsilci/dist/kanal-mix) katlanır (invoice-scoped).
-  //  - grupCat → fetchKpis kategori aktifken DETAY-tabanlı (line-level) hesaplar;
-  //    base distClause + bu kod ile kesin kategori cirosu/hacmi verir.
-  const urunGrup = options.urunGrup?.trim() || null; // TBLURUNEKGRUP.TXTKOD (kategori)
+  // md6 — Ürün Grubu (Marka, TBLURUNGRUP): base distClause dist+şehir+bölge+
+  // kanal içerir (grup HARİÇ). Tablo/kolon tenant config'ten
+  // (getProductBreakdownMeta → resolveProductBreakdown doğrulamalı — admin
+  // override buradan geçer, C1 fail-closed). İki yol:
+  //  - grupExists → ürün grubunu içeren faturaları seçen EXISTS semi-join;
+  //    alt panellere (bölge/matris/ısı/temsilci/dist/kanal-mix) katlanır
+  //    (invoice-scoped).
+  //  - grupCat → fetchKpis ürün grubu aktifken DETAY-tabanlı (line-level)
+  //    hesaplar; base distClause + bu kod ile kesin ciro/hacim verir.
+  const productMeta = getProductBreakdownMeta();
+  const urunGrup = options.urunGrup?.trim() || null; // TBLURUNGRUP.TXTKOD (marka, ör. Macallan)
   const grupCat = urunGrup ? escSql(urunGrup) : null;
   const grupExists = grupCat
-    ? ` AND EXISTS (SELECT 1 FROM dbo.TBLMSDBELGEDETAY dgr INNER JOIN dbo.TBLURUN ugr ON ugr.LNGKOD = dgr.LNGURUNKOD WHERE dgr.LNGYIL = f.LNGYIL AND dgr.LNGFATURAKOD = f.LNGBELGEKOD AND dgr.LNGDISTKOD = f.LNGDISTKOD AND LTRIM(RTRIM(ugr.TXTURUNEKGRUPKOD)) = N'${grupCat}')`
+    ? ` AND EXISTS (SELECT 1 FROM dbo.TBLMSDBELGEDETAY dgr INNER JOIN dbo.TBLURUN ugr ON ugr.LNGKOD = dgr.LNGURUNKOD WHERE dgr.LNGYIL = f.LNGYIL AND dgr.LNGFATURAKOD = f.LNGBELGEKOD AND dgr.LNGDISTKOD = f.LNGDISTKOD AND LTRIM(RTRIM(ugr.${productMeta.joinColumn})) = N'${grupCat}')`
     : "";
   const distClause =
     distFilterClause(scope, "f.LNGDISTKOD") + cityFactClause(cities) + bolgeClause + kanalClause;
@@ -2199,12 +2425,23 @@ export async function getKomutaSnapshot(
   // Faz 3 (md16 Top8+Diğer+Toplam matrix, md34 yeni customerTypeBrand alanı).
   // v9: md2 Ürün Grubu (Kategori) filtresi — KPI line-level + alt panel EXISTS.
   // v10: ÖTV-net görünümü kaldırıldı (cacheKey'den "otv/gross" segmenti çıktı).
-  const CACHE_VERSION = "v10";
+  // v11: locale desteği — KPI kartlarının TR/EN label/deltaSub metni artık
+  //     cache key'e dahil (aksi halde biri diğerinin dilini görürdü).
+  // v12: md1 (periodDays — KPI/panel pencereleri artık periyoda bağlı) + md6
+  //     (Ürün Grubu facet/filtre TBLURUNEKGRUP→TBLURUNGRUP'a geçti — eski
+  //     kategori-tabanlı grupCat cache girdileri artık YANLIŞ sütuna
+  //     (TXTURUNGRUPKOD) karşılık gelir, key'e periodDays eklenmesi zaten
+  //     bunları da doğal olarak invalidate eder).
+  // v14: Top Marka Payı KPI deltaSub artık birim-duyarlı — hacim modunda marka
+  //     alt satırı ₺ yerine hacim (70cl) gösteriyor (eski cache'te ₺ donmuştu).
+  const CACHE_VERSION = "v14";
   const cacheKey = [
     CACHE_VERSION,
     options.reelTL ? "reel" : "nominal",
     unit,
     scopeKey,
+    locale,
+    `pd${periodDays}`,
   ].join("-");
   const cached = await withCache<KomutaSnapshot>(
     CACHE_DOMAIN,
@@ -2212,7 +2449,7 @@ export async function getKomutaSnapshot(
     async () => {
       // Önce her dönem için fatura/detay scale factor'ları çek — Matrix ve
       // Portfolio bunlarla detay-tabanı TL'leri fatura-tabanına çevirir.
-      const scales = await fetchPeriodScales(distClauseGrup).catch((e) => {
+      const scales = await fetchPeriodScales(distClauseGrup, periodDays).catch((e) => {
         console.error("[komuta scales]", e);
         return { buAy: 1, gecenAy: 1, ucAyOnce: 1, gecenYil: 1, ikiYilOnce: 1 };
       });
@@ -2233,20 +2470,23 @@ export async function getKomutaSnapshot(
         portfolio,
         customerTypeBrand,
       ] = await Promise.all([
-        // KPI: kategori aktifse line-level (base distClause + grupCat detay filtresi).
-        fetchKpis(unit, distClause, grupCat).catch((e) => {
+        // KPI: ürün grubu aktifse line-level (base distClause + grupCat detay filtresi).
+        // md1: son/önceki pencereleri periodDays'e bağlı.
+        fetchKpis(unit, distClause, grupCat, locale, periodDays).catch((e) => {
           console.error("[komuta kpis]", e);
           return [] as KomutaKpiCard[];
         }),
-        // Alt paneller: kategori EXISTS'i katlanmış distClauseGrup (invoice-scoped).
-        fetchRegions(unit, distClauseGrup).catch((e) => {
+        // Alt paneller: ürün grubu EXISTS'i katlanmış distClauseGrup (invoice-scoped).
+        fetchRegions(unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta regions]", e);
           return [] as KomutaRegionRow[];
         }),
-        fetchChannels(unit, distClauseGrup).catch((e) => {
+        fetchChannels(unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta channels]", e);
           return [] as KomutaChannelSlice[];
         }),
+        // md1: 12 aylık trend panelleri (Kanal Mix/Müşteri Tipi/Aylık Trend)
+        // periyottan BAĞIMSIZ kalır — genel-trend çapaları, "dokunma" (brief).
         fetchChannelMonthly(unit, distClauseGrup).catch((e) => {
           console.error("[komuta channelMonthly]", e);
           return [] as KomutaChannelMonthlyRow[];
@@ -2260,27 +2500,27 @@ export async function getKomutaSnapshot(
           return [] as KomutaMonthlyBar[];
         }),
         fetchUpcomingEvent().catch(() => null),
-        fetchMatrix(scales, unit, distClauseGrup).catch((e) => {
+        fetchMatrix(scales, unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta matrix]", e);
           return [] as KomutaMatrixRow[];
         }),
-        fetchHeatmap(unit, distClauseGrup).catch((e) => {
+        fetchHeatmap(unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta heatmap]", e);
           return [] as KomutaHeatmapRow[];
         }),
-        fetchTopReps(unit, distClauseGrup).catch((e) => {
+        fetchTopReps(unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta reps]", e);
           return [] as KomutaRep[];
         }),
-        fetchTopDists(unit, distClauseGrup).catch((e) => {
+        fetchTopDists(unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta topDists]", e);
           return [] as KomutaTopDist[];
         }),
-        fetchPortfolio(scales, unit, distClauseGrup).catch((e) => {
+        fetchPortfolio(scales, unit, distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta portfolio]", e);
           return [] as KomutaPortfolioRow[];
         }),
-        fetchCustomerTypeBrand(distClauseGrup).catch((e) => {
+        fetchCustomerTypeBrand(distClauseGrup, periodDays).catch((e) => {
           console.error("[komuta customerTypeBrand]", e);
           return { markalar: [], rows: [] } as KomutaCustomerTypeBrandSnapshot;
         }),
@@ -2332,6 +2572,8 @@ export async function getKomutaSnapshot(
       unit: options.unit,
       allowedDistKods: options.allowedDistKods,
       distId: options.distId,
+      locale: options.locale,
+      periodDays: options.periodDays,
     });
   }
   // NOT: Eski "brief boşsa forceRefresh ile retry et" bloğu KALDIRILDI. Brief

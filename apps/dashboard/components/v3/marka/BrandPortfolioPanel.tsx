@@ -9,13 +9,16 @@ import type { MarkaPortfolioRow } from "./types";
  * "fatura" sütunu eklenmiş, daha detaylı sürümü.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, localizeRowLabel, type Locale } from "@/lib/i18n";
 
 export function BrandPortfolioPanel({
   rows,
   periodLabel = "Son 30g",
+  locale = "tr",
 }: {
   rows: MarkaPortfolioRow[];
   periodLabel?: string;
+  locale?: Locale;
 }) {
   if (panelHidden("panel.marka.portfolio")) return null;
   // Core zaten Top 15 + "Diğer" + dip toplam döndürüyor — burada ekstra slice YOK.
@@ -28,17 +31,33 @@ export function BrandPortfolioPanel({
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.marka.portfolio", "Marka Portföyü")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.marka.portfolio", t(locale, "panel.marka.portfolio", "Marka Portföyü"))}</div>
           <div className="v3-panel-sub">
-            {periodLabel} · Top {dataRows.length} marka net ciroya göre ·{" "}
-            {stratList.length > 0 ? (
+            {locale === "en" ? (
               <>
-                <span className="strat-dot" /> {stratList.length} stratejik
-                marka portföyün <strong>%{stratPay.toFixed(1)}</strong>
-                'sini taşıyor
+                {periodLabel} · Top {dataRows.length} brands by net revenue ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} strategic
+                    brands carry <strong>%{stratPay.toFixed(1)}</strong> of the portfolio
+                  </>
+                ) : (
+                  "no strategic brand defined"
+                )}
               </>
             ) : (
-              "stratejik marka tanımı yok"
+              <>
+                {periodLabel} · Top {dataRows.length} marka net ciroya göre ·{" "}
+                {stratList.length > 0 ? (
+                  <>
+                    <span className="strat-dot" /> {stratList.length} stratejik
+                    marka portföyün <strong>%{stratPay.toFixed(1)}</strong>
+                    'sini taşıyor
+                  </>
+                ) : (
+                  "stratejik marka tanımı yok"
+                )}
+              </>
             )}
           </div>
         </div>
@@ -52,7 +71,7 @@ export function BrandPortfolioPanel({
               <div className="bar-label" title={b.marka}>
                 {!b.isOther && !b.isTotal && b.isStratejik && <span className="strat-dot" />}
                 {!b.isOther && !b.isTotal && <span className="bar-rank">#{b.rank}</span>}
-                <span className="bar-name">{b.marka}</span>
+                <span className="bar-name">{localizeRowLabel(b.marka, locale)}</span>
               </div>
               <div className="bar-track">
                 {!b.isTotal && (
@@ -66,10 +85,10 @@ export function BrandPortfolioPanel({
                 <span className="bar-val">₺{formatCompact(b.ciro)}</span>
                 <span className="bar-pay">%{b.payPct.toFixed(1)}</span>
                 <span className="bar-cust">
-                  {b.musteriSayi.toLocaleString("tr-TR")} müş
+                  {b.musteriSayi.toLocaleString("tr-TR")} {locale === "en" ? "cust." : "müş"}
                 </span>
                 <span className="bar-fat">
-                  {b.faturaSayisi.toLocaleString("tr-TR")} fat
+                  {b.faturaSayisi.toLocaleString("tr-TR")} {locale === "en" ? "inv." : "fat"}
                 </span>
               </div>
             </div>
@@ -78,17 +97,31 @@ export function BrandPortfolioPanel({
       </div>
 
       <div className="v3-bars-legend">
-        <span>
-          <span className="strat-dot" /> stratejik marka
-        </span>
-        <span className="sep">·</span>
-        <span>net ciro</span>
-        <span className="sep">·</span>
-        <span>portföy payı</span>
-        <span className="sep">·</span>
-        <span>distinct müşteri</span>
-        <span className="sep">·</span>
-        <span>fatura sayısı</span>
+        {locale === "en" ? (
+          <>
+            <span><span className="strat-dot" /> strategic brand</span>
+            <span className="sep">·</span>
+            <span>net revenue</span>
+            <span className="sep">·</span>
+            <span>portfolio share</span>
+            <span className="sep">·</span>
+            <span>distinct customers</span>
+            <span className="sep">·</span>
+            <span>invoice count</span>
+          </>
+        ) : (
+          <>
+            <span><span className="strat-dot" /> stratejik marka</span>
+            <span className="sep">·</span>
+            <span>net ciro</span>
+            <span className="sep">·</span>
+            <span>portföy payı</span>
+            <span className="sep">·</span>
+            <span>distinct müşteri</span>
+            <span className="sep">·</span>
+            <span>fatura sayısı</span>
+          </>
+        )}
       </div>
 
       <style

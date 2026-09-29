@@ -27,6 +27,8 @@ import {
   cachedWrite,
   computeCustomerRiskScore,
   type KomutaSnapshot,
+  type KomutaCustomerTypeBrandSnapshot,
+  type KomutaCustomerTypeBrandRow,
   type KomutaKpiCard,
   type KomutaRegionRow,
   type KomutaChannelSlice,
@@ -41,6 +43,16 @@ import {
   type ProductTier,
   type RiskTier,
 } from "@enroute/core";
+// V3 ekran snapshot'ları — her modül ilgili fetcher'ın default demo cache
+// anahtarına pre-baked bundle yazar (offline demo tüm ekranları doldurur).
+import { seedSatis } from "./demo-seed/satis";
+import { seedMarka } from "./demo-seed/marka";
+import { seedSegment } from "./demo-seed/segment";
+import { seedStok } from "./demo-seed/stok";
+import { seedSaha } from "./demo-seed/saha";
+import { seedAktivasyon } from "./demo-seed/aktivasyon";
+import { seedIskonto } from "./demo-seed/iskonto";
+import { seedYonetim } from "./demo-seed/yonetim";
 
 // ---------- Sabitler & yardımcılar ------------------------------------------
 
@@ -757,11 +769,36 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
     };
   });
 
+  // md34 — Müşteri Tipi × Marka kırılımı (son 30g). Demo: markalı ürün aileleri
+  // Top-N sütun, jenerik (marka=null) kategoriler "Diğer" sütununda toplanır;
+  // satırlar müşteri tipleri (CHANNEL_TYPES), son satır dip toplam.
+  const ctbBrands = PRODUCT_FAMILIES.filter((p) => p.brand)
+    .slice(0, 8)
+    .map((p) => p.brand as string);
+  const ctbMarkalar = [...ctbBrands, "Diğer"];
+  const ctbRows: KomutaCustomerTypeBrandRow[] = CHANNEL_TYPES.map((ch) => {
+    const tipCiro = totalCiro * ch.share;
+    const cells = ctbMarkalar.map((marka) => {
+      const w = marka === "Diğer" ? 12 : (PRODUCT_FAMILIES.find((p) => p.brand === marka)?.weight ?? 6);
+      const ciro = Math.round(((tipCiro * w) / 100) * rand(0.8, 1.2));
+      return { marka, ciro, miktar: Math.max(1, Math.round(ciro / rand(60, 140))) };
+    });
+    return { musteriTipi: ch.name, cells };
+  });
+  const ctbTotalCells = ctbMarkalar.map((marka, i) => ({
+    marka,
+    ciro: ctbRows.reduce((s, r) => s + r.cells[i]!.ciro, 0),
+    miktar: ctbRows.reduce((s, r) => s + r.cells[i]!.miktar, 0),
+  }));
+  ctbRows.push({ musteriTipi: "Toplam", cells: ctbTotalCells, isTotal: true });
+  const customerTypeBrand: KomutaCustomerTypeBrandSnapshot = {
+    markalar: ctbMarkalar,
+    rows: ctbRows,
+  };
+
   const snapshot: KomutaSnapshot = {
     generatedAt: new Date().toISOString(),
     reelTL: false,
-    otvNet: false,
-    otvAvgRate: null,
     demoDate: "2026-04-17",
     unit: "tl",
     kpis,
@@ -782,6 +819,7 @@ function generateKomutaSnapshot(customers: Customer[]): KomutaSnapshot {
     reps,
     topDists,
     portfolio,
+    customerTypeBrand,
     brief:
       "Son 30 günde toplam ciro " +
       `geçen yılın aynı periyoduna göre ${(yoyPct ?? 0).toFixed(1)}% değişim ` +
@@ -937,11 +975,66 @@ function main() {
   console.log("[seed-fmcg-demo] Komuta snapshot oluşturuluyor...");
   const snap = generateKomutaSnapshot(customers);
 
-  // Cache key formatı `getKomutaSnapshot` ile BİREBİR olmalı:
-  //   CACHE_VERSION-reel|nominal-otv|gross-unit-scopeKey
-  // Merkez/açık-erişim (distKods=null) → scopeKey="all". CACHE_VERSION komuta.ts'te
-  // bump edilirse (şu an v7) BURASI da güncellenmeli, yoksa demo cache miss'e düşer.
-  cachedWrite("komuta", "v7-nominal-gross-tl-all", snap, 850);
+  // Cache key formatı `getKomutaSnapshot` (komuta.ts) ile BİREBİR olmalı:
+  //   CACHE_VERSION-{reel|nominal}-{unit}-{scopeKey}
+  // Merkez/açık-erişim (distKods=null) → scopeKey="all", varsayılan görünüm
+  // nominal + unit "tl". CACHE_VERSION komuta.ts'te bump edilirse (şu an v10)
+  // BURASI da güncellenmeli, yoksa demo cache-miss'e düşer (MSSQL yok →
+  // yeniden hesaplanamaz → boş kokpit).
+  // Anahtar: [CACHE_VERSION, reel|nominal, unit, scopeKey]. scopeKey (komuta.ts)
+  // = (distKods==null?"all":…) + "-" + cityCacheTag(cities). Default demo:
+  // dist yok → "all", cityCacheTag(null) → "all" ⇒ scopeKey "all-all".
+  cachedWrite("komuta", "v10-nominal-tl-all-all", snap, 850);
+
+  // Kokpit FACET'leri (filtre dropdown'ları) — `getKomutaFacets` (key "facets-v4")
+  // ve bağımlısı `getRegionCityMap` (key "region-city-map-v1"), aynı "komuta"
+  // domain'inde AYRI cache girdileri. Pre-bake edilmezse demo'da (MSSQL yok)
+  // cache-miss → bağlantı timeout'u → kokpit açılmıyor. Şekiller: KomutaFacets
+  // = {bolgeler,kanallar,urunGruplari:{kod,ad}[]}; region-city-map = [bölge,şehir[]][].
+  const komutaFacets = {
+    bolgeler: [
+      "MARMARA", "EGE", "AKDENIZ", "İÇ ANADOLU", "KARADENIZ", "GÜNEYDOĞU ANADOLU", "DOĞU ANADOLU",
+    ].map((r) => ({ kod: r, ad: r })),
+    kanallar: [
+      { kod: "PREM", ad: "Premium" },
+      { kod: "PRES", ad: "Prestige" },
+      { kod: "STD", ad: "Standart" },
+      { kod: "EKO", ad: "Ekonomik" },
+    ],
+    urunGruplari: [
+      { kod: "CIK", ad: "Çikolata & Şekerleme" },
+      { kod: "BIS", ad: "Bisküvi & Gofret" },
+      { kod: "KAH", ad: "Kahve & İçecek Toz" },
+      { kod: "ATI", ad: "Atıştırmalık" },
+      { kod: "SUT", ad: "Süt Mamulleri" },
+      { kod: "TEM", ad: "Temizlik & Bakım" },
+    ],
+  };
+  cachedWrite("komuta", "facets-v4", komutaFacets, 200);
+  const komutaRegionCityMap: [string, string[]][] = [
+    ["MARMARA", ["İSTANBUL", "BURSA", "KOCAELİ", "TEKİRDAĞ", "BALIKESİR"]],
+    ["EGE", ["İZMİR", "MANİSA", "AYDIN", "DENİZLİ", "MUĞLA"]],
+    ["AKDENIZ", ["ANTALYA", "ADANA", "MERSİN", "HATAY"]],
+    ["İÇ ANADOLU", ["ANKARA", "KONYA", "KAYSERİ", "ESKİŞEHİR"]],
+    ["KARADENIZ", ["SAMSUN", "TRABZON", "ORDU"]],
+    ["GÜNEYDOĞU ANADOLU", ["GAZİANTEP", "ŞANLIURFA", "DİYARBAKIR"]],
+    ["DOĞU ANADOLU", ["ERZURUM", "VAN", "MALATYA"]],
+  ];
+  cachedWrite("komuta", "region-city-map-v1", komutaRegionCityMap, 100);
+
+  // Diğer 8 v3 ekranı için pre-baked snapshot cache'leri (satış, marka,
+  // segment, stok, saha, aktivasyon, iskonto, yönetim). Her biri kendi
+  // fetcher'ının default demo anahtarı altına yazar → demo MSSQL'siz tüm
+  // ekranları doldurur.
+  seedSatis();
+  seedMarka();
+  seedSegment();
+  seedStok();
+  seedSaha();
+  seedAktivasyon();
+  seedIskonto();
+  seedYonetim();
+  console.log("[seed-fmcg-demo] V3 ekran cache'leri yazıldı (8 ekran).");
 
   // Risk dağılımı özet log
   const tierCounts = customers.reduce<Record<string, number>>((a, c) => {

@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { FinanceAgentModal } from "./FinanceAgentModal";
+import { t as translate, type Locale } from "@/lib/i18n";
 
 type Region = { bolge: string; deltaPct: number | null };
 
 type Props = {
   regions: Region[];
+  locale?: Locale;
 };
 
 /**
@@ -30,7 +32,7 @@ const PRODUCT_ATTR = "data-finance-product-group";
  * Direkt SVG'deki bölgeleri tıklatamadığımız için (Map server component
  * içinde) bu launcher en pratik trigger.
  */
-export function FinanceAgentLauncher({ regions }: Props) {
+export function FinanceAgentLauncher({ regions, locale = "tr" }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [productGroup, setProductGroup] = useState<string | undefined>(undefined);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -88,11 +90,11 @@ export function FinanceAgentLauncher({ regions }: Props) {
         type="button"
         className="fa-launcher-btn"
         onClick={() => setPickerOpen((v) => !v)}
-        title="Finans agentı ile bölge analizi · Ücretli içerik"
+        title={translate(locale, "komuta.fa.launcher_hint", "Finans agentı ile bölge analizi · Ücretli içerik")}
       >
-        💼 Finans Agentı
+        💼 {translate(locale, "komuta.fa.title", "Finans Agentı")}
         <span
-          title="Ücretli içerik"
+          title={translate(locale, "komuta.fa.paid_content", "Ücretli içerik")}
           style={{
             marginLeft: 6, fontSize: 11, fontWeight: 700, color: "#15803d",
             background: "rgba(22,163,74,0.12)", border: "1px solid rgba(22,163,74,0.35)",
@@ -110,7 +112,7 @@ export function FinanceAgentLauncher({ regions }: Props) {
         >
           <div className="fa-picker" onClick={(e) => e.stopPropagation()}>
             <div className="fa-picker-header">
-              <strong>Analiz edilecek bölgeyi seç</strong>
+              <strong>{translate(locale, "komuta.fa.picker_title", "Analiz edilecek bölgeyi seç")}</strong>
               <button
                 type="button"
                 className="fa-picker-close"
@@ -120,8 +122,11 @@ export function FinanceAgentLauncher({ regions }: Props) {
               </button>
             </div>
             <div className="fa-picker-hint">
-              Anomaliler (kırmızı) en üstte. Tıklayınca finans agentı YoY
-              decompose eder.
+              {translate(
+                locale,
+                "komuta.fa.picker_hint",
+                "Anomaliler (kırmızı) en üstte. Tıklayınca finans agentı YoY decompose eder.",
+              )}
             </div>
             <div className="fa-picker-list">
               {sorted.map((r) => {
@@ -160,6 +165,7 @@ export function FinanceAgentLauncher({ regions }: Props) {
       <FinanceAgentModal
         region={selected}
         productGroup={productGroup}
+        locale={locale}
         onClose={() => {
           setSelected(null);
           setProductGroup(undefined);

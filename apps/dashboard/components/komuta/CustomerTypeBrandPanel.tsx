@@ -1,10 +1,11 @@
 "use client";
 
-import { Fragment, useState } from "react";
-import type { KomutaCustomerTypeBrandSnapshot } from "@/lib/api";
+import { Fragment } from "react";
+import type { KomutaCustomerTypeBrandSnapshot, ValueUnit } from "@/lib/api";
 import { formatCompact, truncate } from "@/components/komuta/format";
+import { t as translate, type Locale } from "@/lib/i18n";
 
-type Metric = "ciro" | "miktar";
+type Metric = "ciro" | "hacim";
 
 /**
  * md34 — Müşteri Tipi × Marka kırılım paneli (cockpit).
@@ -18,19 +19,29 @@ type Metric = "ciro" | "miktar";
  */
 export function CustomerTypeBrandPanel({
   data,
-  title = "Müşteri Grup Kırılımı × Marka",
+  title,
   icon = "🧭",
+  unit = "tl",
+  volumeShort = "70cl",
+  locale = "tr",
 }: {
   data: KomutaCustomerTypeBrandSnapshot;
   title?: string;
   icon?: string;
+  /** Global birim (üstteki ₺/hacim toggle) — panelin metriğini sürer. */
+  unit?: ValueUnit;
+  /** Tenant hacim kısaltması (70cl). */
+  volumeShort?: string;
+  locale?: Locale;
 }) {
-  const [metric, setMetric] = useState<Metric>("ciro");
+  const resolvedTitle = title ?? translate(locale, "panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka");
+  // Metrik global birimden gelir — panelin kendi toggle'ı kaldırıldı.
+  const metric: Metric = unit === "tl" ? "ciro" : "hacim";
   const { markalar, rows } = data;
   const hasData = markalar.length > 0 && rows.length > 0;
-  const unitLabel = metric === "ciro" ? "₺" : "adet";
+  const unitLabel = metric === "ciro" ? "₺" : volumeShort;
 
-  const rowTotal = (cells: { marka: string; ciro: number; miktar: number }[]) =>
+  const rowTotal = (cells: { marka: string; ciro: number; hacim: number }[]) =>
     cells.reduce((a, c) => a + c[metric], 0);
 
   // Küçük veri seti (≤9 tip × ≤9 marka) — memoize etmeye gerek yok, her
@@ -51,32 +62,12 @@ export function CustomerTypeBrandPanel({
     <div className="panel ctb-panel">
       <div className="panel-header">
         <div className="panel-title">
-          <span className="icon">{icon}</span> {title}
-        </div>
-        <div className="ctb-toggle" role="tablist" aria-label="Ölçü birimi">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={metric === "ciro"}
-            className={metric === "ciro" ? "on" : ""}
-            onClick={() => setMetric("ciro")}
-          >
-            Ciro
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={metric === "miktar"}
-            className={metric === "miktar" ? "on" : ""}
-            onClick={() => setMetric("miktar")}
-          >
-            Hacim
-          </button>
+          <span className="icon">{icon}</span> {resolvedTitle}
         </div>
       </div>
 
       {!hasData ? (
-        <div className="empty-note">Müşteri tipi × marka verisi yok.</div>
+        <div className="empty-note">{translate(locale, "komuta.ctb.empty", "Müşteri tipi × marka verisi yok.")}</div>
       ) : (
         <div
           className="ctb-grid"
@@ -84,13 +75,13 @@ export function CustomerTypeBrandPanel({
             gridTemplateColumns: `minmax(120px, 1.2fr) repeat(${markalar.length}, minmax(58px, 1fr)) minmax(78px, 0.9fr)`,
           }}
         >
-          <div className="ctb-head">Grup Kırılımı</div>
+          <div className="ctb-head">{translate(locale, "komuta.channeltype.filter_label", "Grup Kırılımı")}</div>
           {markalar.map((m) => (
             <div key={m} className="ctb-head" title={m}>
               {truncate(m, 12)}
             </div>
           ))}
-          <div className="ctb-head right">Dip Toplam</div>
+          <div className="ctb-head right">{translate(locale, "komuta.ctb.bottom_total", "Dip Toplam")}</div>
 
           {rows.map((row) => {
             const total = rowTotal(row.cells);
@@ -106,7 +97,7 @@ export function CustomerTypeBrandPanel({
                     <div
                       key={cell.marka}
                       className={`ctb-cell ${bucket(v)}${rowCls}`}
-                      title={`${row.musteriTipi} × ${cell.marka}\nCiro: ${formatCompact(cell.ciro)} ₺\nHacim: ${formatCompact(cell.miktar)} adet`}
+                      title={`${row.musteriTipi} × ${cell.marka}\n${translate(locale, "komuta.metric.ciro", "Ciro")}: ${formatCompact(cell.ciro)} ₺\n${translate(locale, "komuta.metric.hacim", "Hacim")}: ${formatCompact(cell.hacim)} ${volumeShort}`}
                     >
                       {v > 0 ? formatCompact(v) : ""}
                     </div>
@@ -122,8 +113,12 @@ export function CustomerTypeBrandPanel({
       )}
 
       <div className="ctb-hint">
-        Son 30g · Top 8 marka (ciroya göre) + "Diğer" · birim: {unitLabel} · dip satır tüm
-        müşteri tiplerinin toplamı.
+        {translate(
+          locale,
+          "komuta.ctb.hint",
+          "Son 30g · Top 8 marka (ciroya göre) + \"Diğer\" · birim: {unit} · dip satır tüm müşteri tiplerinin toplamı.",
+          { unit: unitLabel },
+        )}
       </div>
 
       <style jsx>{`

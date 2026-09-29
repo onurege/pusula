@@ -13,17 +13,21 @@ export type ConversionRow = {
  * fırsatçı satış göstergesi.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
+import { t, type Locale } from "@/lib/i18n";
 
-export function VisitConversionPanel({ rows }: { rows: ConversionRow[] }) {
+export function VisitConversionPanel({ rows, locale = "tr" }: { rows: ConversionRow[]; locale?: Locale }) {
   if (panelHidden("panel.saha.conversion")) return null;
+  const tipLabel = (tip: ConversionRow["tip"]) =>
+    locale === "en" ? (tip === "Rut İçi" ? "In-Route" : "Out-of-Route") : tip;
   return (
     <div className="v3-panel">
       <div className="v3-panel-head">
         <div>
-          <div className="v3-panel-title">{panelTitle("panel.saha.conversion", "Ziyaret → Sipariş Dönüşümü")}</div>
+          <div className="v3-panel-title">{panelTitle("panel.saha.conversion", t(locale, "panel.saha.conversion", "Ziyaret → Sipariş Dönüşümü"))}</div>
           <div className="v3-panel-sub">
-            Son 30g · Rut içi vs Rut dışı · sipariş, fatura, irsaliye
-            kırılımıyla
+            {locale === "en"
+              ? "Last 30d · In-Route vs Out-of-Route · order, invoice, dispatch breakdown"
+              : "Son 30g · Rut içi vs Rut dışı · sipariş, fatura, irsaliye kırılımıyla"}
           </div>
         </div>
       </div>
@@ -37,28 +41,28 @@ export function VisitConversionPanel({ rows }: { rows: ConversionRow[] }) {
             <div key={r.tip} className="conv-card">
               <div className="conv-head">
                 <span className="conv-dot" style={{ background: color }} />
-                <span className="conv-title">{r.tip}</span>
+                <span className="conv-title">{tipLabel(r.tip)}</span>
               </div>
               <div className="conv-hero" style={{ color: accent }}>
                 %{r.donusumPct.toFixed(1)}
               </div>
-              <div className="conv-sub">dönüşüm oranı</div>
+              <div className="conv-sub">{locale === "en" ? "conversion rate" : "dönüşüm oranı"}</div>
               <table className="conv-table">
                 <tbody>
                   <tr>
-                    <td>Ziyaret</td>
+                    <td>{t(locale, "col.ziyaret", "Ziyaret")}</td>
                     <td className="num">{r.ziyaret.toLocaleString("tr-TR")}</td>
                   </tr>
                   <tr>
-                    <td>Siparişli</td>
+                    <td>{locale === "en" ? "Ordered" : "Siparişli"}</td>
                     <td className="num">{r.siparisli.toLocaleString("tr-TR")}</td>
                   </tr>
                   <tr>
-                    <td>Faturalı</td>
+                    <td>{locale === "en" ? "Invoiced" : "Faturalı"}</td>
                     <td className="num">{r.faturali.toLocaleString("tr-TR")}</td>
                   </tr>
                   <tr>
-                    <td>İrsaliyeli</td>
+                    <td>{locale === "en" ? "Dispatched" : "İrsaliyeli"}</td>
                     <td className="num">{r.irsaliyeli.toLocaleString("tr-TR")}</td>
                   </tr>
                 </tbody>

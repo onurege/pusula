@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import maplibregl from "maplibre-gl";
+import type { ExpressionSpecification } from "@maplibre/maplibre-gl-style-spec";
 import type {
   CustomerRiskScore,
   MapCityYoY,
@@ -10,16 +11,19 @@ import type {
   MapRegion,
   RiskComponentKey,
   RiskTierV2,
+  VisitOrderRiskResult,
 } from "@/lib/api";
 import { trendColor } from "@/components/komuta/trend-colors";
 import { CustomerModal } from "./customer-modal";
+import { t as translate, type Locale } from "@/lib/i18n";
+import { useTenant } from "@/components/tenant-provider";
 
 /**
  * GeoJSON property'sinden composite Risk Score'u geri kurar. MapLibre
  * feature properties string|number|null tuttuğu için tam objeyi JSON-string
  * olarak serialize edip burada parse ediyoruz.
  */
-function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRiskScore {
+function parseRiskScoreJson(raw: string | number | null | undefined, locale: Locale = "tr"): CustomerRiskScore {
   const fallback: CustomerRiskScore = {
     score: null,
     tier: "unknown",
@@ -29,7 +33,7 @@ function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRi
       payment: null,
       engagement: null,
     },
-    reasons: ["Risk skoru bu müşteri için henüz yüklenmedi."],
+    reasons: [translate(locale, "map.risk_score_not_loaded", "Risk skoru bu müşteri için henüz yüklenmedi.")],
   };
   if (typeof raw !== "string" || raw.length === 0) return fallback;
   try {
@@ -61,6 +65,29 @@ function parseRiskScoreJson(raw: string | number | null | undefined): CustomerRi
     };
   } catch {
     return fallback;
+  }
+}
+
+/**
+ * Madde 13 — "visit-order" risk sonucunu GeoJSON property'sinden geri kurar.
+ * Composite tenant'larda (`visitOrderRisk: null`) veya JSON eksikse `null`
+ * döner — `parseRiskScoreJson`'un aksine fallback OBJESİ üretmez, çünkü
+ * "null" burada gerçek bir durumdur (composite tenant için doğru sonuç).
+ */
+function parseVisitOrderRiskJson(raw: string | number | null | undefined): VisitOrderRiskResult | null {
+  if (typeof raw !== "string" || raw.length === 0 || raw === "null") return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<VisitOrderRiskResult>;
+    const tier = parsed.tier;
+    if (tier !== "red" && tier !== "orange" && tier !== "yellow" && tier !== "green") return null;
+    return {
+      tier,
+      score: typeof parsed.score === "number" ? parsed.score : 0,
+      isRisk: parsed.isRisk === true,
+      reason: typeof parsed.reason === "string" ? parsed.reason : "",
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -98,6 +125,16 @@ const COLOR_TIER_WATCH    = "#d97706"; // amber-600
 const COLOR_TIER_HEALTHY  = "#16a34a"; // green-600
 const COLOR_TIER_UNKNOWN  = "#a1a1aa"; // zinc-400
 
+// Madde 13 — "visit-order" risk modeli (Wietnauer) nokta renkleri. red/
+// orange/green composite paletiyle KASTEN aynı ton (kırmızı/turuncu/yeşil
+// tüm ekranlarda aynı "kötü/orta/iyi" çağrışımını taşısın); yellow composite
+// "watch" amber'inden (turuncuya yakın) BİLEREK ayrı bir sarı — 4 tier
+// yan yana dururken orange/yellow karışmasın.
+const COLOR_VO_RED    = COLOR_TIER_CRITICAL;
+const COLOR_VO_ORANGE = COLOR_TIER_RISK;
+const COLOR_VO_YELLOW = "#eab308"; // yellow-500
+const COLOR_VO_GREEN  = COLOR_TIER_HEALTHY;
+
 type Props = {
   customers: MapCustomer[];
   regions?: MapRegion[];
@@ -105,6 +142,7 @@ type Props = {
    *  (son 30g vs geçen yıl aynı 30g). Müşteri-bazlı agregasyon değil. */
   cities?: MapCityYoY[];
   viewMode?: "customer" | "region" | "city";
+  locale?: Locale;
 };
 
 export default function SalesMap({
@@ -112,10 +150,24 @@ export default function SalesMap({
   regions = [],
   cities = [],
   viewMode = "customer",
+  locale = "tr",
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
+  // Madde 13(c) — nokta hover'ında guide/reason gösteren küçük popup (yalnız
+  // "visit-order" modelinde). Modal'ın (tam detay, click ile açılır) aksine
+  // mouse'a bağımlı bonus bilgi — birincil erişilebilir açıklama harita
+  // altındaki her-zaman-görünür legend'de (bkz. map-page-body.tsx
+  // `MapRiskLegend`).
+  const hoverPopupRef = useRef<maplibregl.Popup | null>(null);
   const [selected, setSelected] = useState<MapCustomer | null>(null);
+  // Madde 13 — "visit-order" risk modeli seçen tenant'larda (bugün yalnız
+  // Wietnauer) nokta rengi composite riskScore.tier YERİNE visitOrderRisk.tier
+  // kullanır; composite tenant'larda (Pernod/fmcg-demo) bu false kalır ve
+  // AŞAĞIDAKİ TÜM dallanmalar eski composite paint expression'larına düşer —
+  // sıfır regresyon.
+  const tenant = useTenant();
+  const isVisitOrderModel = tenant.riskModel === "visit-order";
   // mapReady: harita stili tamamen yüklendi mi (kaynak/layer eklenebilir mi).
   // Effect'lerin "map mount ile aynı tick'te tetiklendi ama map henüz hazır
   // değil" race condition'ını engellemek için state.
@@ -270,10 +322,19 @@ export default function SalesMap({
           riskScoreJson: JSON.stringify(c.riskScore),
           daysSinceLastSale: c.daysSinceLastSale ?? -1,
           daysSinceLastVisit: c.daysSinceLastVisit ?? -1,
+          daysSinceLastOrder: c.daysSinceLastOrder ?? -1,
           ciro30: c.ciro30,
           ciroPrev30: c.ciroPrev30,
           activityDays: c.activityDays,
           activityCiro: c.activityCiro,
+          activityHacim: c.activityHacim,
+          // Madde 13 — "visit-order" risk modeli. `visitOrderTier` boş string
+          // (composite tenant, `visitOrderRisk: null`) ise match expression'ı
+          // default dala düşer — composite tenant'ta bu alan zaten okunmaz
+          // (paint expression'lar `isVisitOrderModel`e göre seçilir).
+          visitOrderTier: c.visitOrderRisk?.tier ?? "",
+          visitOrderReason: c.visitOrderRisk?.reason ?? "",
+          visitOrderRiskJson: JSON.stringify(c.visitOrderRisk),
         },
         geometry: {
           type: "Point" as const,
@@ -393,21 +454,77 @@ export default function SalesMap({
             "+",
             ["to-number", ["==", ["get", "riskTierV2"], "unknown"]],
           ],
+          // Madde 13 — "visit-order" risk modeli cluster sayıları. Composite
+          // tenant'larda `visitOrderTier` her zaman "" olduğu için bu 4 sayaç
+          // 0 kalır — zararsız, `isVisitOrderModel` false iken hiç okunmaz.
+          redCount: [
+            "+",
+            ["to-number", ["==", ["get", "visitOrderTier"], "red"]],
+          ],
+          orangeCount: [
+            "+",
+            ["to-number", ["==", ["get", "visitOrderTier"], "orange"]],
+          ],
+          yellowCount: [
+            "+",
+            ["to-number", ["==", ["get", "visitOrderTier"], "yellow"]],
+          ],
+          greenCount: [
+            "+",
+            ["to-number", ["==", ["get", "visitOrderTier"], "green"]],
+          ],
         },
       });
 
-    map.addLayer({
-      id: "clusters",
-      type: "circle",
-      source: SRC,
-      filter: ["has", "point_count"],
-      paint: {
-        // Cluster rengi = içerdiği "kırmızı ağırlık" oranı.
-        //   redWeight   = critical + 0.6*risk    (yüksek + orta-yüksek risk)
-        //   greenWeight = healthy + 0.6*watch    (sağlam + erken-uyarı)
-        //   redRatio    = redWeight / (redWeight + greenWeight)
-        // Bilinen müşteri toplamı 0 ise (sadece unknown) gri.
-        "circle-color": [
+    // Madde 13 — cluster rengi iki paralel model (composite / visit-order).
+    // `isVisitOrderModel` render-anında sabit (tenant değişmez) — koşullu
+    // seçim burada, tek MapLibre paint expression olarak addLayer'a girer.
+    const clusterColorExpr: ExpressionSpecification = isVisitOrderModel
+      ? [
+          "case",
+          [
+            "==",
+            [
+              "+",
+              ["to-number", ["get", "redCount"]],
+              ["to-number", ["get", "orangeCount"]],
+              ["to-number", ["get", "yellowCount"]],
+              ["to-number", ["get", "greenCount"]],
+            ],
+            0,
+          ],
+          COLOR_TIER_UNKNOWN,
+          [
+            "interpolate",
+            ["linear"],
+            [
+              "/",
+              [
+                "+",
+                ["to-number", ["get", "redCount"]],
+                ["*", 0.66, ["to-number", ["get", "orangeCount"]]],
+                ["*", 0.33, ["to-number", ["get", "yellowCount"]]],
+              ],
+              [
+                "+",
+                ["to-number", ["get", "redCount"]],
+                ["to-number", ["get", "orangeCount"]],
+                ["to-number", ["get", "yellowCount"]],
+                ["to-number", ["get", "greenCount"]],
+              ],
+            ],
+            0,    COLOR_VO_GREEN,   // tüm sağlıklı
+            0.33, "#84cc16",         // çoğunluk yeşil/sarı
+            0.66, COLOR_VO_YELLOW,  // karışık
+            1,    COLOR_VO_RED,     // tüm en-riskli
+          ],
+        ]
+      : [
+          // Cluster rengi = içerdiği "kırmızı ağırlık" oranı.
+          //   redWeight   = critical + 0.6*risk    (yüksek + orta-yüksek risk)
+          //   greenWeight = healthy + 0.6*watch    (sağlam + erken-uyarı)
+          //   redRatio    = redWeight / (redWeight + greenWeight)
+          // Bilinen müşteri toplamı 0 ise (sadece unknown) gri.
           "case",
           [
             "==",
@@ -445,7 +562,15 @@ export default function SalesMap({
             0.75, COLOR_TIER_RISK,     // çoğunluk risk
             1,    COLOR_TIER_CRITICAL, // tüm critical
           ],
-        ],
+        ];
+
+    map.addLayer({
+      id: "clusters",
+      type: "circle",
+      source: SRC,
+      filter: ["has", "point_count"],
+      paint: {
+        "circle-color": clusterColorExpr,
         "circle-radius": [
           "step",
           ["get", "point_count"],
@@ -479,16 +604,22 @@ export default function SalesMap({
       paint: { "text-color": COLOR_LABEL },
     });
 
-    map.addLayer({
-      id: "unclustered",
-      type: "circle",
-      source: SRC,
-      filter: ["!", ["has", "point_count"]],
-      paint: {
-        // Composite Risk Score tier rengi.
-        //   critical → red, risk → orange, watch → amber, healthy → green,
-        //   unknown → gray.
-        "circle-color": [
+    // Madde 13 — nokta rengi/boyutu iki paralel model. `visitOrderTier`
+    // composite tenant'ta her zaman "" olduğu için o dalda hiç okunmaz.
+    const unclusteredColorExpr: ExpressionSpecification = isVisitOrderModel
+      ? [
+          "match",
+          ["get", "visitOrderTier"],
+          "red",    COLOR_VO_RED,
+          "orange", COLOR_VO_ORANGE,
+          "yellow", COLOR_VO_YELLOW,
+          "green",  COLOR_VO_GREEN,
+          /* default (beklenmez) */ COLOR_TIER_UNKNOWN,
+        ]
+      : [
+          // Composite Risk Score tier rengi.
+          //   critical → red, risk → orange, watch → amber, healthy → green,
+          //   unknown → gray.
           "match",
           ["get", "riskTierV2"],
           "critical", COLOR_TIER_CRITICAL,
@@ -496,9 +627,21 @@ export default function SalesMap({
           "watch",    COLOR_TIER_WATCH,
           "healthy",  COLOR_TIER_HEALTHY,
           /* default (unknown) */ COLOR_TIER_UNKNOWN,
-        ],
-        // Tier yükseldikçe daha büyük marker — yoğun şehirde gözü yakalar.
-        "circle-radius": [
+        ];
+    const unclusteredRadiusExpr: ExpressionSpecification = isVisitOrderModel
+      ? [
+          // Tier kötüleştikçe daha büyük marker — composite ile AYNI görsel
+          // ağırlık kademesi (9 / 7.5 / 6 / 6).
+          "match",
+          ["get", "visitOrderTier"],
+          "red",    9,
+          "orange", 7.5,
+          "yellow", 6,
+          "green",  6,
+          /* default (beklenmez) */ 4,
+        ]
+      : [
+          // Tier yükseldikçe daha büyük marker — yoğun şehirde gözü yakalar.
           "match",
           ["get", "riskTierV2"],
           "critical", 9,
@@ -506,7 +649,15 @@ export default function SalesMap({
           "watch",    6,
           "healthy",  6,
           /* default (unknown) */ 4,
-        ],
+        ];
+    map.addLayer({
+      id: "unclustered",
+      type: "circle",
+      source: SRC,
+      filter: ["!", ["has", "point_count"]],
+      paint: {
+        "circle-color": unclusteredColorExpr,
+        "circle-radius": unclusteredRadiusExpr,
         "circle-stroke-width": 1.5,
         "circle-stroke-color": COLOR_STROKE,
       },
@@ -529,6 +680,7 @@ export default function SalesMap({
       const distKodNum = Number(p.distKod);
       const dSale = Number(p.daysSinceLastSale);
       const dVisit = Number(p.daysSinceLastVisit);
+      const dOrder = Number(p.daysSinceLastOrder);
       const c: MapCustomer = {
         id: Number(p.id),
         distKod: distKodNum > 0 ? distKodNum : null,
@@ -546,12 +698,15 @@ export default function SalesMap({
         hasSales: Number(p.hasSales) === 1,
         daysSinceLastSale: dSale >= 0 ? dSale : null,
         daysSinceLastVisit: dVisit >= 0 ? dVisit : null,
+        daysSinceLastOrder: dOrder >= 0 ? dOrder : null,
         ciro30: Number(p.ciro30 ?? 0),
         ciroPrev30: Number(p.ciroPrev30 ?? 0),
         activityDays: Number(p.activityDays ?? 30),
         activityCiro: Number(p.activityCiro ?? p.ciro30 ?? 0),
+        activityHacim: Number(p.activityHacim ?? 0),
         riskTier: ((p.riskTier as string) || "low") as MapCustomer["riskTier"],
-        riskScore: parseRiskScoreJson(p.riskScoreJson),
+        riskScore: parseRiskScoreJson(p.riskScoreJson, locale),
+        visitOrderRisk: parseVisitOrderRiskJson(p.visitOrderRiskJson),
       };
       setSelected(c);
     });
@@ -588,6 +743,58 @@ export default function SalesMap({
       map.on("mouseleave", "clusters", () => setCursor(""));
       map.on("mouseenter", "unclustered", () => setCursor("pointer"));
       map.on("mouseleave", "unclustered", () => setCursor(""));
+
+      // Madde 13(c) — hover popup, yalnız "visit-order" modelinde. `reason`
+      // boşsa (composite tenant, `visitOrderTier` "") popup hiç gösterilmez.
+      if (isVisitOrderModel) {
+        map.on("mouseenter", "unclustered", (e) => {
+          const f = e.features?.[0];
+          if (!f) return;
+          const p = f.properties as Record<string, string | number>;
+          const reason = String(p.visitOrderReason ?? "");
+          const tierKey = String(p.visitOrderTier ?? "");
+          if (!reason || !tierKey) return;
+          const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+
+          const tierLabelFallback: Record<string, string> = {
+            red: "En riskli", orange: "Riskli", yellow: "İzlenmeli", green: "Sağlıklı",
+          };
+          const tierColor: Record<string, string> = {
+            red: COLOR_VO_RED, orange: COLOR_VO_ORANGE, yellow: COLOR_VO_YELLOW, green: COLOR_VO_GREEN,
+          };
+
+          const el = document.createElement("div");
+          el.style.cssText = "font: 12px/1.4 inherit; max-width: 220px;";
+          const title = document.createElement("div");
+          title.style.cssText = "display:flex; align-items:center; gap:6px; font-weight:600; margin-bottom:3px;";
+          const dot = document.createElement("span");
+          dot.style.cssText = `display:inline-block; width:8px; height:8px; border-radius:50%; background:${tierColor[tierKey] ?? "#a1a1aa"};`;
+          title.appendChild(dot);
+          title.appendChild(
+            document.createTextNode(translate(locale, `map.vo.tier.${tierKey}`, tierLabelFallback[tierKey] ?? tierKey)),
+          );
+          const body = document.createElement("div");
+          body.textContent = reason;
+          body.style.cssText = "color: var(--color-muted, #71717a);";
+          el.appendChild(title);
+          el.appendChild(body);
+
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = new maplibregl.Popup({
+            closeButton: false,
+            closeOnClick: false,
+            offset: 12,
+            className: "enroute-vo-popup",
+          })
+            .setLngLat(coords)
+            .setDOMContent(el)
+            .addTo(map);
+        });
+        map.on("mouseleave", "unclustered", () => {
+          hoverPopupRef.current?.remove();
+          hoverPopupRef.current = null;
+        });
+      }
     };
 
     if (map.isStyleLoaded()) {
@@ -598,6 +805,8 @@ export default function SalesMap({
 
     // viewMode region'a geçince customer kaynak ve katmanlarını temizle.
     return () => {
+      hoverPopupRef.current?.remove();
+      hoverPopupRef.current = null;
       try {
         if (map.getLayer("clusters")) map.removeLayer("clusters");
         if (map.getLayer("cluster-count")) map.removeLayer("cluster-count");
@@ -607,7 +816,7 @@ export default function SalesMap({
         // map kaldırılmış olabilir — yut
       }
     };
-  }, [geojson, viewMode, mapReady]);
+  }, [geojson, viewMode, mapReady, locale, isVisitOrderModel]);
 
   // Region katmanı — viewMode === "region" iken TR il polygon'larını fill
   // ile renkler. Aynı klasik bölgenin il'leri aynı renge boyanır →
@@ -1236,15 +1445,15 @@ export default function SalesMap({
         const hd = props.k_hasData ?? 0;
         let sub: string;
         if (hd === 0) {
-          sub = "bayisiz";
+          sub = translate(locale, "map.province.no_distributor", "bayisiz");
         } else if (hd === 1) {
           // Müşteri var, 30g satış yok → eğer önceki yıl satış varsa -%100
           sub = props.k_ciroPrev && props.k_ciroPrev > 0
-            ? "satış durdu"
-            : "satış yok";
+            ? translate(locale, "map.province.sales_stopped", "satış durdu")
+            : translate(locale, "map.province.no_sales", "satış yok");
         } else {
           sub = dp == null
-            ? "yeni satış" // ciro > 0 ama ciroPrev = 0 → yeni başlamış
+            ? translate(locale, "map.province.new_sales", "yeni satış") // ciro > 0 ama ciroPrev = 0 → yeni başlamış
             : `${dp >= 0 ? "+" : ""}%${dp.toFixed(0)} YoY`;
         }
         centroidFeatures.push({
@@ -1402,7 +1611,7 @@ export default function SalesMap({
       }
     };
     // citiesKey city dataları değiştiğinde effect'i yeniden tetikler.
-  }, [viewMode, mapReady, regionFilter, citiesKey]);
+  }, [viewMode, mapReady, regionFilter, citiesKey, locale]);
 
   return (
     <>
@@ -1411,7 +1620,7 @@ export default function SalesMap({
       <div ref={containerRef} className="w-full h-full" />
 
       {selected && (
-        <CustomerModal customer={selected} onClose={() => setSelected(null)} />
+        <CustomerModal customer={selected} onClose={() => setSelected(null)} locale={locale} />
       )}
     </>
   );

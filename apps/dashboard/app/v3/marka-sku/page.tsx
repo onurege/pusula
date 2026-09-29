@@ -4,6 +4,7 @@ import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { donemLabel } from "@/lib/donem";
+import { getLocale, t } from "@/lib/i18n";
 import { formatCompact } from "@/components/komuta/format";
 import { BrandPortfolioPanel } from "@/components/v3/marka/BrandPortfolioPanel";
 import { TopSkusPanel } from "@/components/v3/marka/TopSkusPanel";
@@ -12,7 +13,10 @@ import { StrategicBrandZoom } from "@/components/v3/marka/StrategicBrandZoom";
 import { MarkaSkuExportButton } from "@/components/v3/marka/ExportButton";
 import type { WietnauerMarkaSnapshot } from "@/components/v3/marka/types";
 
-export const metadata = { title: "Marka & SKU · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.marka.title", "Marka & SKU")} · V3 · Insider` };
+}
 
 /**
  * V3 Dashboard #4 — Marka & SKU Performansı.
@@ -36,6 +40,7 @@ type Props = {
 
 export default async function V3MarkaSkuPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
@@ -75,18 +80,23 @@ export default async function V3MarkaSkuPage({ searchParams }: Props) {
     : null;
 
   // md-task7: statik "son 30 gün" metinleri yerine gerçek seçili dönem etiketi.
-  const periodLabel = donemLabel(donem, dateFrom, dateTo);
+  const periodLabel = donemLabel(donem, dateFrom, dateTo, locale);
   const periodLabelCap =
     periodLabel.charAt(0).toUpperCase() + periodLabel.slice(1);
 
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 04"
-        title="Marka & SKU Performansı"
+        locale={locale}
+        eyebrow={t(locale, "page.marka.eyebrow", "Dashboard 04")}
+        title={t(locale, "page.marka.title", "Marka & SKU Performansı")}
         contentKey="page.marka.title"
         descKey="page.marka.desc"
-        description={`${tenant.displayName} marka portföyü, SKU şampiyonları, penetrasyon ve stratejik marka zoom — ${periodLabel} net ciro odağında, YTD ivme metrikleriyle.`}
+        description={
+          locale === "en"
+            ? `${tenant.displayName} brand portfolio, SKU champions, penetration, and strategic brand zoom — focused on ${periodLabel} net revenue, with YTD momentum metrics.`
+            : `${tenant.displayName} marka portföyü, SKU şampiyonları, penetrasyon ve stratejik marka zoom — ${periodLabel} net ciro odağında, YTD ivme metrikleriyle.`
+        }
         dataNote="TBLURUNGRUP / TBLURUNEKGRUP · TBLURUN · TBLMSDBELGEDETAY · DBLNETFIYAT · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
       />
@@ -95,10 +105,9 @@ export default async function V3MarkaSkuPage({ searchParams }: Props) {
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.marka.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula. API restart
-            gerekebilir.
+            {t(locale, "page.marka.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula. API restart gerekebilir.")}
           </div>
         </div>
       )}
@@ -109,6 +118,7 @@ export default async function V3MarkaSkuPage({ searchParams }: Props) {
             <MarkaSkuExportButton
               portfolio={snap.portfolio}
               topSkus={snap.topSkus}
+              locale={locale}
             />
           </div>
 
@@ -116,35 +126,43 @@ export default async function V3MarkaSkuPage({ searchParams }: Props) {
           <div className="v3-kpi-grid">
             {!panelHidden("kpi.marka.ciro") && (
             <KpiTile
-              label={cs("kpi.marka.ciro", "Toplam Net Ciro")}
+              label={cs("kpi.marka.ciro", t(locale, "kpi.marka.ciro", "Toplam Net Ciro"))}
               value={`₺${formatCompact(toplamCiro)}`}
-              sub={`${periodLabel} · ${markaSayisi} marka × ${skuSayisi} SKU bazlı`}
+              sub={
+                locale === "en"
+                  ? `${periodLabel} · based on ${markaSayisi} brands × ${skuSayisi} SKUs`
+                  : `${periodLabel} · ${markaSayisi} marka × ${skuSayisi} SKU bazlı`
+              }
             />
           )}
             {!panelHidden("kpi.marka.aktif") && (
             <KpiTile
-              label={cs("kpi.marka.aktif", "Aktif Müşteri")}
+              label={cs("kpi.marka.aktif", t(locale, "kpi.marka.aktif", "Aktif Müşteri"))}
               value={aktifMusteri.toLocaleString("tr-TR")}
-              sub={`${periodLabel} fatura kesilen distinct`}
+              sub={locale === "en" ? `distinct invoiced in ${periodLabel}` : `${periodLabel} fatura kesilen distinct`}
             />
           )}
             {!panelHidden("kpi.marka.top5") && (
             <KpiTile
-              label={cs("kpi.marka.top5", "Top 5 Marka Payı")}
+              label={cs("kpi.marka.top5", t(locale, "kpi.marka.top5", "Top 5 Marka Payı"))}
               value={`%${top5Pay.toFixed(1)}`}
               sub={
                 topBrand
-                  ? `lider: ${topBrand.marka} · %${topBrand.payPct.toFixed(1)}`
-                  : "portföyün konsantrasyonu"
+                  ? locale === "en"
+                    ? `leader: ${topBrand.marka} · %${topBrand.payPct.toFixed(1)}`
+                    : `lider: ${topBrand.marka} · %${topBrand.payPct.toFixed(1)}`
+                  : locale === "en"
+                    ? "portfolio concentration"
+                    : "portföyün konsantrasyonu"
               }
               tone={top5Pay > 70 ? "warn" : "neutral"}
             />
           )}
             {!panelHidden("kpi.marka.stratejik") && (
             <KpiTile
-              label={cs("kpi.marka.stratejik", "Stratejik Marka Payı")}
+              label={cs("kpi.marka.stratejik", t(locale, "kpi.marka.stratejik", "Stratejik Marka Payı"))}
               value={`%${stratSharePct.toFixed(1)}`}
-              sub={`${stratActive}/${stratTotal} marka aktif`}
+              sub={locale === "en" ? `${stratActive}/${stratTotal} brands active` : `${stratActive}/${stratTotal} marka aktif`}
               tone="accent"
             />
           )}
@@ -152,18 +170,19 @@ export default async function V3MarkaSkuPage({ searchParams }: Props) {
 
           {/* İçerik: full-width A, sonra 2 sütun B+C, full-width D, full-width E */}
           <div className="v3-content">
-            <BrandPortfolioPanel rows={snap.portfolio} periodLabel={periodLabelCap} />
+            <BrandPortfolioPanel rows={snap.portfolio} periodLabel={periodLabelCap} locale={locale} />
 
             <div className="row-2col">
-              <TopSkusPanel rows={snap.topSkus} periodLabel={periodLabelCap} />
+              <TopSkusPanel rows={snap.topSkus} periodLabel={periodLabelCap} locale={locale} />
               <BrandPenetrationPanel
                 rows={snap.penetration}
                 aktifMusteriToplam={snap.aktifMusteriToplam}
                 periodLabel={periodLabelCap}
+                locale={locale}
               />
             </div>
 
-            <StrategicBrandZoom brands={snap.strategic} periodLabel={periodLabelCap} />
+            <StrategicBrandZoom brands={snap.strategic} periodLabel={periodLabelCap} locale={locale} />
             {/* md31: 30g/90g/YTD karşılaştırma paneli kaldırıldı. */}
           </div>
         </>

@@ -1,4 +1,5 @@
 import { formatCompact } from "@/components/komuta/format";
+import { type Locale } from "@/lib/i18n";
 
 /**
  * Panel A — İskonto KPI Hero.
@@ -15,6 +16,7 @@ export function IskontoHeroPanel({
   iskontoOraniPct,
   faturaCount,
   aktifMusteriCount,
+  locale = "tr",
 }: {
   brut: number;
   iskonto: number;
@@ -22,36 +24,37 @@ export function IskontoHeroPanel({
   iskontoOraniPct: number;
   faturaCount: number;
   aktifMusteriCount: number;
+  locale?: Locale;
 }) {
   const tier =
     iskontoOraniPct < 15
-      ? { color: "#16a34a", label: "sağlıklı" }
+      ? { color: "#16a34a", label: locale === "en" ? "healthy" : "sağlıklı" }
       : iskontoOraniPct < 25
-      ? { color: "#d97706", label: "nötr" }
-      : { color: "#dc2626", label: "yatırım uyarısı" };
+      ? { color: "#d97706", label: locale === "en" ? "neutral" : "nötr" }
+      : { color: "#dc2626", label: locale === "en" ? "investment warning" : "yatırım uyarısı" };
 
   return (
     <div className="hero-panel">
       <div className="hero-row">
         <HeroTile
-          label="Brüt Ciro"
+          label={locale === "en" ? "Gross Revenue" : "Brüt Ciro"}
           value={`₺${formatCompact(brut)}`}
-          sub={`${faturaCount.toLocaleString("tr-TR")} fatura`}
+          sub={`${faturaCount.toLocaleString("tr-TR")} ${locale === "en" ? "invoices" : "fatura"}`}
         />
         <HeroTile
-          label="İskonto Toplamı"
+          label={locale === "en" ? "Total Discount" : "İskonto Toplamı"}
           value={`₺${formatCompact(iskonto)}`}
-          sub={`${aktifMusteriCount.toLocaleString("tr-TR")} aktif müşteri`}
+          sub={`${aktifMusteriCount.toLocaleString("tr-TR")} ${locale === "en" ? "active customers" : "aktif müşteri"}`}
           accent="muted"
         />
         <HeroTile
-          label="Net Ciro"
+          label={locale === "en" ? "Net Revenue" : "Net Ciro"}
           value={`₺${formatCompact(net)}`}
-          sub="brüt − iskonto"
+          sub={locale === "en" ? "gross − discount" : "brüt − iskonto"}
           accent="solid"
         />
         <HeroTile
-          label="İskonto / Ciro"
+          label={locale === "en" ? "Discount / Revenue" : "İskonto / Ciro"}
           value={`%${iskontoOraniPct.toFixed(1)}`}
           sub={tier.label}
           color={tier.color}

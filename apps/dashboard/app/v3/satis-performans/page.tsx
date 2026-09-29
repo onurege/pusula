@@ -1,6 +1,7 @@
 import { cs, panelHidden } from "@/lib/content";
 import type { WietnauerSatisSnapshot } from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
+import { getLocale, t, localizeVolumeUnit } from "@/lib/i18n";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { RepLeaderboardPanel } from "@/components/v3/satis/RepLeaderboardPanel";
 import {
@@ -14,7 +15,10 @@ import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { SatisUnitToggle } from "@/components/v3/satis/SatisUnitToggle";
 import { formatCompact } from "@/components/komuta/format";
 
-export const metadata = { title: "Satış Performansı · V3 · Insider" };
+export async function generateMetadata() {
+  const locale = await getLocale();
+  return { title: `${t(locale, "page.satis.title", "Satış Performansı")} · V3 · Insider` };
+}
 
 const DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 // `lib/api.ts`'teki `request()` ile aynı sözleşme (Bearer cookie forward,
@@ -31,8 +35,8 @@ function normDate(v: string | undefined): string | null {
   return DATE_RX.test(s) ? s : null;
 }
 
-function formatDateTr(iso: string): string {
-  return new Date(`${iso}T12:00:00`).toLocaleDateString("tr-TR", {
+function formatDateTr(iso: string, locale: "tr" | "en" = "tr"): string {
+  return new Date(`${iso}T12:00:00`).toLocaleDateString(locale === "en" ? "en-US" : "tr-TR", {
     day: "2-digit",
     month: "short",
   });
@@ -95,6 +99,9 @@ type Props = {
 const DONEM_LABEL: Record<string, string> = {
   son30g: "Son 30g", mtd: "Bu Ay", ytd: "Bu Yıl", q1: "Ç1", q2: "Ç2", q3: "Ç3",
 };
+const DONEM_KEY: Record<string, string> = {
+  son30g: "donem.son30g", mtd: "donem.mtd", ytd: "donem.ytd", q1: "donem.q1", q2: "donem.q2", q3: "donem.q3",
+};
 
 /**
  * V3 Dashboard #2 — Satış Performansı.
@@ -116,6 +123,7 @@ const DONEM_LABEL: Record<string, string> = {
  */
 export default async function V3SatisPerformansPage({ searchParams }: Props) {
   const tenant = getTenantConfig();
+  const locale = await getLocale();
   const sp = await searchParams;
   const dateFrom = normDate(sp.from);
   const dateTo = normDate(sp.to);
@@ -123,9 +131,10 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
   const donem = (sp.donem ?? "").toLowerCase();
   const volumeKey = tenant.volume.key;
   const unit = sp.unit === volumeKey ? volumeKey : "tl";
+  const donemTrLabel = DONEM_LABEL[donem] ?? "Son 30g";
   const rangeLabel = hasCustomRange && dateFrom && dateTo
-    ? `${formatDateTr(dateFrom)} – ${formatDateTr(dateTo)}`
-    : DONEM_LABEL[donem] ?? "Son 30g";
+    ? `${formatDateTr(dateFrom, locale)} – ${formatDateTr(dateTo, locale)}`
+    : t(locale, DONEM_KEY[donem] ?? "donem.son30g", donemTrLabel);
 
   let snap: WietnauerSatisSnapshot | null = null;
   let err: string | null = null;
@@ -146,7 +155,7 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
   // md21: `unit` seçimine göre KPI kartında hangisi öne çıkar belirlenir.
   const topDistHacim =
     snap?.distLeaderboard.reduce((a, d) => a + d.hacim, 0) ?? 0;
-  const volShort = tenant.volume?.short ?? "";
+  const volShort = tenant.volume?.short ? localizeVolumeUnit(tenant.volume.short, locale) : "";
   const showVolumePrimary = unit === volumeKey && volShort;
   const topDistCount = snap?.distLeaderboard.length ?? 0;
   const topRepCount = snap?.repLeaderboard.length ?? 0;
@@ -159,14 +168,19 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
   return (
     <div className="v3-page">
       <V3PageHeader
-        eyebrow="Dashboard 02"
-        title="Satış Performansı"
+        locale={locale}
+        eyebrow={t(locale, "page.satis.eyebrow", "Dashboard 02")}
+        title={t(locale, "page.satis.title", "Satış Performansı")}
         contentKey="page.satis.title"
         descKey="page.satis.desc"
         description={
-          snap
-            ? `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — ${rangeLabel} içinde ${topDistCount} distribütör, ${topRepCount} temsilci; leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
-            : `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
+          locale === "en"
+            ? snap
+              ? `${tenant.displayName} distributor and field sales rep performance in one screen — ${topDistCount} distributors, ${topRepCount} reps in ${rangeLabel}; leaderboard, drop size, new customer acquisition, and average basket trend.`
+              : `${tenant.displayName} distributor and field sales rep performance in one screen — leaderboard, drop size, new customer acquisition, and average basket trend.`
+            : snap
+              ? `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — ${rangeLabel} içinde ${topDistCount} distribütör, ${topRepCount} temsilci; leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
+              : `${tenant.displayName} distribütör ve saha satış temsilcisi performansı tek ekranda — leaderboard, drop size, yeni müşteri kazanımı ve ortalama sepet trendi.`
         }
         dataNote="TBLMSDFATURA + TBLDISTPERSONEL + TBLDIST + TBLDISTEKGRUP · BYTTUR=0 · BYTDURUM=0"
         generatedAt={snap?.generatedAt}
@@ -174,9 +188,9 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
 
       {err && (
         <div className="v3-error">
-          <strong>Veri alınamadı:</strong> {err}
+          <strong>{t(locale, "page.satis.error", "Veri alınamadı:")}</strong> {err}
           <div className="v3-error-hint">
-            VPN kontrol et veya MSSQL bağlantı durumunu doğrula.
+            {t(locale, "page.satis.error_hint", "VPN kontrol et veya MSSQL bağlantı durumunu doğrula.")}
           </div>
         </div>
       )}
@@ -195,40 +209,48 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
           <div className="v3-kpi-grid">
             {showVolumePrimary ? (
               <KpiTile
-                label={`Top Distribütör Hacmi (${volShort})`}
+                label={t(locale, "kpi.satis.topdist_hacim", "Top Distribütör Hacmi") + ` (${volShort})`}
                 value={formatCompact(topDistHacim)}
-                sub={`${rangeLabel} · ₺${formatCompact(topDistCiro)} ciro · ${topDistCount} dist`}
+                sub={
+                  locale === "en"
+                    ? `${rangeLabel} · ₺${formatCompact(topDistCiro)} revenue · ${topDistCount} dist`
+                    : `${rangeLabel} · ₺${formatCompact(topDistCiro)} ciro · ${topDistCount} dist`
+                }
               />
             ) : (
               <KpiTile
-                label="Top Distribütör Cirosu"
+                label={t(locale, "kpi.satis.topdist_ciro", "Top Distribütör Cirosu")}
                 value={`₺${formatCompact(topDistCiro)}`}
                 sub={`${rangeLabel}${volShort ? ` · ${formatCompact(topDistHacim)} ${volShort}` : ""} · ${topDistCount} dist`}
               />
             )}
             {!panelHidden("kpi.satis.temsilci") && (
             <KpiTile
-              label={cs("kpi.satis.temsilci", "Top Temsilci Sayısı")}
+              label={cs("kpi.satis.temsilci", t(locale, "kpi.satis.temsilci", "Top Temsilci Sayısı"))}
               value={topRepCount.toLocaleString("tr-TR")}
-              sub={`${rangeLabel} performans listesinde`}
+              sub={`${rangeLabel} ${t(locale, "kpi.satis.topdist_sub_perflist", "performans listesinde")}`}
             />
           )}
             {!panelHidden("kpi.satis.yeni") && (
             <KpiTile
-              label={cs("kpi.satis.yeni", "Yeni Müşteri (90g)")}
+              label={cs("kpi.satis.yeni", t(locale, "kpi.satis.yeni", "Yeni Müşteri (90g)"))}
               value={snap.newCustomers.totalYeniMusteri.toLocaleString("tr-TR")}
-              sub={`₺${formatCompact(snap.newCustomers.totalYeniCiro)} ciro`}
+              sub={locale === "en" ? `₺${formatCompact(snap.newCustomers.totalYeniCiro)} revenue` : `₺${formatCompact(snap.newCustomers.totalYeniCiro)} ciro`}
               tone="accent"
             />
           )}
             {!panelHidden("kpi.satis.sepet") && (
             <KpiTile
-              label={cs("kpi.satis.sepet", "Güncel Ort. Sepet")}
+              label={cs("kpi.satis.sepet", t(locale, "kpi.satis.sepet", "Güncel Ort. Sepet"))}
               value={`₺${formatCompact(avgOrderLatest)}`}
               sub={
                 avgOrderLatestPoint
-                  ? `${formatAyLabel(avgOrderLatestPoint.ay)} · ${avgOrderLatestPoint.faturaSayi.toLocaleString("tr-TR")} fatura`
-                  : "son ay · AVG net/fatura"
+                  ? locale === "en"
+                    ? `${formatAyLabel(avgOrderLatestPoint.ay, locale)} · ${avgOrderLatestPoint.faturaSayi.toLocaleString("tr-TR")} invoices`
+                    : `${formatAyLabel(avgOrderLatestPoint.ay)} · ${avgOrderLatestPoint.faturaSayi.toLocaleString("tr-TR")} fatura`
+                  : locale === "en"
+                    ? "last month · AVG net/invoice"
+                    : "son ay · AVG net/fatura"
               }
             />
           )}
@@ -238,7 +260,13 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
               en altta trend grafiği. */}
           <div className="v3-content-stack">
             {/* md25: Distribütör leaderboard kaldırıldı (veri KPI için korunuyor). */}
-            <RepLeaderboardPanel rows={snap.repLeaderboard} rangeLabel={rangeLabel} />
+            <RepLeaderboardPanel
+              rows={snap.repLeaderboard}
+              rangeLabel={rangeLabel}
+              unit={unit}
+              volumeShort={volShort}
+              locale={locale}
+            />
 
             {/* md27: distLeaderboard'tan türetilen satisHizi (ciro / aktif
                 nokta) — lib/api.ts tip aynası bu görevin dosya kapsamı
@@ -250,18 +278,26 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
               unit={unit}
               volumeShort={volShort}
               rangeLabel={rangeLabel}
+              locale={locale}
             />
 
             <div className="v3-row-2col">
-              <DropSizePanel rows={snap.dropSize} rangeLabel={rangeLabel} />
+              <DropSizePanel
+                rows={snap.dropSize}
+                rangeLabel={rangeLabel}
+                unit={unit}
+                volumeShort={volShort}
+                locale={locale}
+              />
               <NewCustomersPanel
                 items={snap.newCustomers.items}
                 totalYeniMusteri={snap.newCustomers.totalYeniMusteri}
+                locale={locale}
                 totalYeniCiro={snap.newCustomers.totalYeniCiro}
               />
             </div>
 
-            <AvgOrderTrendPanel points={snap.avgOrderTrend} />
+            <AvgOrderTrendPanel points={snap.avgOrderTrend} locale={locale} />
           </div>
         </>
       )}
