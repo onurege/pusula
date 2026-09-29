@@ -80,22 +80,124 @@ export const CUSTOMER_BREAKDOWN_JOIN_COLUMNS = [
 
 export const CUSTOMER_BREAKDOWN_LABEL_COLUMNS = ["TXTAD"] as const;
 
-export type CustomerBreakdownMeta = {
-  table: string;
-  joinColumn: string;
-  labelColumn: string;
-};
+/**
+ * Ek-saha köprü tablosu (`TBLMUSTERIEKSAHA`) — `mode: "eksaha-two-hop"`'un
+ * TEK tanınan köprüsü. Curator yeni bir köprü eklemek isterse önce bu listeye
+ * eklemeli (aksi halde `resolveCustomerBreakdown` THROW eder — fail-closed).
+ */
+export const EKSAHA_BRIDGE_TABLES = ["TBLMUSTERIEKSAHA"] as const;
+export const EKSAHA_BRIDGE_MUSTERI_REF_COLUMNS = ["LNGMUSTERIREF"] as const;
+export const EKSAHA_BRIDGE_SAHA_COLUMNS = ["LNGEKSAHAKODU"] as const;
+export const EKSAHA_BRIDGE_CODE_COLUMNS = ["TXTEKSAHAACIKLAMA"] as const;
+
+/** Ek-saha lookup tablosu (`TBLEKSAHASECENEK`) — saha kodu → okunabilir ad. */
+export const EKSAHA_LOOKUP_TABLES = ["TBLEKSAHASECENEK"] as const;
+export const EKSAHA_LOOKUP_SAHA_COLUMNS = ["LNGTAKIPKOD"] as const;
+export const EKSAHA_LOOKUP_KEY_COLUMNS = ["LNGKOD"] as const;
+export const EKSAHA_LABEL_COLUMNS = ["TXTACIKLAMA"] as const;
+
+/**
+ * Müşteri kırılımı boyutu — iki mod:
+ *   - TEK-HOP (mode yok veya `"single-hop"`): bugünkü davranış, `TBLMUSTERI`
+ *     üzerindeki bir FK kolonunu tek bir lookup tablosuna bağlar (Pernod,
+ *     fmcg-demo — GERİ UYUM ŞART, bu union'ın varsayılan dalı).
+ *   - İKİ-HOP (`mode: "eksaha-two-hop"`): Wietnauer ek-saha birleşik kırılımı
+ *     — `TBLMUSTERI` → `TBLMUSTERIEKSAHA` (köprü, iki saha kodu) →
+ *     `TBLEKSAHASECENEK` (lookup); COALESCE(saha1, saha2, "(Tanımsız)") ile
+ *     tek bir etikete indirgenir (bkz. `customer-breakdown-sql.ts`).
+ */
+export type CustomerBreakdownMeta =
+  | {
+      mode?: "single-hop";
+      table: string;
+      joinColumn: string;
+      labelColumn: string;
+    }
+  | {
+      mode: "eksaha-two-hop";
+      /** [saha1, saha2] — TAM İKİ tam sayı (ör. [1,2] = OFF-TRADE/ON-TRADE). */
+      sahaKods: number[];
+      bridgeTable: string;
+      bridgeMusteriRef: string;
+      bridgeSahaCol: string;
+      bridgeCodeCol: string;
+      lookupTable: string;
+      lookupSahaCol: string;
+      lookupKeyCol: string;
+      labelColumn: string;
+    };
+
+/**
+ * `sahaKods`'u doğrular: tam olarak 2 elemanlı, ikisi de `Number.isInteger`
+ * bir dizi olmalı — iki-hop SQL üreticileri (`customer-breakdown-sql.ts`)
+ * dizinin TAM bu şekilde `sahaKods[0]`/`sahaKods[1]` (saha1/saha2) olduğunu
+ * varsayar. Uymazsa THROW (fail-closed) — regex/allowlist'in sayısal
+ * eşdeğeri, C1 sözleşmesinin bir parçası.
+ */
+function resolveSahaKods(value: unknown): number[] {
+  if (!Array.isArray(value) || value.length !== 2 || !value.every((v) => Number.isInteger(v))) {
+    throw new Error(
+      `[identifier] Geçersiz customerBreakdown.sahaKods: "${JSON.stringify(value)}" — tam sayı içeren 2 elemanlı ([saha1, saha2]) bir dizi olmalı.`,
+    );
+  }
+  return value as number[];
+}
+
+/** Tek-hop üyesi — `resolveCustomerBreakdown` overload'larının dar dönüş tipi. */
+export type SingleHopCustomerBreakdownMeta = Extract<CustomerBreakdownMeta, { mode?: "single-hop" }>;
+/** İki-hop üyesi — `resolveCustomerBreakdown` overload'larının dar dönüş tipi. */
+export type EksahaTwoHopCustomerBreakdownMeta = Extract<CustomerBreakdownMeta, { mode: "eksaha-two-hop" }>;
 
 /**
  * Tenant config'inden gelen müşteri kırılımı boyutunu doğrular. Sonucu SQL'e
  * interpolate eden HER fetcher bu fonksiyondan geçmeli (bkz. `tenant/index.ts`
  * `getCustomerBreakdownMeta()`) — sink'e doğrulanmamış identifier ulaşmaz.
+ *
+ * Mode-branch: `mode` yok/`"single-hop"` bugünkü tek-hop allowlist'ten
+ * geçer (Pernod/fmcg-demo — GERİ UYUM ŞART); `"eksaha-two-hop"` yeni köprü+
+ * lookup allowlist'inden. Geçersiz bir override (regex/allowlist DIŞI, ya da
+ * eksik/bozuk `sahaKods`) THROW eder — fail-closed (C1).
+ *
+ * 3 overload: girdi tek-hop/iki-hop literal'iyse dönüş tipi o üyeye DARALIR
+ * (çağıran `.table`/`.bridgeTable` gibi alanlara narrowing YAPMADAN erişebilir
+ * — mevcut çağıranların davranışı DEĞİŞMEDEN korunur); girdi zaten genel
+ * `CustomerBreakdownMeta` union'ıysa (ör. `mapping-store.ts` runtime override
+ * geçişi) dönüş de union kalır.
  */
-export function resolveCustomerBreakdown(dim: {
-  table: string;
-  joinColumn: string;
-  labelColumn: string;
-}): CustomerBreakdownMeta {
+export function resolveCustomerBreakdown(dim: SingleHopCustomerBreakdownMeta): SingleHopCustomerBreakdownMeta;
+export function resolveCustomerBreakdown(dim: EksahaTwoHopCustomerBreakdownMeta): EksahaTwoHopCustomerBreakdownMeta;
+export function resolveCustomerBreakdown(dim: CustomerBreakdownMeta): CustomerBreakdownMeta;
+export function resolveCustomerBreakdown(dim: CustomerBreakdownMeta): CustomerBreakdownMeta {
+  if (dim.mode === "eksaha-two-hop") {
+    return {
+      mode: "eksaha-two-hop",
+      sahaKods: resolveSahaKods(dim.sahaKods),
+      bridgeTable: resolveIdentifier(dim.bridgeTable, EKSAHA_BRIDGE_TABLES, "customerBreakdown.bridgeTable"),
+      bridgeMusteriRef: resolveIdentifier(
+        dim.bridgeMusteriRef,
+        EKSAHA_BRIDGE_MUSTERI_REF_COLUMNS,
+        "customerBreakdown.bridgeMusteriRef",
+      ),
+      bridgeSahaCol: resolveIdentifier(
+        dim.bridgeSahaCol,
+        EKSAHA_BRIDGE_SAHA_COLUMNS,
+        "customerBreakdown.bridgeSahaCol",
+      ),
+      bridgeCodeCol: resolveIdentifier(
+        dim.bridgeCodeCol,
+        EKSAHA_BRIDGE_CODE_COLUMNS,
+        "customerBreakdown.bridgeCodeCol",
+      ),
+      lookupTable: resolveIdentifier(dim.lookupTable, EKSAHA_LOOKUP_TABLES, "customerBreakdown.lookupTable"),
+      lookupSahaCol: resolveIdentifier(
+        dim.lookupSahaCol,
+        EKSAHA_LOOKUP_SAHA_COLUMNS,
+        "customerBreakdown.lookupSahaCol",
+      ),
+      lookupKeyCol: resolveIdentifier(dim.lookupKeyCol, EKSAHA_LOOKUP_KEY_COLUMNS, "customerBreakdown.lookupKeyCol"),
+      labelColumn: resolveIdentifier(dim.labelColumn, EKSAHA_LABEL_COLUMNS, "customerBreakdown.labelColumn"),
+    };
+  }
   return {
     table: resolveIdentifier(dim.table, CUSTOMER_BREAKDOWN_TABLES, "customerBreakdown.table"),
     joinColumn: resolveIdentifier(

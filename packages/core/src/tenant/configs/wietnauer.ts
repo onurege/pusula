@@ -36,15 +36,15 @@ export const WIETNAUER_CONFIG: TenantConfig = {
   // W_MSSQL_USER, W_MSSQL_PASSWORD kolonlarından okunur.
   mssqlEnvPrefix: "W_MSSQL_",
 
-  // Alkol distribütörü ama 9LE çarpanı Pernod'a özel. Wietnauer'da hacim
-  // birimi farklı olabilir — kullanıcıyla teyit edilene kadar gizli tut.
-  // Toggle gizli, sadece TL gösterilir.
+  // Alkol distribütörü, hacim birimi 70cl-eşdeğer (9LE DEĞİL — Pernod'a özel
+  // çarpan). Faz 2'de kullanıcıyla teyit edildi: toggle açık, TL↔hacim geçişi
+  // Cockpit/Satış/Yönetim panellerinde kullanılabilir.
   volume: {
     key: "9le",
     short: "70cl",
     longLabel: "Hacim (70cl eşdeğer)",
     hint: "Hacim = Σ(miktar × TBLURUN.DBLLITRE). DBLLITRE = kapasite_cl/70 (70cl→1, 75cl→1.071).",
-    showInToggle: false, // Faz 2'de açılacak (birim toggle omurgası)
+    showInToggle: true, // Faz 2'de açıldı (birim toggle omurgası — brief madde 3)
     divisor: 1, // DBLLITRE zaten 70cl-eşdeğeri → bölme yok (Pernod'da 9)
   },
   tax: {
@@ -56,9 +56,9 @@ export const WIETNAUER_CONFIG: TenantConfig = {
 
   labels: {
     morningHeadline: "Bu Sabah Wietnauer'da Ne Oluyor",
-    channelTypeTitle: "Müşteri Grup Kırılımı · Son 12 Ay",
+    channelTypeTitle: "Müşteri Kırılımı",
     channelTypeSource:
-      "Müşteri grup kırılımı: TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM lookup. Prestige / Premium Plus / Premium / Standart Plus / Standart dağılımı.",
+      "Müşteri kırılımı: birleşik ek saha (TBLMUSTERIEKSAHA Saha 1+2 → TBLEKSAHASECENEK lookup, COALESCE). OFF/ON-TRADE segmentleri + (Tanımsız).",
     mapEmptyDataSource:
       "Henüz hiç senkronizasyon yapılmamış. Sağ üstteki Verileri yenile butonuna tıklayarak WIETNAUER_TEST'ten müşteri listesini SQLite'a kopyalayın.",
     kpiSourceNote: "TBLMSDFATURA + TBLMSDBELGEDETAY",
@@ -99,16 +99,27 @@ export const WIETNAUER_CONFIG: TenantConfig = {
     "BRUGAL",
   ],
 
-  // Müşteri Grup Kırılımı (md34) — TBLMUSTERI.TXTGRUPKIRILIMKOD →
-  // TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TXTAD (Prestige/Premium Plus/Premium/
-  // Standart Plus/Standart). Bugün komuta.ts + wietnauer-{saha,iskonto,
-  // aktivasyon,segment}.ts'te hardcoded olan değerlerin BİREBİR aynısı —
-  // Insider konfigüratörünün Faz A default'u (bkz. phase0-insider-konfigurator.md).
+  // Birleşik ek-saha müşteri kırılımı (brief madde 0/1 — Faz A Dalga 2):
+  // TBLMUSTERI → TBLMUSTERIEKSAHA (köprü, LNGMUSTERIREF) → TBLEKSAHASECENEK
+  // (lookup, LNGKOD = TRY_CONVERT(int, köprünün TXTEKSAHAACIKLAMA'sı)).
+  // sahaKods: [1,2] — Saha1=OFF-TRADE SEGMENTASYON (11.605 müşteri),
+  // Saha2=ON-TRADE SEGMENTASYON (2.705); COALESCE(saha1, saha2, "(Tanımsız)").
+  // DB doğrulandı: 10 grup, 15.017 aktif müşteride %95 kapsam, ilk iki grup
+  // "WHITE OUTLET" ailesi %88.3. Eski tek-hop TBLMUSTERIGRUPKIRILIM default'u
+  // (Prestige/Premium/…) bu birleşik kırılımın YERİNİ alır — Cockpit/Yönetim/
+  // Segment ekranları artık bunu kullanır (bkz. `customer-breakdown-sql.ts`).
   dimensions: {
     customerBreakdown: {
-      table: "TBLMUSTERIGRUPKIRILIM",
-      joinColumn: "TXTGRUPKIRILIMKOD",
-      labelColumn: "TXTAD",
+      mode: "eksaha-two-hop",
+      sahaKods: [1, 2],
+      bridgeTable: "TBLMUSTERIEKSAHA",
+      bridgeMusteriRef: "LNGMUSTERIREF",
+      bridgeSahaCol: "LNGEKSAHAKODU",
+      bridgeCodeCol: "TXTEKSAHAACIKLAMA",
+      lookupTable: "TBLEKSAHASECENEK",
+      lookupSahaCol: "LNGTAKIPKOD",
+      lookupKeyCol: "LNGKOD",
+      labelColumn: "TXTACIKLAMA",
     },
     // Faz B — `brandTable`/`brandJoinColumn` (yukarıda) ile BİREBİR aynı
     // değerler; SQL'e giden okuma yolu artık buradan (config-driven boyut).
@@ -124,5 +135,19 @@ export const WIETNAUER_CONFIG: TenantConfig = {
       joinColumn: "TXTEKGRUP",
       labelColumn: "TXTAD",
     },
+  },
+
+  // Aktivasyon-risk (brief madde 13): gün/ciro tabanlı "composite" model
+  // TERK edildi — 2-sinyal "visit-order" (ziyaret var/yok + sipariş var/yok).
+  // HESAPLAMA `map.ts` `classifyRiskTier`'da yapılır (başka bir ajan/dalga);
+  // burada yalnız kullanıcı-konfigüre varsayılanlar tanımlanır: öncelik
+  // ziyarette (ONAYLI varsayılan — kullanıcı "order"a çevirebilir), risk
+  // sayılan tier'lar kırmızı+turuncu (ziyaret yok+sipariş yok / ziyaret
+  // yok+sipariş var) — sarı/yeşil risk sayılmaz. Pencere seçili döneme bağlı,
+  // burada sabitlenmez.
+  riskModel: "visit-order",
+  riskConfig: {
+    priority: "visit",
+    riskTiers: ["red", "orange"],
   },
 };

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { setMappingOverride, getMappingOverride } from "../mapping-store.js";
 import { clearTenantCache, getCustomerBreakdownMeta, getMappingConfig, getTenantConfig } from "../index.js";
 import { customerBreakdownJoin } from "../customer-breakdown-sql.js";
+import { WIETNAUER_CONFIG } from "../configs/wietnauer.js";
 
 /**
  * GÖREV #2/#3 (QA veto fix): `setMappingOverride()` → `getMappingConfig()` /
@@ -23,7 +24,19 @@ const REPO_ROOT = path.resolve(__dirname, "../../../../..");
 const TENANT_ID = "wietnauer";
 const OVERRIDE_FILE = path.join(REPO_ROOT, "data", `tenant-config.${TENANT_ID}.enc.json`);
 
-const DEFAULT_META = { table: "TBLMUSTERIGRUPKIRILIM", joinColumn: "TXTGRUPKIRILIMKOD", labelColumn: "TXTAD" };
+/**
+ * FAZ A EK-SAHA GÜNCELLEMESİ (brief madde 3): Wietnauer'ın default
+ * `customerBreakdown`'ı bu dalgada tek-hop hardcoded literalden İKİ-HOP'a
+ * (`mode: "eksaha-two-hop"`) geçti (bkz. `configs/wietnauer.ts`). Bu dosya
+ * BİLEREK `TENANT_ID = "wietnauer"` kullanıyor (dosyanın kendi üst yorumu:
+ * Dalga 2 admin endpoint'inin GERÇEKTE yazacağı dosya yolu) — o yüzden
+ * `DEFAULT_META` artık elle yazılmış tek-hop literal DEĞİL, doğrudan
+ * `WIETNAUER_CONFIG.dimensions.customerBreakdown`'dan (gerçek config,
+ * totolojik olmayan bağımsız değer) türetilir. `ALT_META` hâlâ tek-hop bir
+ * override adayı (`TBLMUSTERIGRUP` ailesi, `identifier.ts` allowlist'inde) —
+ * bu test artık AYRICA iki-hop→tek-hop override GEÇİŞİNİ de kanıtlıyor.
+ */
+const DEFAULT_META = WIETNAUER_CONFIG.dimensions.customerBreakdown;
 const ALT_META = { table: "TBLMUSTERIGRUP", joinColumn: "TXTGRUPKOD", labelColumn: "TXTAD" };
 
 let preExistingBackup: string | null = null;
@@ -50,9 +63,19 @@ afterEach(restoreOverrideFile);
 afterAll(restoreOverrideFile);
 
 describe("setMappingOverride → getMappingConfig/getCustomerBreakdownMeta uçtan-uca", () => {
-  it("geçerli alternatif (TBLMUSTERIGRUP ailesi) yazıldıktan sonra override yansır", async () => {
+  it("override öncesi Wietnauer baseline'ı artık iki-hop (ek-saha) — sink JOIN'i buna göre üretir", () => {
     clearTenantCache();
-    expect(getCustomerBreakdownMeta()).toEqual(DEFAULT_META); // override öncesi baseline
+    expect(getCustomerBreakdownMeta()).toEqual(DEFAULT_META);
+    expect(getCustomerBreakdownMeta().mode).toBe("eksaha-two-hop");
+
+    const join = customerBreakdownJoin(getCustomerBreakdownMeta());
+    expect(join).toContain("TBLMUSTERIEKSAHA");
+    expect(join).toContain("TBLEKSAHASECENEK");
+  });
+
+  it("geçerli alternatif (TBLMUSTERIGRUP ailesi, tek-hop) yazıldıktan sonra override iki-hop default'un yerini alır", async () => {
+    clearTenantCache();
+    expect(getCustomerBreakdownMeta()).toEqual(DEFAULT_META); // override öncesi baseline (artık iki-hop)
 
     await setMappingOverride(TENANT_ID, {
       dimensions: { customerBreakdown: ALT_META },

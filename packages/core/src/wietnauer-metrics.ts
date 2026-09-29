@@ -14,6 +14,7 @@ import { withCache } from "./cache.js";
 import { getProductBreakdownMeta } from "./tenant/index.js";
 import { productBreakdownJoin } from "./tenant/product-breakdown-sql.js";
 import { cityFactClause, cityColClause, cityCacheTag } from "./auth.js";
+import { volumeUnitExpr } from "./volume.js";
 
 const CACHE_DOMAIN = "wietnauer";
 // v3: 30g pencerede ÜST SINIR eksikti — Wietnauer DB'de DEMO_DATE'in ötesine
@@ -29,7 +30,13 @@ const CACHE_DOMAIN = "wietnauer";
 // ısıttığı için bu iki fetcher'ın soğuk-cache maliyeti hâlâ mevcut (bkz. not).
 // v7: md22/md23 — fetchTopCustomers → fetchTopDistributors (bundle shape
 // değişti: topCustomers → topDistributors). Eski v6 cache'i geçersiz.
-const CACHE_VERSION = "v7";
+// v8: madde 8 — TL↔hacim toggle. `discount.netHacim` (70cl eşdeğer, tek
+// değer), `brands[].hacim`+`hacimPayPct`, `topDistributors[].hacim` eklendi
+// (wietnauer-satis.ts `hacimq` / wietnauer-iskonto.ts `netHacim` deseniyle
+// aynı: ayrı detay-join CTE/sorgu, aynı boyut anahtarına LEFT JOIN). Mevcut
+// ciro alanları geriye-uyumlu KORUNDU. Eski v7 cache'i (hacim alanları
+// eksik) geçersiz — bump şart.
+const CACHE_VERSION = "v8";
 
 // ---------- Tipler ----------------------------------------------------------
 
@@ -42,6 +49,10 @@ export type TopDistributor = {
   bolge: string | null;
   /** Son 30g net ciro */
   ciro: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer, `volumeUnitExpr`; Wietnauer
+   * divisor=1). TL↔hacim toggle için; FE gerekirse kendi payPct'ini
+   * (hacim / Σhacim) türetir. */
+  hacim: number;
   /** Son 30g fatura sayısı */
   faturaSayisi: number;
   /** md23: dist'in portföyündeki aktif müşteri sayısı (TBLMUSTERI BYTDURUM=0) */
@@ -62,10 +73,15 @@ export type BrandContribution = {
   markaKod: string;
   /** Son 30g ciro (detay satır net) */
   ciro: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer, `volumeUnitExpr`; Wietnauer
+   * divisor=1), aynı detay satırından (ciro ile aynı grain). */
+  hacim: number;
   /** Bu markayı alan distinct müşteri sayısı */
   musteriSayi: number;
   /** Toplam ciro içindeki pay (%) */
   payPct: number;
+  /** Madde 8 — payPct'in hacim karşılığı: toplam hacim içindeki pay (%). */
+  hacimPayPct: number;
   rank: number;
   /** Stratejik marka mı? Tenant config'inden işaretlenir. */
   isStratejik: boolean;
@@ -75,6 +91,11 @@ export type DiscountKpi = {
   brut: number;
   iskonto: number;
   net: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer, `volumeUnitExpr`; Wietnauer
+   * divisor=1), detay satırından (`TBLMSDBELGEDETAY`×`TBLURUN`), fatura
+   * header agregatlarından (brut/iskonto/net) BAĞIMSIZ ayrı join. TL↔hacim
+   * toggle için — hero KPI'ın hacim karşılığı. */
+  netHacim: number;
   /** İskonto / brüt oranı (%) — en yaygın kullanılan metrik */
   iskontoOraniPct: number;
   /** Son 30g toplam fatura sayısı (gerçek portföy, top-N değil) */
@@ -106,6 +127,10 @@ type TopDistributorRawRow = Omit<TopDistributor, "rank" | "payPct" | "kapsamPct"
  *
  * Scope-free: tüm dist'ler döner (~31 satır), dist scope + payPct runtime'da
  * JS'te uygulanır (fetchTopCustomers deseniyle aynı). kapsamPct = FKMS/aktif.
+ *
+ * Madde 8: üçüncü paralel sorgu (`hacimSql`) dist bazında hacim (70cl
+ * eşdeğer) döner — wietnauer-satis.ts `hacimq` CTE'siyle AYNI desen (detay×
+ * ürün join, header sorgusundan bağımsız), ayrı Map ile birleştirilir.
  */
 async function fetchTopDistributors(
   cities: string[] | null | undefined,
@@ -136,13 +161,37 @@ async function fetchTopDistributors(
     WHERE BYTDURUM = 0 AND LNGDISTKOD IS NOT NULL${cityColClause(cities, "TXTSEHIR")}
     GROUP BY LNGDISTKOD
   `;
-  const [salesRes, custRes] = await Promise.all([
+  // md-8: dist bazında son 30g hacim (70cl eşdeğer) — detay×ürün join,
+  // wietnauer-satis.ts `hacimq` CTE'siyle birebir aynı ifade.
+  const hacimSql = `
+    SELECT
+      f.LNGDISTKOD AS id,
+      ISNULL(SUM(${volumeUnitExpr("d2", "u", "ue")}), 0) AS hacim
+    FROM dbo.TBLMSDFATURA AS f
+    INNER JOIN dbo.TBLMSDBELGEDETAY d2
+      ON d2.LNGYIL = f.LNGYIL
+     AND d2.LNGFATURAKOD = f.LNGBELGEKOD
+     AND d2.LNGDISTKOD = f.LNGDISTKOD
+    INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d2.LNGURUNKOD
+    LEFT JOIN dbo.TBLURUNEKSAHA ue
+      ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+    WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+      AND f.TRHISLEMTARIHI >= ${win.lower}
+      AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
+    GROUP BY f.LNGDISTKOD
+  `;
+  const [salesRes, custRes, hacimRes] = await Promise.all([
     runReadOnly(salesSql, { limit: 5_000, timeoutMs: 60_000 }),
     runReadOnly(custSql, { limit: 5_000, timeoutMs: 60_000 }),
+    runReadOnly(hacimSql, { limit: 5_000, timeoutMs: 60_000 }),
   ]);
   const aktifByDist = new Map<number, number>();
   for (const r of custRes.rows) {
     if (r.id != null) aktifByDist.set(Number(r.id), Number(r.aktif ?? 0));
+  }
+  const hacimByDist = new Map<number, number>();
+  for (const r of hacimRes.rows) {
+    if (r.id != null) hacimByDist.set(Number(r.id), Number(r.hacim ?? 0));
   }
   return salesRes.rows.map((r) => {
     const id = Number(r.id);
@@ -151,6 +200,7 @@ async function fetchTopDistributors(
       ad: r.ad ? String(r.ad) : `Dist ${id}`,
       bolge: r.bolge ? String(r.bolge) : null,
       ciro: Number(r.ciro ?? 0),
+      hacim: hacimByDist.get(id) ?? 0,
       faturaSayisi: Number(r.fatura ?? 0),
       aktifMusteriSayi: aktifByDist.get(id) ?? 0,
       fkms: Number(r.fkms ?? 0),
@@ -163,6 +213,8 @@ type BrandRawRow = {
   marka: string;
   distId: number | null;
   ciro: number;
+  /** Madde 8 — hacim (70cl eşdeğer, `volumeUnitExpr`; Wietnauer divisor=1). */
+  hacim: number;
   musteriSayi: number;
 };
 
@@ -174,6 +226,10 @@ type BrandRawRow = {
  * COUNT DISTINCT olduğu için scope filtresi sonrası dist'ler arası SUM ile
  * doğru toplanır (bir müşteri faturası tek dist'e bağlı). payPct scope
  * SONRASI o kapsamın kendi toplamına göre hesaplanır (public API'de).
+ *
+ * Madde 8: aynı detay satırından (`d`/`u`) hacim (70cl eşdeğer) de SUM
+ * edilir — ekstra join yalnız `TBLURUNEKSAHA` (LEFT, ek_saha_26); ciro
+ * sorgusuna binen maliyet marjinal.
  */
 async function fetchBrands(
   cities: string[] | null | undefined,
@@ -191,6 +247,7 @@ async function fetchBrands(
       b.TXTAD AS marka,
       f.LNGDISTKOD AS dist_id,
       SUM(d.DBLNETFIYAT) AS ciro,
+      ISNULL(SUM(${volumeUnitExpr("d", "u", "ue")}), 0) AS hacim,
       COUNT(DISTINCT f.LNGMUSTERIKOD) AS musteri_sayi
     FROM dbo.TBLMSDFATURA f
     INNER JOIN dbo.TBLMSDBELGEDETAY d
@@ -198,6 +255,8 @@ async function fetchBrands(
      AND d.LNGFATURAKOD = f.LNGBELGEKOD
      AND d.LNGDISTKOD = f.LNGDISTKOD
     INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+    LEFT JOIN dbo.TBLURUNEKSAHA ue
+      ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
     ${productBreakdownJoin(productMeta)}
     WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
       AND f.TRHISLEMTARIHI >= ${win.lower}
@@ -211,28 +270,35 @@ async function fetchBrands(
     marka: String(r.marka ?? ""),
     distId: r.dist_id != null ? Number(r.dist_id) : null,
     ciro: Number(r.ciro ?? 0),
+    hacim: Number(r.hacim ?? 0),
     musteriSayi: Number(r.musteri_sayi ?? 0),
   }));
 }
 
 /** dist-scope uygulanmış ham satırları marka bazında re-aggregate eder + payPct/rank hesaplar. */
 function aggregateBrands(rows: BrandRawRow[], strategicBrands: string[]): BrandContribution[] {
-  const byMarka = new Map<string, { marka: string; markaKod: string; ciro: number; musteriSayi: number }>();
+  const byMarka = new Map<
+    string,
+    { marka: string; markaKod: string; ciro: number; hacim: number; musteriSayi: number }
+  >();
   for (const row of rows) {
     const existing = byMarka.get(row.markaKod);
     if (existing) {
       existing.ciro += row.ciro;
+      existing.hacim += row.hacim;
       existing.musteriSayi += row.musteriSayi;
     } else {
       byMarka.set(row.markaKod, {
         marka: row.marka,
         markaKod: row.markaKod,
         ciro: row.ciro,
+        hacim: row.hacim,
         musteriSayi: row.musteriSayi,
       });
     }
   }
   const toplamCiro = [...byMarka.values()].reduce((a, b) => a + b.ciro, 0);
+  const toplamHacim = [...byMarka.values()].reduce((a, b) => a + b.hacim, 0);
   const stratSet = new Set(strategicBrands.map((b) => b.toLocaleLowerCase("tr")));
   return [...byMarka.values()]
     .sort((a, b) => b.ciro - a.ciro)
@@ -241,8 +307,10 @@ function aggregateBrands(rows: BrandRawRow[], strategicBrands: string[]): BrandC
       marka: m.marka,
       markaKod: m.markaKod,
       ciro: m.ciro,
+      hacim: m.hacim,
       musteriSayi: m.musteriSayi,
       payPct: toplamCiro > 0 ? Number(((m.ciro / toplamCiro) * 100).toFixed(2)) : 0,
+      hacimPayPct: toplamHacim > 0 ? Number(((m.hacim / toplamHacim) * 100).toFixed(2)) : 0,
       rank: i + 1,
       isStratejik: stratSet.has(m.marka.toLocaleLowerCase("tr")),
     }));
@@ -253,6 +321,8 @@ type DiscountKpiRawRow = {
   brut: number;
   iskonto: number;
   net: number;
+  /** Madde 8 — hacim (70cl eşdeğer, `volumeUnitExpr`; Wietnauer divisor=1). */
+  hacim: number;
   faturaCount: number;
   aktifMusteriCount: number;
 };
@@ -262,31 +332,67 @@ type DiscountKpiRawRow = {
  * seviyesinde, TBLMSDFATURA.DBLISKONTOTUTARI). Scope-free: `LNGDISTKOD`
  * GROUP BY'a eklendi (~31 satır, ucuz). Marka/SKU kırılımı için ileride
  * detay üzerinden ayrı bir fetcher gerekir.
+ *
+ * Madde 8: `hacimq` CTE'si (detay×ürün join, wietnauer-satis.ts `hacimq` /
+ * wietnauer-iskonto.ts `hacim_detay` deseniyle aynı) `base` header
+ * agregatlarından BAĞIMSIZ, aynı `dist_id`'ye LEFT JOIN edilir — brüt/
+ * iskonto/net (header) ile hacim (detay) farklı grain'den geldiği için ayrı
+ * CTE şart (tekilleştirmeden JOIN edilirse fatura satır sayısı kadar
+ * çoğalma/yanlış SUM riski olurdu).
  */
 async function fetchDiscountKpi(
   cities: string[] | null | undefined,
   win: { lower: string; upper: string },
 ): Promise<DiscountKpiRawRow[]> {
   const sql = `
+    WITH base AS (
+      SELECT
+        LNGDISTKOD AS dist_id,
+        ISNULL(SUM(DBLBRUTTUTAR), 0) AS brut,
+        ISNULL(SUM(DBLISKONTOTUTARI), 0) AS iskonto,
+        ISNULL(SUM(DBLNETTUTAR), 0) AS net,
+        COUNT(*) AS fatura_count,
+        COUNT(DISTINCT LNGMUSTERIKOD) AS aktif_musteri_count
+      FROM dbo.TBLMSDFATURA
+      WHERE BYTTUR = 0 AND BYTDURUM = 0
+        AND TRHISLEMTARIHI >= ${win.lower}
+        AND TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities, "LNGMUSTERIKOD")}
+      GROUP BY LNGDISTKOD
+    ),
+    hacimq AS (
+      SELECT f.LNGDISTKOD AS dist_id,
+             ISNULL(SUM(${volumeUnitExpr("d", "u", "ue")}), 0) AS hacim
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMSDBELGEDETAY d
+        ON d.LNGYIL = f.LNGYIL
+       AND d.LNGFATURAKOD = f.LNGBELGEKOD
+       AND d.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNEKSAHA ue
+        ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= ${win.lower}
+        AND f.TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities)}
+      GROUP BY f.LNGDISTKOD
+    )
     SELECT
-      LNGDISTKOD AS dist_id,
-      ISNULL(SUM(DBLBRUTTUTAR), 0) AS brut,
-      ISNULL(SUM(DBLISKONTOTUTARI), 0) AS iskonto,
-      ISNULL(SUM(DBLNETTUTAR), 0) AS net,
-      COUNT(*) AS fatura_count,
-      COUNT(DISTINCT LNGMUSTERIKOD) AS aktif_musteri_count
-    FROM dbo.TBLMSDFATURA
-    WHERE BYTTUR = 0 AND BYTDURUM = 0
-      AND TRHISLEMTARIHI >= ${win.lower}
-      AND TRHISLEMTARIHI <  ${win.upper}${cityFactClause(cities, "LNGMUSTERIKOD")}
-    GROUP BY LNGDISTKOD
+      base.dist_id,
+      base.brut,
+      base.iskonto,
+      base.net,
+      base.fatura_count,
+      base.aktif_musteri_count,
+      ISNULL(h.hacim, 0) AS hacim
+    FROM base
+    LEFT JOIN hacimq h ON h.dist_id = base.dist_id
   `;
-  const result = await runReadOnly(sql, { limit: 200 });
+  const result = await runReadOnly(sql, { limit: 200, timeoutMs: 45_000 });
   return result.rows.map((r) => ({
     distId: r.dist_id != null ? Number(r.dist_id) : null,
     brut: Number(r.brut ?? 0),
     iskonto: Number(r.iskonto ?? 0),
     net: Number(r.net ?? 0),
+    hacim: Number(r.hacim ?? 0),
     faturaCount: Number(r.fatura_count ?? 0),
     aktifMusteriCount: Number(r.aktif_musteri_count ?? 0),
   }));
@@ -301,12 +407,14 @@ function aggregateDiscountKpi(rows: DiscountKpiRawRow[]): DiscountKpi {
   const brut = rows.reduce((a, r) => a + r.brut, 0);
   const iskonto = rows.reduce((a, r) => a + r.iskonto, 0);
   const net = rows.reduce((a, r) => a + r.net, 0);
+  const netHacim = rows.reduce((a, r) => a + r.hacim, 0);
   const faturaCount = rows.reduce((a, r) => a + r.faturaCount, 0);
   const aktifMusteriCount = rows.reduce((a, r) => a + r.aktifMusteriCount, 0);
   return {
     brut,
     iskonto,
     net,
+    netHacim,
     iskontoOraniPct: brut > 0 ? Number(((iskonto / brut) * 100).toFixed(2)) : 0,
     faturaCount,
     aktifMusteriCount,
@@ -405,6 +513,7 @@ export async function getWietnauerYonetimSnapshot(
       ad: r.ad,
       bolge: r.bolge,
       ciro: r.ciro,
+      hacim: r.hacim,
       faturaSayisi: r.faturaSayisi,
       aktifMusteriSayi: r.aktifMusteriSayi,
       fkms: r.fkms,

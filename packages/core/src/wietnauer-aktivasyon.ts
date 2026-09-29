@@ -24,11 +24,12 @@ import { sqlNow } from "./now.js";
 import { currentDate } from "./now.js";
 import { runReadOnly } from "./db.js";
 import { getLocalDb } from "./local-db.js";
-import { getCustomerBreakdownMeta, getProductBreakdownMeta } from "./tenant/index.js";
+import { getCustomerBreakdownMeta, getProductBreakdownMeta, getTenantConfig } from "./tenant/index.js";
 import { customerBreakdownJoin, customerBreakdownLabelExpr } from "./tenant/customer-breakdown-sql.js";
 import { productBreakdownJoin, productBreakdownTableSql } from "./tenant/product-breakdown-sql.js";
 import { fileURLToPath } from "node:url";
 import { cityFactClause, cityCacheTag } from "./auth.js";
+import { computeVisitOrderRisk, type VisitOrderRiskCfg } from "./map.js";
 
 const CACHE_DOMAIN = "wietnauer-aktivasyon";
 // v4: cache-key scope fragmentation düzeltmesi (VYK-01) — MSSQL fetcher'lar
@@ -476,7 +477,12 @@ function citySqliteFilter(cities: string[] | null | undefined): string {
   return `AND TRIM(sehir) IN (${esc})`;
 }
 
-function fetchRiskTierDistribution(
+/**
+ * Composite risk tier dağılımı (healthy/watch/risk/critical/unknown) — SQLite
+ * tek-pass GROUP BY, `risk_tier_v2` bake edilmiş kolonundan. Pernod/fmcg-demo
+ * (composite tenant'lar) bu yolu kullanır — AYNEN korunur.
+ */
+function fetchCompositeRiskTierDistribution(
   allowedDistKods: number[] | null,
   cities: string[] | null,
 ): RiskTierBucket[] {
@@ -512,6 +518,85 @@ function fetchRiskTierDistribution(
     // map_customers henüz oluşturulmamış olabilir → fail-soft.
     return [];
   }
+}
+
+/** md13 — "visit-order" risk modeli dağılım penceresi. Bu panel kullanıcı
+ *  seçili bir dönem taşımadığından (5 panelli sabit snapshot) 30g'de sabit —
+ *  DB doğrulaması bu pencereyle yapıldı (bkz. fonksiyon dokümantasyonu). */
+const RISK_DISTRIBUTION_WINDOW_DAYS = 30;
+
+/**
+ * "visit-order" risk modeli (`tenant.riskModel === "visit-order"` — bugün
+ * Wietnauer) için tier dağılımı: `risk_tier_v2` (composite) GROUP BY YERİNE
+ * müşteri başına bake edilmiş `days_since_last_visit`/`days_since_last_order`
+ * çekilip JS'te `computeVisitOrderRisk` ile bucketlanır — birkaç bin satır,
+ * ucuz (DB doğrulandı, bkz. brief madde 13).
+ *
+ * Pencere `RISK_DISTRIBUTION_WINDOW_DAYS` (30g) sabit — dağılım kanıtı:
+ * 🔴 red 3956 / 🟠 orange 129 / 🟡 yellow 5866 / 🟢 green 5067 (toplam 15018,
+ * `scripts/probe-a2-scratch.ts` ile canlı ölçüldü, bkz. Faz A2 raporu).
+ */
+function fetchVisitOrderRiskTierDistribution(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+  riskConfig: VisitOrderRiskCfg,
+): RiskTierBucket[] {
+  const db = getLocalDb(DEFAULT_REPO_ROOT);
+  try {
+    const distFilter =
+      allowedDistKods == null
+        ? ""
+        : allowedDistKods.length === 0
+          ? "AND 1=0"
+          : `AND dist_kod IN (${allowedDistKods.join(",")})`;
+    const rows = db
+      .prepare(
+        `SELECT days_since_last_visit AS dVisit, days_since_last_order AS dOrder
+         FROM map_customers
+         WHERE 1=1 ${distFilter} ${citySqliteFilter(cities)}`,
+      )
+      .all() as Array<{ dVisit: number | null; dOrder: number | null }>;
+
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const { tier } = computeVisitOrderRisk(
+        { daysSinceLastVisit: r.dVisit ?? null, daysSinceLastOrder: r.dOrder ?? null },
+        riskConfig,
+      );
+      counts.set(tier, (counts.get(tier) ?? 0) + 1);
+    }
+    const toplam = rows.length;
+    return [...counts.entries()].map(([tier, sayi]) => ({
+      tier,
+      musteriSayi: sayi,
+      payPct: toplam > 0 ? (sayi / toplam) * 100 : 0,
+    }));
+  } catch {
+    // map_customers henüz oluşturulmamış olabilir → fail-soft.
+    return [];
+  }
+}
+
+/**
+ * D) Risk Tier Dağılımı — tenant modeline göre iki paralel yoldan biri
+ * (Strangler Fig): composite tenant'lar (Pernod/fmcg-demo) AYNEN eski yolu
+ * kullanır; `riskModel: "visit-order"` seçen tenant'lar (Wietnauer) canlı
+ * `computeVisitOrderRisk` bucketlamasına geçer.
+ */
+function fetchRiskTierDistribution(
+  allowedDistKods: number[] | null,
+  cities: string[] | null,
+): RiskTierBucket[] {
+  const tenant = getTenantConfig();
+  if (tenant.riskModel === "visit-order") {
+    const cfg: VisitOrderRiskCfg = {
+      priority: tenant.riskConfig?.priority ?? "visit",
+      riskTiers: tenant.riskConfig?.riskTiers ?? ["red", "orange"],
+      windowDays: RISK_DISTRIBUTION_WINDOW_DAYS,
+    };
+    return fetchVisitOrderRiskTierDistribution(allowedDistKods, cities, cfg);
+  }
+  return fetchCompositeRiskTierDistribution(allowedDistKods, cities);
 }
 
 /**

@@ -104,7 +104,15 @@ describe("setMappingOverride / getMappingOverride (atomik store)", () => {
     };
     await expect(setMappingOverride(FIXTURE_TENANT, badOverride)).rejects.toThrow();
     // Kötü override hiç yazılmadı — dosya yok ya da önceki geçerli durumda.
-    const persistedTable = getMappingOverride(FIXTURE_TENANT)?.dimensions?.customerBreakdown?.table ?? "";
+    // `CustomerBreakdownDimension` artık discriminated union (Faz A ek-saha
+    // genişlemesi, bkz. `tenant/types.ts`) — `.table` yalnız tek-hop üyesinde
+    // var; iki-hop (`mode: "eksaha-two-hop"`) dalını ELE ederek daraltıyoruz
+    // (bu testin girdisi zaten tek-hop şekilli, `mode` alanı yok).
+    const persistedCustomerBreakdown = getMappingOverride(FIXTURE_TENANT)?.dimensions?.customerBreakdown;
+    const persistedTable =
+      persistedCustomerBreakdown && persistedCustomerBreakdown.mode !== "eksaha-two-hop"
+        ? persistedCustomerBreakdown.table
+        : "";
     expect(persistedTable).not.toContain("UNION");
   });
 

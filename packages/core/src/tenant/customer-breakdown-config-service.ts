@@ -44,6 +44,19 @@ export type CandidateWithLiveStatus = CustomerBreakdownCandidate & {
   live: CandidateLiveCheck;
 };
 
+/**
+ * `meta`'yı hata mesajlarında insan-okunabilir kılan mode-branch — tek-hop
+ * "table"/"joinColumn"/"labelColumn" üçlüsü, iki-hop (`"eksaha-two-hop"`)
+ * köprü+lookup dörtlüsü (union'ın hangi alan setini taşıdığı mode'a göre
+ * değişir — bkz. `identifier.ts` `CustomerBreakdownMeta`).
+ */
+function describeCustomerBreakdownMeta(meta: CustomerBreakdownMeta): string {
+  if (meta.mode === "eksaha-two-hop") {
+    return `${meta.bridgeTable}→${meta.lookupTable} (saha ${meta.sahaKods.join("/")}, ad ${meta.labelColumn})`;
+  }
+  return `${meta.table}/${meta.joinColumn}/${meta.labelColumn}`;
+}
+
 export type CustomerBreakdownConfigMeta = {
   current: CustomerBreakdownMeta;
   candidates: CandidateWithLiveStatus[];
@@ -141,7 +154,7 @@ export async function saveCustomerBreakdownOverride(deps: SaveCustomerBreakdownD
   const live = await verifyCandidateLive(run, meta);
   if (!isLiveCheckSavable(live)) {
     throw new LiveSchemaValidationError(
-      `[customer-breakdown] "${meta.table}"/"${meta.joinColumn}"/"${meta.labelColumn}" canlı şemada doğrulanamadı ` +
+      `[customer-breakdown] "${describeCustomerBreakdownMeta(meta)}" canlı şemada doğrulanamadı ` +
         `(tableExists=${live.tableExists}, joinColumnExists=${live.joinColumnExists}, labelColumnExists=${live.labelColumnExists}). ` +
         "Kayıt reddedildi — bozuk eşleme diske yazılmadı.",
       live,

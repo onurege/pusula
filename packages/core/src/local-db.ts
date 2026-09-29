@@ -155,6 +155,17 @@ export function getLocalDb(repoRoot: string): Database.Database {
     `CREATE INDEX IF NOT EXISTS idx_map_customers_tier_v2 ON map_customers(risk_tier_v2);`,
   );
 
+  // -- Faz A2 madde 7/13: harita hacim + "visit-order" risk modeli girdisi ---
+  // Hacim (Σ miktar × DBLLITRE) — `ciro_30d`/`ciro_prev_30d`/`ciro_t90`'ın
+  // BİREBİR ikizi (aynı 3-pencere deseni). `days_since_last_order` ise
+  // `days_since_last_visit`'in ikizi — "visit-order" risk modelinin
+  // (`computeVisitOrderRisk`, map.ts) ikinci sinyali. Composite tenant'larda
+  // (Pernod/fmcg-demo) bu kolonlar dolar ama okunmaz — zararsız.
+  ensureColumn(db, "map_customers", "hacim_30d", "REAL");
+  ensureColumn(db, "map_customers", "hacim_prev_30d", "REAL");
+  ensureColumn(db, "map_customers", "hacim_t90", "REAL");
+  ensureColumn(db, "map_customers", "days_since_last_order", "INTEGER");
+
   instances.set(dbPath, db);
   return db;
 }

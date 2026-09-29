@@ -44,7 +44,14 @@ const CACHE_DOMAIN = "wietnauer-satis";
 // md27: distLeaderboard'a `satisHizi` (ciro / aktif müşteri) eklendi — SQL/cache
 // şemasına dokunulmadı (mevcut ciro+musteriSayi'dan post-cache türetilir), bu
 // yüzden CACHE_VERSION artışı gerekmedi.
-const CACHE_VERSION = "v6";
+// v7: Faz A4 (madde 9) — TL↔hacim toggle audit'inde `repLeaderboard` ve
+// `dropSize` yalnız ₺ taşıdığı, hacim seçilince ₺'de kaldığı bulundu.
+// `repLeaderboard`'a `hacim` (distLeaderboard `hacim`/`hacimq` deseniyle
+// birebir aynı — detay×ürün join), `dropSize`'a `hacim` (twin of `ciro`) +
+// `dropSizeHacim` (twin of `dropSize` = hacim / musteriSayi) eklendi — her
+// iki fetcher da yeni bir `hacimq` CTE'siyle detay seviyesinde SUM alır.
+// Row shape değişti → cache satırı geçersiz.
+const CACHE_VERSION = "v7";
 
 // ---------- md21: özel tarih aralığı ----------------------------------------
 //
@@ -144,6 +151,12 @@ export type SatisRepRow = {
   distAd: string | null;
   region: string | null;
   ciro: number;
+  /**
+   * Faz A4 (madde 9): Son 30g hacim (70cl eşdeğer) — `distLeaderboard.hacim`
+   * ile birebir aynı desen (`volumeUnitExpr`, detay×ürün join, Wietnauer
+   * divisor=1), yalnız dist yerine temsilci (`LNGSTKOD`) bazında gruplanır.
+   */
+  hacim: number;
   musteriSayi: number;
   faturaSayi: number;
   ortSepet: number;
@@ -158,9 +171,19 @@ export type DropSizeRow = {
   ad: string;
   region: string | null;
   ciro: number;
+  /**
+   * Faz A4 (madde 9): Son 30g hacim (70cl eşdeğer) — `ciro`'nun twin'i,
+   * `distLeaderboard.hacim` ile aynı `hacimq` desenini kullanır.
+   */
+  hacim: number;
   musteriSayi: number;
   /** Drop size = ciro / musteriSayi (nokta başına ortalama ciro) */
   dropSize: number;
+  /**
+   * Faz A4 (madde 9): `dropSize`'ın hacim karşılığı = hacim / musteriSayi
+   * (nokta başına ortalama drop hacmi, 70cl eşdeğer).
+   */
+  dropSizeHacim: number;
   rank: number;
 };
 
@@ -332,6 +355,26 @@ async function fetchSalesRepLeaderboard(
         AND f.TRHISLEMTARIHI <  ${win.prevUpper}
         AND f.LNGSTKOD IS NOT NULL${cityFactClause(cities)}
       GROUP BY f.LNGSTKOD
+    ),
+    -- Faz A4 (madde 9): temsilci bazında seçili pencerede hacim (70cl eşdeğer)
+    -- — fatura DETAY seviyesi. distLeaderboard'daki hacimq ile birebir
+    -- aynı desen, yalnız GROUP BY anahtarı LNGDISTKOD yerine LNGSTKOD.
+    hacimq AS (
+      SELECT f.LNGSTKOD AS rep_id,
+             ISNULL(SUM(${volumeUnitExpr("d2", "u", "ue")}), 0) AS hacim
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMSDBELGEDETAY d2
+        ON d2.LNGYIL = f.LNGYIL
+       AND d2.LNGFATURAKOD = f.LNGBELGEKOD
+       AND d2.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d2.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNEKSAHA ue
+        ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}
+        AND f.LNGSTKOD IS NOT NULL${cityFactClause(cities)}
+      GROUP BY f.LNGSTKOD
     )
     SELECT
       c.rep_id,
@@ -340,6 +383,7 @@ async function fetchSalesRepLeaderboard(
       d.TXTAD AS dist_ad,
       dg.TXTAD AS region,
       c.ciro,
+      ISNULL(h.hacim, 0) AS hacim,
       c.fatura,
       c.musteri,
       ISNULL(pr.ciro, 0) AS prev_ciro
@@ -348,6 +392,7 @@ async function fetchSalesRepLeaderboard(
     LEFT JOIN dbo.TBLDIST d ON d.LNGKOD = p.LNGDISTKOD
     LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
     LEFT JOIN prev pr ON pr.rep_id = c.rep_id
+    LEFT JOIN hacimq h ON h.rep_id = c.rep_id
     ORDER BY c.ciro DESC
   `;
   // ~204 distinct rep (all-time) — scope-free full fetch ucuz.
@@ -364,6 +409,7 @@ async function fetchSalesRepLeaderboard(
       distAd: r.dist_ad ? String(r.dist_ad) : null,
       region: r.region ? String(r.region) : null,
       ciro,
+      hacim: Number(r.hacim ?? 0),
       faturaSayi: fatura,
       musteriSayi: Number(r.musteri ?? 0),
       ortSepet: fatura > 0 ? ciro / fatura : 0,
@@ -398,17 +444,41 @@ async function fetchDropSizeByDist(
         AND f.TRHISLEMTARIHI <  ${win.curUpper}${cityFactClause(cities)}
       GROUP BY f.LNGDISTKOD
       HAVING COUNT(DISTINCT f.LNGMUSTERIKOD) >= 5
+    ),
+    -- Faz A4 (madde 9): dist bazında seçili pencerede hacim (70cl eşdeğer) —
+    -- fatura DETAY seviyesi, distLeaderboard'daki hacimq ile birebir aynı
+    -- desen. stats'ın "HAVING >= 5 müşteri" filtresinden BAĞIMSIZ hesaplanır
+    -- (farklı grain); dist_id'ye LEFT JOIN edilip stats süzgeci sonrası
+    -- eşleşmeyenler zaten ana SELECT'ten (INNER JOIN stats->dist) düşer.
+    hacimq AS (
+      SELECT f.LNGDISTKOD AS dist_id,
+             ISNULL(SUM(${volumeUnitExpr("d2", "u", "ue")}), 0) AS hacim
+      FROM dbo.TBLMSDFATURA f
+      INNER JOIN dbo.TBLMSDBELGEDETAY d2
+        ON d2.LNGYIL = f.LNGYIL
+       AND d2.LNGFATURAKOD = f.LNGBELGEKOD
+       AND d2.LNGDISTKOD = f.LNGDISTKOD
+      INNER JOIN dbo.TBLURUN u ON u.LNGKOD = d2.LNGURUNKOD
+      LEFT JOIN dbo.TBLURUNEKSAHA ue
+        ON ue.LNGURUNREF = u.LNGKOD AND ue.LNGEKSAHAKODU = 26
+      WHERE f.BYTTUR = 0 AND f.BYTDURUM = 0
+        AND f.TRHISLEMTARIHI >= ${win.curLower}
+        AND f.TRHISLEMTARIHI <  ${win.curUpper}${cityFactClause(cities)}
+      GROUP BY f.LNGDISTKOD
     )
     SELECT
       s.dist_id,
       d.TXTAD AS ad,
       dg.TXTAD AS region,
       s.ciro,
+      ISNULL(h.hacim, 0) AS hacim,
       s.musteri,
-      CAST(s.ciro / NULLIF(s.musteri, 0) AS DECIMAL(18, 2)) AS drop_size
+      CAST(s.ciro / NULLIF(s.musteri, 0) AS DECIMAL(18, 2)) AS drop_size,
+      CAST(ISNULL(h.hacim, 0) / NULLIF(s.musteri, 0) AS DECIMAL(18, 4)) AS drop_size_hacim
     FROM stats s
     INNER JOIN dbo.TBLDIST d ON d.LNGKOD = s.dist_id
     LEFT JOIN dbo.TBLDISTEKGRUP dg ON dg.TXTKOD = d.TXTEKGRUP
+    LEFT JOIN hacimq h ON h.dist_id = s.dist_id
     ORDER BY drop_size DESC
   `;
   const result = await runReadOnly(sql, { limit: 50 });
@@ -417,8 +487,10 @@ async function fetchDropSizeByDist(
     ad: String(r.ad ?? ""),
     region: r.region ? String(r.region) : null,
     ciro: Number(r.ciro ?? 0),
+    hacim: Number(r.hacim ?? 0),
     musteriSayi: Number(r.musteri ?? 0),
     dropSize: Number(r.drop_size ?? 0),
+    dropSizeHacim: Number(r.drop_size_hacim ?? 0),
   }));
 }
 

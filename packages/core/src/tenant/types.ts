@@ -12,23 +12,58 @@
 export type Industry = "alcohol" | "fmcg";
 
 /**
- * Müşteri kırılımı boyutu — TBLMUSTERI üzerindeki bir lookup-kod kolonunu
- * (`joinColumn`) bir lookup tablosuna (`table`) bağlar; o tablonun okunabilir
- * adı `labelColumn`'da tutulur (Univera kuralı: lookup tabloları TXTKOD (PK) +
- * TXTAD (ad) çiftini taşır — bu ikisi arasındaki JOIN anahtarı sabit "TXTKOD",
- * config'e girmez).
+ * Müşteri kırılımı boyutu — iki mod (Faz A ek-saha genişlemesi):
  *
- * Örnek (Wietnauer default): TBLMUSTERI.TXTGRUPKIRILIMKOD →
- * TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TBLMUSTERIGRUPKIRILIM.TXTAD.
+ *   - TEK-HOP (`mode` yok veya `"single-hop"`, GERİ UYUM ŞART): TBLMUSTERI
+ *     üzerindeki bir lookup-kod kolonunu (`joinColumn`) bir lookup tablosuna
+ *     (`table`) bağlar; o tablonun okunabilir adı `labelColumn`'da tutulur
+ *     (Univera kuralı: lookup tabloları TXTKOD (PK) + TXTAD (ad) çiftini
+ *     taşır — bu ikisi arasındaki JOIN anahtarı sabit "TXTKOD", config'e
+ *     girmez). Örnek (Pernod/fmcg-demo default): TBLMUSTERI.TXTGRUPKIRILIMKOD
+ *     → TBLMUSTERIGRUPKIRILIM.TXTKOD, ad TBLMUSTERIGRUPKIRILIM.TXTAD.
+ *
+ *   - İKİ-HOP (`mode: "eksaha-two-hop"`): Wietnauer'ın "ek-saha" birleşik
+ *     müşteri kırılımı — TBLMUSTERI → `bridgeTable` (m2m köprü, iki
+ *     `sahaKods` değeri) → `lookupTable` (saha kodu → okunabilir ad).
+ *     Sonuç COALESCE(saha1 adı, saha2 adı, "(Tanımsız)") ile tek etikete
+ *     indirgenir (bkz. `tenant/customer-breakdown-sql.ts`). Örnek (Wietnauer
+ *     default): saha1=OFF-TRADE SEGMENTASYON, saha2=ON-TRADE SEGMENTASYON.
+ *
+ * SQL'e interpolate edilmeden önce DAİMA `resolveCustomerBreakdown()`'dan
+ * (bkz. `tenant/identifier.ts`) geçmeli — regex + küratörlü allowlist, mode'a
+ * göre farklı allowlist kümesi. Geçersiz değer THROW eder (fail-closed).
  */
-export type CustomerBreakdownDimension = {
-  /** Lookup tablosu — `dbo.` şeması sabit, `resolveIdentifier()` doğrular. */
-  table: string;
-  /** TBLMUSTERI üzerindeki FK kolonu — lookup tablosunun TXTKOD'una bağlanır. */
-  joinColumn: string;
-  /** Lookup tablosunun okunabilir ad kolonu (genelde "TXTAD"). */
-  labelColumn: string;
-};
+export type CustomerBreakdownDimension =
+  | {
+      mode?: "single-hop";
+      /** Lookup tablosu — `dbo.` şeması sabit, `resolveIdentifier()` doğrular. */
+      table: string;
+      /** TBLMUSTERI üzerindeki FK kolonu — lookup tablosunun TXTKOD'una bağlanır. */
+      joinColumn: string;
+      /** Lookup tablosunun okunabilir ad kolonu (genelde "TXTAD"). */
+      labelColumn: string;
+    }
+  | {
+      mode: "eksaha-two-hop";
+      /** [saha1, saha2] — TAM İKİ tam sayı (Wietnauer: [1,2]). */
+      sahaKods: number[];
+      /** m2m köprü tablosu (Wietnauer: `TBLMUSTERIEKSAHA`). */
+      bridgeTable: string;
+      /** Köprüde `TBLMUSTERI.LNGKOD`'a bağlanan FK kolonu. */
+      bridgeMusteriRef: string;
+      /** Köprüde saha kodunu taşıyan kolon (`sahaKods` ile filtrelenir). */
+      bridgeSahaCol: string;
+      /** Köprüde lookup'a bağlanan (TRY_CONVERT edilecek) ham kod kolonu. */
+      bridgeCodeCol: string;
+      /** Saha kodu → okunabilir ad lookup tablosu (Wietnauer: `TBLEKSAHASECENEK`). */
+      lookupTable: string;
+      /** Lookup'ta hangi sahaya ait olduğunu taşıyan kolon. */
+      lookupSahaCol: string;
+      /** Lookup'ta PK kolonu — köprünün `bridgeCodeCol`'una (int'e çevrilmiş) bağlanır. */
+      lookupKeyCol: string;
+      /** Lookup'ın okunabilir ad kolonu (Wietnauer: `TXTACIKLAMA`). */
+      labelColumn: string;
+    };
 
 /**
  * Ürün/marka kırılımı boyutu — TBLURUN üzerindeki bir lookup-kod kolonunu
@@ -62,6 +97,30 @@ export type RegionBreakdownDimension = {
   table: string;
   joinColumn: string;
   labelColumn: string;
+};
+
+/**
+ * Aktivasyon-risk 4 tier'ı, kötüden iyiye: `red` (en riskli) → `green` (en
+ * sağlıklı). `"visit-order"` modelinde anlamı: ziyaret/sipariş var/yok
+ * ikilisinin 4 kombinasyonu (bkz. `riskModel` dokümantasyonu) — kullanıcı bu
+ * tier'lardan hangilerinin "risk" sayılacağını `RiskConfig.riskTiers`'da seçer.
+ */
+export type RiskTier = "red" | "orange" | "yellow" | "green";
+
+/**
+ * `riskModel: "visit-order"` için kullanıcı-konfigüre varsayılanlar.
+ *
+ * Pencere (`windowDays`) BURADA YOK — SEÇİLİ DÖNEMDEN (görünüm-anı, ekran
+ * filtresi) gelir, config'e sabitlenmez. Asıl risk HESABI `map.ts`
+ * `classifyRiskTier`'da yapılır (başka bir ajan/dalga); bu tip yalnız hangi
+ * sinyalin öncelikli olduğunu ve hangi tier'ların "risk" sayıldığını taşır.
+ */
+export type RiskConfig = {
+  /** Hangi sinyale öncelik verilir — "visit" (ziyaret, ONAYLI varsayılan
+   *  öncelik) veya "order" (sipariş). Kullanıcı çevirebilir. */
+  priority: "visit" | "order";
+  /** Hangi tier'lar dashboard'da "risk" olarak işaretlenir — kullanıcı seçer. */
+  riskTiers: RiskTier[];
 };
 
 /** Config-driven boyutların tenant başına eşleme kümesi. */
@@ -257,6 +316,26 @@ export type TenantConfig = {
    * ÜSTÜNE biner — şifreli dosya store'dan (`tenant/mapping-store.ts`) okunur.
    */
   dimensions: TenantDimensions;
+
+  // -- Aktivasyon-risk modeli ---------------------------------------------------
+
+  /**
+   * Aktivasyon-risk modeli — `"composite"` (mevcut davranış: gün/ciro tabanlı
+   * bileşik skor, Pernod default) veya `"visit-order"` (2-sinyal: ziyaret
+   * var/yok + sipariş var/yok, Wietnauer talebi — brief madde 13).
+   * Tanımsızsa `"composite"` (geri uyum — Pernod/fmcg-demo davranışı DEĞİŞMEZ).
+   *
+   * HESAPLAMA burada YAPILMAZ — `map.ts` `classifyRiskTier`'da yapılır; bu
+   * alan yalnız hangi modelin aktif olduğunu taşır (config sözleşmesi).
+   */
+  riskModel?: "composite" | "visit-order";
+
+  /**
+   * `riskModel: "visit-order"` için kullanıcı-konfigüre varsayılanlar
+   * (öncelik + risk sayılan tier'lar). `riskModel` `"composite"` (veya
+   * tanımsız) iken okunmaz/kullanılmaz.
+   */
+  riskConfig?: RiskConfig;
 
   // -- UI davranışı (tenant-özel arayüz kısıtları) ----------------------------
 

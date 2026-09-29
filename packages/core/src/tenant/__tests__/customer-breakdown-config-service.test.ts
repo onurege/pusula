@@ -18,6 +18,7 @@ import { cachedClear } from "../../cache.js";
 import { recordConfigAudit } from "../audit-log.js";
 import { clearTenantCache, getCustomerBreakdownMeta, getMappingConfig, getTenantConfig } from "../index.js";
 import { getMappingOverride } from "../mapping-store.js";
+import { WIETNAUER_CONFIG } from "../configs/wietnauer.js";
 import {
   LiveSchemaValidationError,
   previewCustomerBreakdownCandidate,
@@ -78,7 +79,19 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../../../../..");
 const TENANT_ID = "wietnauer";
 const OVERRIDE_FILE = path.join(REPO_ROOT, "data", `tenant-config.${TENANT_ID}.enc.json`);
-const DEFAULT_META = { table: "TBLMUSTERIGRUPKIRILIM", joinColumn: "TXTGRUPKIRILIMKOD", labelColumn: "TXTAD" };
+/**
+ * FAZ A EK-SAHA GÜNCELLEMESİ (brief madde 3): Wietnauer'ın default
+ * `customerBreakdown`'ı bu dalgada tek-hop hardcoded literalden İKİ-HOP'a
+ * (`mode: "eksaha-two-hop"`) geçti (bkz. `configs/wietnauer.ts`). `TENANT_ID`
+ * bilerek "wietnauer" kalıyor (`product-breakdown-config-service.test.ts`'in
+ * kendi dosya-çakışması yorumuna göre her konfigüratör-servis testi KENDİ
+ * tenant id'sini kullanır — bu zaten "wietnauer"). `DEFAULT_META` artık elle
+ * yazılmış tek-hop literal DEĞİL, doğrudan
+ * `WIETNAUER_CONFIG.dimensions.customerBreakdown`'dan (gerçek config)
+ * türetilir — save/reset testlerindeki `oldValue`/"default'a döndü" iddiaları
+ * bu GERÇEK (artık iki-hop) değere göre doğrulanır.
+ */
+const DEFAULT_META = WIETNAUER_CONFIG.dimensions.customerBreakdown;
 
 let preExistingBackup: string | null = null;
 
@@ -106,6 +119,15 @@ beforeEach(() => {
 });
 afterEach(restoreOverrideFile);
 afterAll(restoreOverrideFile);
+
+describe("Wietnauer baseline (override yok) — Faz A ek-saha iki-hop", () => {
+  it("getCustomerBreakdownMeta() override yokken iki-hop (eksaha-two-hop) DEFAULT_META'yı döner", () => {
+    clearTenantCache();
+    expect(getMappingOverride(TENANT_ID)).toBeNull(); // beforeAll/afterEach temiz durumu garantiler
+    expect(getCustomerBreakdownMeta()).toEqual(DEFAULT_META);
+    expect(getCustomerBreakdownMeta().mode).toBe("eksaha-two-hop");
+  });
+});
 
 describe("saveCustomerBreakdownOverride — (a) allowlist/şema doğrulaması", () => {
   it("allowlist DIŞI tablo, DB'ye HİÇ gitmeden reddedilir (fail-fast)", async () => {

@@ -22,7 +22,7 @@
  * çift kilit).
  */
 import { customerBreakdownJoin } from "./customer-breakdown-sql";
-import type { CustomerBreakdownMeta } from "./identifier";
+import type { CustomerBreakdownMeta, EksahaTwoHopCustomerBreakdownMeta } from "./identifier";
 
 /**
  * Yükseltilmiş şema doğrulaması bilgisiyle "kaydedilemez" hatası — endpoint
@@ -104,6 +104,43 @@ export type CandidateLiveCheck = {
 };
 
 /**
+ * İki-hop (`mode: "eksaha-two-hop"`) mode-guard'ı — bkz. `verifyCandidateLive`
+ * dokümantasyonu. Admin picker'ın küratörlü aday listesi
+ * (`CUSTOMER_BREAKDOWN_CANDIDATES`) hiçbir zaman iki-hop ÜRETMEZ, yalnız
+ * TAŞIR; yine de union tipini kırmamak için "atla" değil GERÇEK bir canlı-
+ * şema sorgusu çalıştırılır — köprü+lookup tablosunun VAR'lığı ve dört
+ * anahtar kolonun (bridgeMusteriRef/bridgeSahaCol/bridgeCodeCol,
+ * lookupSahaCol/lookupKeyCol/labelColumn) varlığı paralel kontrol edilir;
+ * tek-hop'un table/joinColumn/labelColumn üçlüsüne en yakın anlamsal
+ * karşılığa eşlenir. `typeMismatch` iki-hop'ta uygulanamaz (TRY_CONVERT
+ * zaten tip farkını yutar) → `false`.
+ */
+async function verifyEksahaCandidateLive(
+  run: RunReadOnlyFn,
+  candidate: EksahaTwoHopCustomerBreakdownMeta,
+): Promise<CandidateLiveCheck> {
+  const [bridgeExists, lookupExists, musteriRefCol, bridgeSahaCol, bridgeCodeCol, lookupSahaCol, lookupKeyCol, labelCol] =
+    await Promise.all([
+      tableExistsLive(run, candidate.bridgeTable),
+      tableExistsLive(run, candidate.lookupTable),
+      columnLive(run, candidate.bridgeTable, candidate.bridgeMusteriRef),
+      columnLive(run, candidate.bridgeTable, candidate.bridgeSahaCol),
+      columnLive(run, candidate.bridgeTable, candidate.bridgeCodeCol),
+      columnLive(run, candidate.lookupTable, candidate.lookupSahaCol),
+      columnLive(run, candidate.lookupTable, candidate.lookupKeyCol),
+      columnLive(run, candidate.lookupTable, candidate.labelColumn),
+    ]);
+  return {
+    tableExists: bridgeExists && lookupExists,
+    joinColumnExists: musteriRefCol.exists && bridgeSahaCol.exists && bridgeCodeCol.exists,
+    labelColumnExists: lookupSahaCol.exists && lookupKeyCol.exists && labelCol.exists,
+    joinColumnDataType: bridgeCodeCol.dataType,
+    lookupKeyDataType: lookupKeyCol.dataType,
+    typeMismatch: false,
+  };
+}
+
+/**
  * Adayın tablo/kolonlarının canlı DB'de VAR olup olmadığını + tip uyumunu
  * doğrular. Tüm sorgular tek `Promise.all` turunda paralel gider.
  *
@@ -111,12 +148,18 @@ export type CandidateLiveCheck = {
  * için `TBLMUSTERI` (varsayılan, geriye-uyum), ürün/marka kırılımı için
  * `TBLURUN`, bölge kırılımı için `TBLDIST` (bkz. `product-breakdown-config-
  * service.ts` / `region-breakdown-config-service.ts` çağrıları).
+ *
+ * İki-hop (`mode: "eksaha-two-hop"`) için `verifyEksahaCandidateLive()`'e
+ * devreder — bkz. o fonksiyonun dokümantasyonu (mode-guard gerekçesi).
  */
 export async function verifyCandidateLive(
   run: RunReadOnlyFn,
   candidate: CustomerBreakdownMeta,
   parentTable: string = "TBLMUSTERI",
 ): Promise<CandidateLiveCheck> {
+  if (candidate.mode === "eksaha-two-hop") {
+    return verifyEksahaCandidateLive(run, candidate);
+  }
   const [tableExists, joinCol, lookupKeyCol, labelCol] = await Promise.all([
     tableExistsLive(run, candidate.table),
     columnLive(run, parentTable, candidate.joinColumn),
@@ -149,15 +192,18 @@ export function isLiveCheckSavable(check: CandidateLiveCheck): boolean {
 const MAX_PREVIEW_SAMPLES = 50;
 
 /** `SELECT TOP N DISTINCT <labelColumn>` — adayın gerçek görünür değerleri
- *  ("Prestige", "Premium", …). Kaydetmeden önce admin'e "bu doğru mu?" gösterir. */
+ *  ("Prestige", "Premium", …). Kaydetmeden önce admin'e "bu doğru mu?" gösterir.
+ *  İki-hop'ta (`mode: "eksaha-two-hop"`) örnekleme kaynağı `lookupTable` —
+ *  köprü değil, okunabilir adın yaşadığı yer. */
 export async function previewSampleValues(
   run: RunReadOnlyFn,
   candidate: CustomerBreakdownMeta,
   limit = 10,
 ): Promise<string[]> {
   const n = Math.max(1, Math.min(limit, MAX_PREVIEW_SAMPLES));
+  const table = candidate.mode === "eksaha-two-hop" ? candidate.lookupTable : candidate.table;
   const q = `SELECT TOP ${n} LTRIM(RTRIM(${candidate.labelColumn})) AS val
-             FROM dbo.${candidate.table}
+             FROM dbo.${table}
              WHERE ${candidate.labelColumn} IS NOT NULL
                AND LTRIM(RTRIM(${candidate.labelColumn})) <> ''
              GROUP BY LTRIM(RTRIM(${candidate.labelColumn}))
@@ -212,11 +258,16 @@ export async function computeMatchRate(
 ): Promise<MatchRateResult> {
   const parentAlias = opts.parentAlias ?? "m";
   const parentTable = opts.parentTable ?? "TBLMUSTERI";
-  const lookupAlias = opts.lookupAlias ?? "k";
   const activeFilter = opts.activeFilter ?? `${parentAlias}.BYTDURUM = 0`;
   const join = opts.join ?? customerBreakdownJoin(candidate);
+  // İki-hop: "eşleşti" = saha1 VEYA saha2 lookup'ından biri çözüldü (lk1/lk2
+  // alias'ları `eksahaJoin()`'le birebir aynı — bkz. `customer-breakdown-sql.ts`).
+  const matchedCase =
+    candidate.mode === "eksaha-two-hop"
+      ? `lk1.${candidate.lookupKeyCol} IS NOT NULL OR lk2.${candidate.lookupKeyCol} IS NOT NULL`
+      : `${opts.lookupAlias ?? "k"}.TXTKOD IS NOT NULL`;
   const q = `SELECT COUNT(*) AS total,
-                    SUM(CASE WHEN ${lookupAlias}.TXTKOD IS NOT NULL THEN 1 ELSE 0 END) AS matched
+                    SUM(CASE WHEN ${matchedCase} THEN 1 ELSE 0 END) AS matched
              FROM dbo.${parentTable} ${parentAlias}
              ${join}
              WHERE ${activeFilter}`;
