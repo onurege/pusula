@@ -125,6 +125,7 @@ export const CONTENT_REGISTRY: ContentSection[] = [
     title: "KPI Kart Etiketleri",
     fields: [
       { key: "kpi.yonetim.ciro", label: "Yönetim · Toplam Net Ciro", default: "Toplam Net Ciro" },
+      { key: "kpi.yonetim.hacim", label: "Yönetim · Toplam Hacim (TL↔hacim toggle)", default: "Toplam Hacim" },
       { key: "kpi.yonetim.aktif", label: "Yönetim · Aktif Müşteri", default: "Aktif Müşteri" },
       { key: "kpi.yonetim.konsantrasyon", label: "Yönetim · Top 10 Konsantrasyon", default: "Top 10 Konsantrasyon" },
       { key: "kpi.yonetim.stratejik", label: "Yönetim · Stratejik Marka Payı", default: "Stratejik Marka Payı" },
@@ -211,8 +212,9 @@ export const PANEL_REGISTRY: PanelScreen[] = [
   {
     screen: "Müşteri Segmentasyon",
     panels: [
-      { key: "panel.segment.eksaha", defaultTitle: "Müşteri Tipi" },
+      { key: "panel.segment.eksaha", defaultTitle: "Müşteri Ek Saha" },
       { key: "panel.segment.ekgrup", defaultTitle: "Müşteri Ek Grubu" },
+      { key: "panel.segment.grupkirilim", defaultTitle: "Müşteri Grup Kırılımı" },
       { key: "panel.segment.cross", defaultTitle: "Müşteri Tipi × Marka" },
     ],
   },
@@ -305,7 +307,7 @@ export const ADMIN_SCREENS: AdminScreen[] = [
         panelItem("kpi.cockpit.sepet", "Ortalama Sepet"),
       ]},
       { title: "Modüller / Kutular (aç/kapa + ad)", items: [
-        panelItem("panel.cockpit.kpistrip", "KPI Şeridi başlığı (Son 30 gün özet)"),
+        panelItem("panel.cockpit.kpistrip", "KPI Şeridi başlığı ({periyot} özet — periyoda göre değişir)"),
         panelItem("panel.cockpit.brief", "AI Yorum (Bu Sabahın Yorumu)"),
         toggleItem("panel.cockpit.map", "Bölge Haritası (Türkiye × YoY)"),
         panelItem("panel.cockpit.channelmonthly", "Kanal Mix · Son 12 Ay"),
@@ -328,6 +330,7 @@ export const ADMIN_SCREENS: AdminScreen[] = [
       ]},
       { title: "KPI Kartları (aç/kapa + ad)", items: [
         kpiItem("kpi.yonetim.ciro", "Toplam Net Ciro"),
+        kpiItem("kpi.yonetim.hacim", "Toplam Hacim"),
         kpiItem("kpi.yonetim.aktif", "Aktif Müşteri"),
         kpiItem("kpi.yonetim.konsantrasyon", "Top 10 Konsantrasyon"),
         kpiItem("kpi.yonetim.stratejik", "Stratejik Marka Payı"),
@@ -366,8 +369,9 @@ export const ADMIN_SCREENS: AdminScreen[] = [
         textItem("page.segment.desc", "Açıklama", "Müşteri Tipi, Ek Grubu ve segment kırılımları.", true),
       ]},
       { title: "Modüller / Kutular", items: [
-        panelItem("panel.segment.eksaha", "Müşteri Tipi"),
+        panelItem("panel.segment.eksaha", "Müşteri Ek Saha"),
         panelItem("panel.segment.ekgrup", "Müşteri Ek Grubu"),
+        panelItem("panel.segment.grupkirilim", "Müşteri Grup Kırılımı"),
         panelItem("panel.segment.cross", "Müşteri Tipi × Marka"),
       ]},
     ],

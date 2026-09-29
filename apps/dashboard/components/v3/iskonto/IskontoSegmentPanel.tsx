@@ -8,6 +8,12 @@ type SegmentRow = {
   iskontoOraniPct: number;
   musteriSayi: number;
   faturaSayisi: number;
+  /** Madde 8 — son 30g hacim (70cl eşdeğer), `net`'in YANINDA taşınır. Brüt/
+   *  İskonto'nun hacim karşılığı yok — yalnızca Net satırı toggle'a duyarlı.
+   *  Opsiyonel: bu görevin dosya kapsamı dışındaki `ticari-yatirim/page.tsx`
+   *  kendi ad-hoc `SegmentRow` alt kümesini hâlâ `netHacim`'siz geçiriyor —
+   *  zorunlu yapmak o sayfayı kırar. Eksikse render `?? 0` ile TL'ye düşer. */
+  netHacim?: number;
 };
 
 /**
@@ -26,6 +32,8 @@ export function IskontoSegmentPanel({
   segments,
   title,
   dimensionLabel,
+  unit = "tl",
+  volumeShort,
   locale = "tr",
 }: {
   segments: SegmentRow[];
@@ -33,8 +41,15 @@ export function IskontoSegmentPanel({
   title?: string;
   /** Alt-metindeki boyut adı (ör. "Müşteri ek grup"). */
   dimensionLabel?: string;
+  /** `"tl"` (varsayılan) → Net satırı `net`. Tenant hacim birimi anahtarı
+   *  verilirse `netHacim` gösterilir (Brüt/İskonto her zaman TL kalır —
+   *  backend hacim karşılığı taşımıyor). */
+  unit?: string;
+  /** Hacim birimi kısa etiketi (ör. "70cl") — yalnızca `unit !== "tl"` iken kullanılır. */
+  volumeShort?: string;
   locale?: Locale;
 }) {
+  const useVolume = unit !== "tl" && Boolean(volumeShort);
   if (panelHidden("panel.iskonto.segment")) return null;
   const dimLabel = dimensionLabel ?? (locale === "en" ? "Customer group breakdown" : "Müşteri grup kırılımı");
   // Bar referansı: maksimum oran (en az 25%) — görsel kıyas için
@@ -121,7 +136,9 @@ export function IskontoSegmentPanel({
                 </div>
                 <div className="seg-money-row">
                   <span className="m-label">Net</span>
-                  <span className="m-val strong">₺{formatCompact(s.net)}</span>
+                  <span className="m-val strong">
+                    {useVolume ? `${formatCompact(s.netHacim ?? 0)} ${volumeShort}` : `₺${formatCompact(s.net)}`}
+                  </span>
                 </div>
               </div>
             </div>

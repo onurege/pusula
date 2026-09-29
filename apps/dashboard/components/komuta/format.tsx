@@ -13,15 +13,18 @@ export function formatCompact(n: number): string {
   return Math.round(n).toString();
 }
 
-/** Snapshot.unit'e göre kısa birim etiketi. UI'da küçük/silik gösterilir. */
-export function unitSuffix(unit: ValueUnit): string {
-  return unit === "9le" ? "9L" : "₺";
+/** Snapshot.unit'e göre kısa birim etiketi. UI'da küçük/silik gösterilir.
+ *  `volumeShort` tenant'ın kendi hacim kısaltmasıdır (Pernod "9L", Wietnauer
+ *  "70cl" — bkz. `tenant.volume.short`); sabit fallback YOK, çağıran taraf
+ *  `getTenantConfig().volume.short` / `useTenant().volume.short` ile geçirir. */
+export function unitSuffix(unit: ValueUnit, volumeShort: string): string {
+  return unit === "9le" ? volumeShort : "₺";
 }
 
 /** Compact + suffix tek-string. Recharts tooltip / aria-label gibi text-only
  *  yerler için (JSX'in çalışmadığı bağlamlar). */
-export function formatValue(n: number, unit: ValueUnit): string {
-  return `${formatCompact(n)} ${unitSuffix(unit)}`;
+export function formatValue(n: number, unit: ValueUnit, volumeShort: string): string {
+  return `${formatCompact(n)} ${unitSuffix(unit, volumeShort)}`;
 }
 
 /** Görsel formatlama — sayı normal boy, birim küçük + silik bir span olarak
@@ -32,9 +35,13 @@ export function formatValue(n: number, unit: ValueUnit): string {
 export function Val({
   n,
   unit,
+  volumeShort,
 }: {
   n: number;
   unit: ValueUnit;
+  /** Tenant'ın hacim kısaltması (Pernod "9L", Wietnauer "70cl") — sabit
+   *  fallback YOK, bkz. `unitSuffix()` yorumu. */
+  volumeShort: string;
 }) {
   return (
     <>
@@ -48,7 +55,7 @@ export function Val({
           letterSpacing: "0.02em",
         }}
       >
-        {unitSuffix(unit)}
+        {unitSuffix(unit, volumeShort)}
       </span>
     </>
   );

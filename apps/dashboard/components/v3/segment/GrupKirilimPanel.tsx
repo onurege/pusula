@@ -1,25 +1,24 @@
 import { formatCompact } from "@/components/komuta/format";
 
 /**
- * Müşteri Ek Saha segment paneli — Birleşik Ek Saha (Saha1+2),
- * `getCustomerBreakdownMeta()` iki-hop kaynağı (TBLMUSTERI →
- * TBLMUSTERIEKSAHA köprü → TBLEKSAHASECENEK lookup, Saha1 OFF-TRADE ve
- * Saha2 ON-TRADE COALESCE'lenir).
+ * Müşteri Grup Kırılımı segment paneli (D) — TBLMUSTERI.TXTGRUPKIRILIMKOD ×
+ * TBLMUSTERIGRUPKIRILIM.TXTAD (Prestige / Premium / Premium Plus / Standart /
+ * Standart Plus / "Off Trade C&PS Tedarikçi" vb.).
  *
- * md10 ÖNCESİ bu panel `ekSaha` alanı üzerinden TBLMUSTERIGRUP (Müşteri
- * Tipi) gösteriyordu; segment ekranı 4 kırılıma çıkarılırken kaynaklar yer
- * değiştirdi (bkz. `wietnauer-segment.ts` v8 notu) — TBLMUSTERIGRUP artık
- * `MusteriGrupPanel`'de (A). Bu panel (B) artık gerçekten "ek saha" boyutunu
- * gösterir; `MusteriGrupPanel` (A, Müşteri Grubu) ve `GrupKirilimPanel` (D,
- * Müşteri Grup Kırılımı) ile bilinçli olarak FARKLI boyutlardır.
+ * md10 — segment ekranı 4 kırılıma çıkarılırken eklenen YENİ (4.) boyut.
+ * Her zaman literal tek-hop join — `getCustomerBreakdownMeta()`'dan
+ * BAĞIMSIZ (o config artık `EkSahaPanel` (B)'nin iki-hop kaynağına işaret
+ * ediyor). `MusteriGrupPanel` (A, Müşteri Grubu/TBLMUSTERIGRUP) ile
+ * bilinçli olarak FARKLI bir boyut — aynı "kırılım" kelimesi geçse de
+ * kaynak tablo farklı.
+ *
+ * Satır şekli `MusteriGrupPanel`/`EkSahaPanel` ile birebir aynı
+ * (`TipSegmentRow`) — JSX/CSS o iki panelin deseni kopyalanarak üretildi.
  *
  * Sol: yatay bar — ciro payı yüzdesi (her bar normalize).
  * Sağ: müşteri sayısı, ciro, ortalama iskonto oranı sayısal kolonları.
- *
- * "(Tanımsız)" satırı genellikle 0 ciro ile en altta kalır; gizlemek için
- * `hideUnclassified` flag ileride eklenebilir, bu MVP'de gösterilir.
  */
-export type EkSahaSegmentRow = {
+export type GrupKirilimSegmentRow = {
   kod: string;
   ad: string;
   musteriSayi: number;
@@ -31,19 +30,19 @@ export type EkSahaSegmentRow = {
 import { panelTitle, panelHidden } from "@/lib/content";
 import { t, type Locale } from "@/lib/i18n";
 
-export function EkSahaPanel({ rows, locale = "tr" }: { rows: EkSahaSegmentRow[]; locale?: Locale }) {
-  if (panelHidden("panel.segment.eksaha")) return null;
+export function GrupKirilimPanel({ rows, locale = "tr" }: { rows: GrupKirilimSegmentRow[]; locale?: Locale }) {
+  if (panelHidden("panel.segment.grupkirilim")) return null;
   const maxCiro = Math.max(1, ...rows.map((r) => r.ciro));
   const toplamMusteri = rows.reduce((a, r) => a + r.musteriSayi, 0);
 
   return (
     <div className="v3-panel segb-panel">
       <div className="segb-head">
-        <div className="segb-title">{panelTitle("panel.segment.eksaha", t(locale, "panel.segment.eksaha", "Müşteri Ek Saha"))}</div>
+        <div className="segb-title">{panelTitle("panel.segment.grupkirilim", t(locale, "panel.segment.grupkirilim", "Müşteri Grup Kırılımı"))}</div>
         <div className="segb-sub">
           {locale === "en"
-            ? `Combined extended field (Field 1+2) · ${rows.length} fields · ${toplamMusteri.toLocaleString("tr-TR")} customers`
-            : `Birleşik ek saha (Saha1+2) · ${rows.length} saha · ${toplamMusteri.toLocaleString("tr-TR")} müşteri`}
+            ? `Customer Group Breakdown (TBLMUSTERIGRUPKIRILIM) · ${rows.length} breakdowns · ${toplamMusteri.toLocaleString("tr-TR")} customers`
+            : `Müşteri Grup Kırılımı (TBLMUSTERIGRUPKIRILIM) · ${rows.length} kırılım · ${toplamMusteri.toLocaleString("tr-TR")} müşteri`}
         </div>
       </div>
 

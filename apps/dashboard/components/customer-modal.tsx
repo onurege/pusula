@@ -453,7 +453,11 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
               <div className="text-sm text-fg-2 mt-0.5 truncate">{customer.kisaAd}</div>
             )}
             <div className="text-xs text-muted mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <RiskTierBadge tier={customer.riskScore.tier} score={customer.riskScore.score} locale={locale} />
+              {customer.visitOrderRisk ? (
+                <VisitOrderRiskBadge vo={customer.visitOrderRisk} locale={locale} />
+              ) : (
+                <RiskTierBadge tier={customer.riskScore.tier} score={customer.riskScore.score} locale={locale} />
+              )}
               {customer.distributor && (
                 <Badge tone="accent" size="sm">
                   {customer.distributor}
@@ -543,10 +547,14 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
                     tahsilat snapshot'ı yok); detail fetch ile gelen tahsilat
                     verisinden display-time hesaplıyoruz ve overall score'u
                     yeniden ağırlıklandırıyoruz. */}
-                <RiskScoreCard
-                  riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data, locale)}
-                  locale={locale}
-                />
+                {customer.visitOrderRisk ? (
+                  <VisitOrderRiskCard vo={customer.visitOrderRisk} locale={locale} />
+                ) : (
+                  <RiskScoreCard
+                    riskScore={enhanceRiskScoreWithPayment(customer.riskScore, sales.data, locale)}
+                    locale={locale}
+                  />
+                )}
 
                 {/* Top KPI grid */}
                 <section>
@@ -979,6 +987,7 @@ function BarRow({
   valueTone = "text-fg-2",
   badge,
   meta,
+  subline,
   title,
 }: {
   name: string;
@@ -988,25 +997,33 @@ function BarRow({
   valueTone?: string;
   badge?: React.ReactNode;
   meta?: string;
+  /** İkinci satır — tam genişlik, kırpılmaz (çapraz-satışta "birlikte alınan
+   *  ürün" gerekçesi burada okunur şekilde gösterilir). */
+  subline?: React.ReactNode;
   title?: string;
 }) {
   return (
-    <li className="flex items-center gap-2.5 px-2.5 py-1.5 hover:bg-surface-2/60 transition-colors" title={title}>
-      <span className="text-sm truncate flex-1 min-w-0">{name}</span>
-      {pct !== undefined && (
-        <div className="w-16 h-1.5 rounded-full bg-bg overflow-hidden shrink-0" aria-hidden="true">
-          <div
-            className={"h-full rounded-full transition-[width] duration-300 " + barTone}
-            style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }}
-          />
-        </div>
-      )}
-      <span className={"text-xs font-semibold tabular-nums shrink-0 whitespace-nowrap " + valueTone}>
-        {valueText}
-      </span>
-      {badge}
-      {meta && (
-        <span className="text-[10px] text-muted shrink-0 truncate max-w-[120px]">{meta}</span>
+    <li className="flex flex-col px-2.5 py-1.5 hover:bg-surface-2/60 transition-colors" title={title}>
+      <div className="flex items-center gap-2.5 w-full">
+        <span className="text-sm truncate flex-1 min-w-0">{name}</span>
+        {pct !== undefined && (
+          <div className="w-16 h-1.5 rounded-full bg-bg overflow-hidden shrink-0" aria-hidden="true">
+            <div
+              className={"h-full rounded-full transition-[width] duration-300 " + barTone}
+              style={{ width: `${Math.min(Math.max(pct, 0), 100)}%` }}
+            />
+          </div>
+        )}
+        <span className={"text-xs font-semibold tabular-nums shrink-0 whitespace-nowrap " + valueTone}>
+          {valueText}
+        </span>
+        {badge}
+        {meta && (
+          <span className="text-[10px] text-muted shrink-0 truncate max-w-[120px]">{meta}</span>
+        )}
+      </div>
+      {subline && (
+        <div className="text-[11px] text-muted leading-snug mt-0.5">{subline}</div>
       )}
     </li>
   );
@@ -1022,13 +1039,16 @@ function CrossSellRow({ item, locale }: { item: ReorderCrossSellItem; locale: Lo
           {translate(locale, "customer.reorder.cross_sell_badge", "öneri")}
         </Badge>
       }
-      meta={item.anchorUrunAd}
-      title={translate(
-        locale,
-        "customer.reorder.cross_sell_hint_full",
-        "{anchor} alıyor · bunu alanlar bunu da alıyor",
-        { anchor: item.anchorUrunAd },
-      )}
+      subline={
+        item.anchorUrunAd
+          ? translate(
+              locale,
+              "customer.reorder.cross_sell_subline",
+              "🔗 {anchor} alan müşteriler bunu da alıyor",
+              { anchor: item.anchorUrunAd },
+            )
+          : undefined
+      }
     />
   );
 }
@@ -1042,22 +1062,21 @@ function CrossSellRow({ item, locale }: { item: ReorderCrossSellItem; locale: Lo
  * sayısı gösterilir.
  */
 function PeerCrossSellRow({ item, locale }: { item: PeerCrossSellItem; locale: Locale }) {
-  const meta =
-    item.anchorUrunAd ??
-    translate(locale, "customer.reorder.peer_cross_meta", "{count} akran", {
-      count: formatCompact(item.peerMusteriSayi, locale),
-    });
-  const title = item.anchorUrunAd
+  // Alt satır: somut "birlikte alınan ürün" varsa onu, yoksa akran-penetrasyon
+  // gerekçesini TAM ve okunur göster (kırpma yok).
+  const subline = item.anchorUrunAd
     ? translate(
         locale,
-        "customer.reorder.cross_sell_hint_full",
-        "{anchor} alıyor · bunu alanlar bunu da alıyor",
+        "customer.reorder.cross_sell_subline",
+        "🔗 {anchor} alan müşteriler bunu da alıyor",
         { anchor: item.anchorUrunAd },
       )
-    : translate(locale, "customer.reorder.peer_cross_desc", "Senin gibi müşterilerin %{pct}'i {urun} alıyor.", {
-        pct: item.peerPenetrasyon.toFixed(0),
-        urun: item.urunAd,
-      });
+    : translate(
+        locale,
+        "customer.reorder.peer_cross_subline",
+        "🔗 Senin gibi {count} müşterinin %{pct}'i bunu alıyor",
+        { pct: item.peerPenetrasyon.toFixed(0), count: formatCompact(item.peerMusteriSayi, locale) },
+      );
   return (
     <BarRow
       name={item.urunAd}
@@ -1069,8 +1088,7 @@ function PeerCrossSellRow({ item, locale }: { item: PeerCrossSellItem; locale: L
           {translate(locale, "customer.reorder.gap_tur_none", "fırsat")}
         </Badge>
       }
-      meta={meta}
-      title={title}
+      subline={subline}
     />
   );
 }
@@ -1226,6 +1244,84 @@ function RiskTierBadge({
     <Badge tone={s.badgeTone} size="sm" dot>
       {score !== null ? `${score}/100 · ${label}` : label}
     </Badge>
+  );
+}
+
+// --- Visit-order risk (Wietnauer "visit-order" modeli) -----------------------
+// Tier → composite stil anahtarı (renk/rozet tonunu yeniden kullanmak için).
+const VO_TIER_TO_COMPOSITE: Record<"red" | "orange" | "yellow" | "green", MapCustomer["riskScore"]["tier"]> = {
+  red: "critical",
+  orange: "risk",
+  yellow: "watch",
+  green: "healthy",
+};
+const VO_TIER_LABEL: Record<"red" | "orange" | "yellow" | "green", string> = {
+  red: "Kritik",
+  orange: "Riskli",
+  yellow: "İzlenmeli",
+  green: "Sağlıklı",
+};
+
+/** Tier'dan yerel-doğru gerekçe: tier ziyaret/sipariş ikili durumunu KODLAR
+ *  (red=ikisi yok, orange=ziyaret yok+sipariş var, yellow=ziyaret var+sipariş
+ *  yok, green=ikisi var) — backend'in TR-only `reason`'ı yerine buradan üretilir. */
+function voReason(tier: "red" | "orange" | "yellow" | "green", locale: Locale): string {
+  const noVisit = tier === "red" || tier === "orange";
+  const noOrder = tier === "red" || tier === "yellow";
+  const zi = noVisit
+    ? translate(locale, "customer.vo.novisit", "Ziyaret yok")
+    : translate(locale, "customer.vo.visit", "Ziyaret var");
+  const si = noOrder
+    ? translate(locale, "customer.vo.noorder", "Sipariş yok")
+    : translate(locale, "customer.vo.order", "Sipariş var");
+  return `${zi} · ${si}`;
+}
+
+function VisitOrderRiskBadge({
+  vo,
+  locale = "tr",
+}: {
+  vo: NonNullable<MapCustomer["visitOrderRisk"]>;
+  locale?: Locale;
+}) {
+  const s = TIER_STYLES[VO_TIER_TO_COMPOSITE[vo.tier]];
+  const label = translate(locale, `customer.votier.${vo.tier}`, VO_TIER_LABEL[vo.tier]);
+  return (
+    <Badge tone={s.badgeTone} size="sm" dot>
+      {label}
+    </Badge>
+  );
+}
+
+function VisitOrderRiskCard({
+  vo,
+  locale = "tr",
+}: {
+  vo: NonNullable<MapCustomer["visitOrderRisk"]>;
+  locale?: Locale;
+}) {
+  const s = TIER_STYLES[VO_TIER_TO_COMPOSITE[vo.tier]];
+  const label = translate(locale, `customer.votier.${vo.tier}`, VO_TIER_LABEL[vo.tier]);
+  return (
+    <div className={`rounded-lg border ${s.borderCls} ${s.softCls} px-4 py-3 mb-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className={`size-2.5 rounded-full ${s.barCls}`} aria-hidden="true" />
+          <span className={`text-base font-semibold ${s.textCls}`}>{label}</span>
+        </div>
+        <span className="text-[11px] text-muted uppercase tracking-wide">
+          {translate(locale, "customer.vo.model", "Ziyaret + Sipariş Riski")}
+        </span>
+      </div>
+      <div className="text-sm text-fg-2 mt-2 font-medium">{voReason(vo.tier, locale)}</div>
+      <div className="text-[11px] text-muted mt-1 leading-snug">
+        {translate(
+          locale,
+          "customer.vo.hint",
+          "Risk seçili dönemde müşterinin ziyaret edilip edilmediğine ve sipariş verip vermediğine göre belirlenir.",
+        )}
+      </div>
+    </div>
   );
 }
 

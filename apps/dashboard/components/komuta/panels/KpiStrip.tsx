@@ -1,4 +1,5 @@
 import type { KomutaKpiCard } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { InfoHint } from "../InfoHint";
 import { KpiValue } from "../format";
 
@@ -8,18 +9,22 @@ export function KpiStrip({ kpis }: { kpis: KomutaKpiCard[] }) {
   if (!kpis || kpis.length === 0) {
     return <div className="empty-note">KPI verisi alınamadı.</div>;
   }
+  // Hacim birimi tenant'a göre değişir (Pernod "9L", Wietnauer "70cl") —
+  // sabit "9L" metni tenant-nötr KISIT'i ihlal eder, bkz. tenant.volume.
+  const tenant = getTenantConfig();
+  const volShort = tenant.volume.short;
   return (
     <div className="kpi-strip-wrap">
       <div className="kpi-strip-head">
         <span className="kpi-strip-label">Son 30 gün özet</span>
         <InfoHint
           title="KPI hesaplaması"
-          source="TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (9L için)"
+          source={`TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (${volShort} için)`}
           window="Son 30 gün vs önceki 30 gün (delta % hesabı)"
-          base="SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = 9L)"
+          base={`SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = ${volShort})`}
           notes={[
             "Filtre: BYTTUR=0 AND BYTDURUM=0 (onaylı satış faturası)",
-            "9L çarpanı: TBLURUNEKSAHA saha 26 \"9 LT Değer\" (Pernod'un resmi katsayısı; 701 ürün için dolu)",
+            tenant.volume.hint,
             "Fallback (ek saha boş ise): DBLLITRE / 9 klasik hesaba düşülür",
             "Demo modda GETDATE() çağrıları DEMO_DATE env değerine rewrite edilir",
           ]}

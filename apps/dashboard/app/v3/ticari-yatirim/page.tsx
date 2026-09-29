@@ -1,4 +1,10 @@
-import { getWietnauerIskonto, getAllowedDistributors, type AllowedDistributor } from "@/lib/api";
+import {
+  getWietnauerIskonto,
+  getAllowedDistributors,
+  getIskontoUrunEkGrupFacets,
+  type AllowedDistributor,
+  type IskontoUrunEkGrupFacet,
+} from "@/lib/api";
 import { getTenantConfig } from "@/lib/tenant";
 import { V3PageHeader } from "@/components/v3/V3PageHeader";
 import { IskontoFilterBar } from "@/components/v3/iskonto/IskontoFilterBar";
@@ -57,6 +63,8 @@ type IskontoSnapshot = {
     net: number;
     iskontoOraniPct: number;
     yoyNetPct: number | null;
+    /** Madde 16 — geçen yıl AYNI dönemin iskonto oranı, yoksa null. */
+    iskontoOraniPctPrevYil: number | null;
     rank: number;
     isStratejik: boolean;
   }>;
@@ -94,7 +102,7 @@ function parseDateParam(v: string | undefined): string | null {
 }
 
 type Props = {
-  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string }>;
+  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string; urunEkGrup?: string }>;
 };
 
 export default async function V3TicariYatirimPage({ searchParams }: Props) {
@@ -111,22 +119,32 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
   const dateFrom = fromParsed && toParsed ? fromParsed : null;
   const dateTo = fromParsed && toParsed ? toParsed : null;
   const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
+  // md14: "Tümü" seçeneği param'ı hiç yazmaz/boş bırakır → filtre yok.
+  const urunEkGrup = (sp.urunEkGrup ?? "").trim() || null;
 
   let snap: IskontoSnapshot | null = null;
   let err: string | null = null;
   try {
-    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo, donem });
+    snap = await getWietnauerIskonto<IskontoSnapshot>({ distId, dateFrom, dateTo, donem, urunEkGrup });
   } catch (e) {
     err = (e as Error).message;
   }
 
-  // Distribütör dropdown'u ayrı, hataya toleranslı — bu çağrı başarısız olsa
-  // bile (ör. yetki listesi alınamazsa) ana snapshot etkilenmesin.
+  // Distribütör dropdown'u ve kategori (ürün ek grup) facet'i ayrı, hataya
+  // toleranslı — bu çağrılar başarısız olsa bile (ör. yetki listesi
+  // alınamazsa) ana snapshot etkilenmesin.
   let distributors: AllowedDistributor[] = [];
   try {
     distributors = await getAllowedDistributors();
   } catch {
     distributors = [];
+  }
+
+  let urunEkGruplar: IskontoUrunEkGrupFacet[] = [];
+  try {
+    urunEkGruplar = await getIskontoUrunEkGrupFacets();
+  } catch {
+    urunEkGruplar = [];
   }
 
   const rangeLabel = dateFrom && dateTo ? `${dateFrom} → ${dateTo}` : null;
@@ -167,6 +185,8 @@ export default async function V3TicariYatirimPage({ searchParams }: Props) {
         dateFrom={dateFrom}
         dateTo={dateTo}
         showDateRange={false}
+        urunEkGruplar={urunEkGruplar}
+        selectedUrunEkGrup={urunEkGrup}
         locale={locale}
       />
 

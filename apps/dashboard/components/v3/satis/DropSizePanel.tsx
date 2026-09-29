@@ -15,15 +15,27 @@ import { t, type Locale } from "@/lib/i18n";
 export function DropSizePanel({
   rows,
   rangeLabel = "Son 30g",
+  unit = "tl",
+  volumeShort,
   locale = "tr",
 }: {
   rows: DropSizeRow[];
   /** md21 — seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
   rangeLabel?: string;
+  /**
+   * md21 (faz A4 ek) — birim filtresi. `"tl"` (varsayılan) → mevcut ₺
+   * davranışı aynen. Tenant hacim birimi anahtarı verilirse `dropSize`
+   * yerine `dropSizeHacim` (nokta başına ort. drop hacmi, `dropSize`'ın
+   * backend ikizi) gösterilir.
+   */
+  unit?: string;
+  /** Hacim birimi kısa etiketi (ör. "70cl") — yalnızca `unit !== "tl"` iken kullanılır. */
+  volumeShort?: string;
   locale?: Locale;
 }) {
   if (panelHidden("panel.satis.drop")) return null;
   const title = panelTitle("panel.satis.drop", t(locale, "panel.satis.drop", "Drop Size (Nokta Başına Ciro)"));
+  const useVolume = unit !== "tl" && Boolean(volumeShort);
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
@@ -37,7 +49,8 @@ export function DropSizePanel({
     );
   }
 
-  const maxDrop = Math.max(1, ...rows.map((r) => r.dropSize));
+  const dropValue = (r: DropSizeRow) => (useVolume ? r.dropSizeHacim : r.dropSize);
+  const maxDrop = Math.max(1, ...rows.map(dropValue));
 
   return (
     <div className="v3-panel">
@@ -47,12 +60,12 @@ export function DropSizePanel({
           <div className="v3-panel-sub">
             {locale === "en" ? (
               <>
-                {rangeLabel} · revenue / distinct customer · Top {rows.length} ·
+                {rangeLabel} · {useVolume ? `volume (${volumeShort})` : "revenue"} / distinct customer · Top {rows.length} ·
                 <span className="hint"> distributors with at least 5 customers</span>
               </>
             ) : (
               <>
-                {rangeLabel} · ciro / distinct müşteri · Top {rows.length} ·
+                {rangeLabel} · {useVolume ? `hacim (${volumeShort})` : "ciro"} / distinct müşteri · Top {rows.length} ·
                 <span className="hint"> en az 5 müşterisi olan distribütörler</span>
               </>
             )}
@@ -71,11 +84,13 @@ export function DropSizePanel({
             <div className="bar-track">
               <div
                 className="bar-fill"
-                style={{ width: `${(r.dropSize / maxDrop) * 100}%` }}
+                style={{ width: `${(dropValue(r) / maxDrop) * 100}%` }}
               />
             </div>
             <div className="bar-meta">
-              <span className="bar-val">₺{formatCompact(r.dropSize)}</span>
+              <span className="bar-val">
+                {useVolume ? `${formatCompact(r.dropSizeHacim)} ${volumeShort}` : `₺${formatCompact(r.dropSize)}`}
+              </span>
               <span className="bar-cust">
                 {r.musteriSayi.toLocaleString("tr-TR")} {locale === "en" ? "customers" : "müşteri"}
               </span>

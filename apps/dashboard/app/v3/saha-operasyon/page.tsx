@@ -61,7 +61,7 @@ export default async function V3SahaOperasyonPage({ searchParams }: Props) {
             ? `${tenant.displayName} field team's daily visit pace, customer coverage, rep performance, and order conversion efficiency — one view for operations teams.`
             : `${tenant.displayName} sahasının günlük ziyaret temposu, müşteri kapsama oranı, temsilci performansı ve sipariş dönüşüm verimliliği — operasyonel ekiplerin tek görünümü.`
         }
-        dataNote={`TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · TBLMUSTERIGRUPKIRILIM ${locale === "en" ? "customer-group breakdown" : "müşteri grup kırılımı"} · ${donemLabel(donem, dateFrom, dateTo, locale)}`}
+        dataNote={`TBLPMPZIYARETBASLIK + TBLPMPZIYARETOZET + TBLPMPZIYARETDETAY · TBLKULLANICI · ${locale === "en" ? "customer breakdown (tenant-configured)" : "müşteri kırılımı (tenant-konfigürasyonu)"} · ${donemLabel(donem, dateFrom, dateTo, locale)}`}
         generatedAt={snap?.generatedAt}
       />
 

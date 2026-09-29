@@ -25,6 +25,12 @@ type Props = {
   rows: KomutaChannelMonthlyRow[];
   /** Birim — değerler TL veya 9LE bazında olur. Default: tl. */
   unit?: ValueUnit;
+  /** Tenant'ın hacim kısaltması (Pernod "9L", Wietnauer "70cl") — server
+   *  component (`page.tsx`) `getTenantConfig().volume.short` ile okur, buraya
+   *  prop olarak geçirir (bu "use client" bileşen server-only config'e
+   *  erişemez). Sabit fallback YOK — `unit === "9le"` olduğu her yerde
+   *  çağıran taraf bu prop'u geçirmek ZORUNDA (tenant-nötr KISIT'i). */
+  volumeShort: string;
   /** Default: "Kanal Mix" */
   title?: string;
   /** Default: "📊" */
@@ -96,6 +102,7 @@ function readChartColors() {
 export function ChannelMixChart({
   rows,
   unit = "tl",
+  volumeShort,
   title,
   icon = "📊",
   category,
@@ -116,7 +123,7 @@ export function ChannelMixChart({
       "Müşteri grubu (TBLMUSTERIGRUP.TXTAD) × ay kırılımı, son 12 ay. Top 5 kanal görünür; geri kalan \"Diğer\" altında toplandı.",
     );
   const resolvedTypeFilterLabel = typeFilterLabel ?? translate(locale, "komuta.channelmix.type_filter_default", "Müşteri Tipi");
-  const unitSuffix = unit === "9le" ? "9L" : "₺";
+  const unitSuffix = unit === "9le" ? volumeShort : "₺";
   const [colors, setColors] = useState(readChartColors);
   const [view, setView] = useState<ViewMode>("bar");
   const [selectedType, setSelectedType] = useState<string>("all");

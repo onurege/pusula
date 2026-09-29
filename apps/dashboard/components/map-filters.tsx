@@ -3,8 +3,9 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo, useState, useTransition } from "react";
 import { Filter, Loader2, Search, X } from "lucide-react";
-import type { MapCustomer, MapFacets } from "@/lib/api";
-import { t as translate, type Locale } from "@/lib/i18n";
+import type { MapCustomer, MapFacets, VisitOrderRiskTier } from "@/lib/api";
+import { t as translate, localizeVolumeUnit, type Locale } from "@/lib/i18n";
+import { useTenant } from "@/components/tenant-provider";
 
 type Props = {
   facets: MapFacets;
@@ -24,10 +25,28 @@ export type FlyToDetail = {
   customer: MapCustomer;
 };
 
+const VISIT_ORDER_TIER_OPTIONS: readonly VisitOrderRiskTier[] = ["red", "orange", "yellow", "green"];
+// Nokta rengiyle AYNI palet (bkz. sales-map.tsx COLOR_TIER_*) — checkbox
+// yanındaki nokta, haritada göreceği rengi önceden gösterir.
+const VISIT_ORDER_TIER_DOT_COLOR: Record<VisitOrderRiskTier, string> = {
+  red: "#dc2626",
+  orange: "#ea580c",
+  yellow: "#eab308",
+  green: "#16a34a",
+};
+const VISIT_ORDER_TIER_FALLBACK_TR: Record<VisitOrderRiskTier, string> = {
+  red: "En riskli",
+  orange: "Riskli",
+  yellow: "İzlenmeli",
+  green: "Sağlıklı",
+};
+
 export function MapFilters({ facets, customers, count, basePath = "/map", locale = "tr" }: Props) {
   const router = useRouter();
   const params = useSearchParams();
   const [isPending, startTransition] = useTransition();
+  const tenant = useTenant();
+  const isVisitOrderModel = tenant.riskModel === "visit-order";
 
   const sehir = params.get("sehir") ?? "";
   const distKod = params.get("distKod") ?? "";
@@ -48,6 +67,28 @@ export function MapFilters({ facets, customers, count, basePath = "/map", locale
     () => customers.reduce((sum, c) => sum + (c.activityCiro ?? c.ciro30 ?? 0), 0),
     [customers],
   );
+  // Madde 7(a) — hacim ikizi, AYNI şekilde ekstra fetch olmadan customers'tan
+  // toplanır. `tenant.volume.showInToggle` false ise (ör. fmcg-demo — "Demo
+  // karmaşık olmasın diye toggle gizli") hacim hiç gösterilmez, panel eski
+  // ₺ ciro satırında kalır (regresyonsuz).
+  const totalActivityHacim = useMemo(
+    () => customers.reduce((sum, c) => sum + (c.activityHacim ?? 0), 0),
+    [customers],
+  );
+
+  // Madde 13 — "visit-order" risk modeli ekran-bazlı config (yalnız
+  // `tenant.riskModel === "visit-order"` — bugün Wietnauer). URL'de yoksa
+  // tenant'ın `riskConfig` varsayılanı gösterilir (backend de aynı fallback'i
+  // uygular — UI ve gerçek davranış hep tutarlı).
+  const riskTiersInScopeParam = params.get("riskTiersInScope");
+  const riskTiersInScope: VisitOrderRiskTier[] = riskTiersInScopeParam
+    ? riskTiersInScopeParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is VisitOrderRiskTier =>
+          (VISIT_ORDER_TIER_OPTIONS as readonly string[]).includes(s),
+        )
+    : (["red", "orange", "yellow", "green"] as VisitOrderRiskTier[]);
 
   const [q, setQ] = useState("");
   const hits = useMemo(() => {
@@ -101,9 +142,20 @@ export function MapFilters({ facets, customers, count, basePath = "/map", locale
     );
   }
 
+  // Madde 13 — tier çoklu-seçim toggle'ı. En az 1 tier seçili kalmalı (boş
+  // küme backend'de "geçersiz" sayılıp tenant varsayılanına düşer — kullanıcı
+  // sessizce görmezden gelinen bir tıklama görmesin diye burada da engellenir).
+  function toggleRiskTier(t: VisitOrderRiskTier) {
+    const next = riskTiersInScope.includes(t)
+      ? riskTiersInScope.filter((x) => x !== t)
+      : [...riskTiersInScope, t];
+    if (next.length === 0) return;
+    update({ riskTiersInScope: next.join(",") });
+  }
+
   const hasFilter =
     !!sehir || !!distKod || !!salesFilter || !!q || !!tier || !!minDaysSinceVisit ||
-    activityDays !== 30;
+    activityDays !== 30 || !!riskTiersInScopeParam;
 
   const inputCls =
     "w-full bg-surface border border-border rounded-md px-3 h-9 text-sm shadow-xs " +
@@ -226,26 +278,79 @@ export function MapFilters({ facets, customers, count, basePath = "/map", locale
         </select>
       </div>
 
-      <div className="space-y-1.5">
-        <label className={labelCls}>{translate(locale, "map.filters.risk_level", "Risk seviyesi")}</label>
-        <select
-          value={tier}
-          // tier seçilince eski `riskTier` URL param'ı da temizlensin —
-          // backend her ikisini de okur, çakışma olmasın.
-          onChange={(e) =>
-            update({ tier: e.target.value, riskTier: "" })
-          }
-          disabled={isPending}
-          className={inputCls}
-        >
-          <option value="">{translate(locale, "komuta.all", "Tümü")}</option>
-          <option value="critical">{translate(locale, "map.risk.critical", "Kritik")} (75-100)</option>
-          <option value="risk">{translate(locale, "map.risk.risky", "Riskli")} (55-74)</option>
-          <option value="watch">{translate(locale, "map.risk.watch", "İzlemede")} (30-54)</option>
-          <option value="healthy">{translate(locale, "map.risk.healthy", "Sağlıklı")} (0-29)</option>
-          <option value="unknown">{translate(locale, "map.filters.insufficient_data", "Yetersiz veri")}</option>
-        </select>
-      </div>
+      {isVisitOrderModel ? (
+        // Madde 13 — "visit-order" risk modelinde nokta rengi composite
+        // Kritik/Riskli/İzlemede/Sağlıklı DEĞİL, kırmızı/turuncu/sarı/yeşil
+        // (ziyaret×sipariş). Composite filtresini burada göstermek kafa
+        // karıştırır (farklı bir kelime dağarcığıyla filtre, haritada başka
+        // bir renk şeması) — bu yüzden aynı slotta yeni model config'i
+        // gösterilir; composite `tier` filtresi bu tenant'ta hiç sunulmaz
+        // (backend'de hâlâ çalışır, sadece UI'dan kaldırıldı).
+        <div className="space-y-3 rounded-md border border-border/70 bg-surface-2/40 p-3">
+          <div className={labelCls}>{translate(locale, "map.vo.config.title", "Risk modeli (ziyaret/sipariş)")}</div>
+
+          <div className="space-y-1.5">
+            <div className="text-[11px] text-muted" id="map-risk-tiers-label">
+              {translate(locale, "map.vo.config.tiers", "Haritada gösterilecek risk tier'ları")}
+            </div>
+            <div
+              className="flex flex-wrap gap-x-3 gap-y-1.5"
+              role="group"
+              aria-labelledby="map-risk-tiers-label"
+            >
+              {VISIT_ORDER_TIER_OPTIONS.map((t) => (
+                <label key={t} className="inline-flex items-center gap-1.5 text-xs text-fg-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={riskTiersInScope.includes(t)}
+                    onChange={() => toggleRiskTier(t)}
+                    disabled={isPending}
+                    className="size-3.5 rounded border-border accent-accent"
+                  />
+                  <span
+                    className="inline-block size-2 rounded-full shrink-0"
+                    style={{ background: VISIT_ORDER_TIER_DOT_COLOR[t] }}
+                  />
+                  {translate(locale, `map.vo.tier.${t}`, VISIT_ORDER_TIER_FALLBACK_TR[t])}
+                </label>
+              ))}
+            </div>
+            <div className="text-[10px] text-muted italic">
+              {translate(
+                locale,
+                "map.vo.config.tiers_hint",
+                "İşareti kaldırılan tier haritadan gizlenir.",
+              )}
+            </div>
+            <div className="text-xs font-semibold text-fg pt-0.5">
+              {translate(locale, "map.vo.config.shown_count", "{count} müşteri haritada", {
+                count: count.toLocaleString(locale === "en" ? "en-US" : "tr-TR"),
+              })}
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          <label className={labelCls}>{translate(locale, "map.filters.risk_level", "Risk seviyesi")}</label>
+          <select
+            value={tier}
+            // tier seçilince eski `riskTier` URL param'ı da temizlensin —
+            // backend her ikisini de okur, çakışma olmasın.
+            onChange={(e) =>
+              update({ tier: e.target.value, riskTier: "" })
+            }
+            disabled={isPending}
+            className={inputCls}
+          >
+            <option value="">{translate(locale, "komuta.all", "Tümü")}</option>
+            <option value="critical">{translate(locale, "map.risk.critical", "Kritik")} (75-100)</option>
+            <option value="risk">{translate(locale, "map.risk.risky", "Riskli")} (55-74)</option>
+            <option value="watch">{translate(locale, "map.risk.watch", "İzlemede")} (30-54)</option>
+            <option value="healthy">{translate(locale, "map.risk.healthy", "Sağlıklı")} (0-29)</option>
+            <option value="unknown">{translate(locale, "map.filters.insufficient_data", "Yetersiz veri")}</option>
+          </select>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         <label className={labelCls}>{translate(locale, "map.filters.days_since_visit", "Ziyaretsiz süre")}</label>
@@ -277,14 +382,33 @@ export function MapFilters({ facets, customers, count, basePath = "/map", locale
                 {count.toLocaleString(locale === "en" ? "en-US" : "tr-TR")}
               </span>
             </div>
-            <div className="flex items-baseline justify-between">
-              <span className="text-muted">
-                {translate(locale, "map.filters.revenue_last_n", "Ciro (son {days}g)", { days: activityDays })}
-              </span>
-              <span className="text-fg font-semibold tabular-nums">
-                {Math.round(totalActivityCiro).toLocaleString(locale === "en" ? "en-US" : "tr-TR")} ₺
-              </span>
-            </div>
+            {/* Madde 7(a) — TAM HACİM (ör. Wietnauer 70cl) yalnız "visit-order"
+                risk modeli seçen tenant'ta (bugün Wietnauer) + hacim birimi
+                UI'da gösterilecekse (`showInToggle`). Composite tenant'larda
+                (Pernod — CANLI sistem, showInToggle:true olsa bile; fmcg-demo
+                zaten showInToggle:false) eski ₺ ciro satırı AYNEN kalır —
+                bu görev kapsamı Wietnauer'a özel, Pernod'un canlı davranışına
+                dokunulmaz. */}
+            {isVisitOrderModel && tenant.volume.showInToggle ? (
+              <div className="flex items-baseline justify-between">
+                <span className="text-muted">
+                  {translate(locale, "map.filters.volume_last_n", "Hacim (son {days}g)", { days: activityDays })}
+                </span>
+                <span className="text-fg font-semibold tabular-nums">
+                  {Math.round(totalActivityHacim).toLocaleString(locale === "en" ? "en-US" : "tr-TR")}{" "}
+                  {localizeVolumeUnit(tenant.volume.short, locale)}
+                </span>
+              </div>
+            ) : (
+              <div className="flex items-baseline justify-between">
+                <span className="text-muted">
+                  {translate(locale, "map.filters.revenue_last_n", "Ciro (son {days}g)", { days: activityDays })}
+                </span>
+                <span className="text-fg font-semibold tabular-nums">
+                  {Math.round(totalActivityCiro).toLocaleString(locale === "en" ? "en-US" : "tr-TR")} ₺
+                </span>
+              </div>
+            )}
           </div>
         )}
       </div>

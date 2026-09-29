@@ -21,6 +21,10 @@ import { t as translate, localizeAyAbbr, type Locale } from "@/lib/i18n";
 type Props = {
   monthly: KomutaMonthlyBar[];
   unit?: ValueUnit;
+  /** Tenant'ın hacim kısaltması (Pernod "9L", Wietnauer "70cl") — server
+   *  component (`page.tsx`) `getTenantConfig().volume.short` ile okur, buraya
+   *  prop olarak geçirir. Sabit fallback YOK — tenant-nötr KISIT'i. */
+  volumeShort: string;
   locale?: Locale;
 };
 
@@ -87,8 +91,8 @@ function readChartColors() {
       };
 }
 
-export function CalendarChart({ monthly, unit = "tl", locale = "tr" }: Props) {
-  const unitSuffix = unit === "9le" ? "9L" : "₺";
+export function CalendarChart({ monthly, unit = "tl", volumeShort, locale = "tr" }: Props) {
+  const unitSuffix = unit === "9le" ? volumeShort : "₺";
   const [colors, setColors] = useState(readChartColors);
   useEffect(() => {
     const onChange = () => setColors(readChartColors());

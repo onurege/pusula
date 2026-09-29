@@ -2,7 +2,7 @@
 
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
-import type { AllowedDistributor } from "@/lib/api";
+import type { AllowedDistributor, IskontoUrunEkGrupFacet } from "@/lib/api";
 import { t, type Locale } from "@/lib/i18n";
 
 type Props = {
@@ -13,22 +13,34 @@ type Props = {
   /** Tarih aralığı alanını göster. Dönem seçimi artık ortak GlobalDonemFilter'a
    *  devredildiğinde `false` verilir; yalnız distribütör seçici kalır. */
   showDateRange?: boolean;
+  /** md14 — Ürün Ek Grup (Kategori) facet seçenekleri; boşsa dropdown gizlenir. */
+  urunEkGruplar?: IskontoUrunEkGrupFacet[];
+  selectedUrunEkGrup?: string | null;
   locale?: Locale;
 };
 
 /**
- * Ticari Yatırım & İskonto filtre çubuğu — tarih aralığı + distribütör.
- * Seçimler URL'e (`?from&to&distId`) yazılır, sayfa RSC olarak yeniden
- * render olur; `getWietnauerIskontoSnapshot` opts'una akar (stok-tukenme
- * `StokDistSelect` deseniyle aynı: URL = tek doğruluk kaynağı, sayfa
- * yenilemesi RSC drill-down).
+ * Ticari Yatırım & İskonto filtre çubuğu — tarih aralığı + distribütör +
+ * (md14) ürün ek grup (Kategori). Seçimler URL'e (`?from&to&distId&urunEkGrup`)
+ * yazılır, sayfa RSC olarak yeniden render olur; `getWietnauerIskontoSnapshot`
+ * opts'una akar (stok-tukenme `StokDistSelect` deseniyle aynı: URL = tek
+ * doğruluk kaynağı, sayfa yenilemesi RSC drill-down).
  *
  * Tarih inputları controlled local state'te tutulur (`fromDraft`/`toDraft`);
  * her tuş vuruşunda navigasyon tetiklenmez — yalnız "Uygula" ile. İkisi de
  * doluysa aralık uygulanır; biri eksikse görmezden gelinir (backend'in
  * `normalizeDateRange` davranışıyla tutarlı).
  */
-export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateTo, showDateRange = true, locale = "tr" }: Props) {
+export function IskontoFilterBar({
+  distributors,
+  selectedDistId,
+  dateFrom,
+  dateTo,
+  showDateRange = true,
+  urunEkGruplar = [],
+  selectedUrunEkGrup = null,
+  locale = "tr",
+}: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -50,6 +62,15 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
     navigate((params) => {
       if (val === "" || val === "all") params.delete("distId");
       else params.set("distId", val);
+    });
+  }
+
+  // md14 — Ürün Ek Grup (Kategori) dropdown. "Tümü" = filtre yok (param silinir).
+  function onUrunEkGrupChange(e: React.ChangeEvent<HTMLSelectElement>) {
+    const val = e.target.value;
+    navigate((params) => {
+      if (val === "" || val === "all") params.delete("urunEkGrup");
+      else params.set("urunEkGrup", val);
     });
   }
 
@@ -101,6 +122,28 @@ export function IskontoFilterBar({ distributors, selectedDistId, dateFrom, dateT
           ))}
         </select>
       </div>
+
+      {urunEkGruplar.length > 0 && (
+        <div className="iskonto-filter-field">
+          <label htmlFor="iskonto-urunekgrup-select" className="lbl">
+            {t(locale, "col.kategori", "Kategori")}
+          </label>
+          <select
+            id="iskonto-urunekgrup-select"
+            value={selectedUrunEkGrup ?? "all"}
+            onChange={onUrunEkGrupChange}
+            disabled={isPending}
+            className="sel"
+          >
+            <option value="all">{t(locale, "filter.kategori_all", "Tümü")}</option>
+            {urunEkGruplar.map((g) => (
+              <option key={g.kod} value={g.kod}>
+                {g.ad}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {showDateRange && (
       <form className="iskonto-filter-field iskonto-date-field" onSubmit={onApplyRange}>

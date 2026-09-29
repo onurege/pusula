@@ -18,8 +18,10 @@ import type {
 import { getKomutaSnapshot, getKomutaFacets, type KomutaFacets } from "@/lib/api";
 import { KomutaFilterDropdowns } from "@/components/komuta/KomutaFilterDropdowns";
 import { KomutaPeriyotDropdown } from "@/components/komuta/KomutaPeriyotDropdown";
+import { periyotLabel } from "@/components/komuta/periyot-options";
 import { getContentMap, t, panelTitle, panelHidden } from "@/lib/content";
 import { getLocale, t as translate, localizeVolumeUnit, type Locale } from "@/lib/i18n";
+import { getTenantConfig } from "@/lib/tenant";
 import { FinanceAgentLauncher } from "@/components/komuta/FinanceAgentLauncher";
 import { ChannelMixChart } from "@/components/komuta/ChannelMixChart";
 import { CalendarChart } from "@/components/komuta/CalendarChart";
@@ -59,6 +61,10 @@ export default async function KomutaPage({ searchParams }: Props) {
   const forceRefresh = sp.refresh === "1";
   const reelTL = sp.reel === "1";
   const unit: ValueUnit = sp.unit === "9le" ? "9le" : "tl";
+  // Hacim birimi kısaltması tenant'a göre değişir (Pernod "9L", Wietnauer
+  // "70cl") — client component'lere ("use client") prop olarak geçirilir,
+  // onlar server-only getTenantConfig()'e erişemez.
+  const volShort = getTenantConfig().volume.short;
   const bolge = sp.bolge?.trim() || null;
   const kanal = sp.kanal?.trim() || null;
   const urunGrup = sp.urunGrup?.trim() || null;
@@ -80,6 +86,10 @@ export default async function KomutaPage({ searchParams }: Props) {
       bolge,
       kanal,
       urunGrup,
+      // md1 — KPI şeridi artık sabit "son 30 gün" değil, seçili periyoda
+      // (backend periodDays) bağlı. Önceden yalnızca Kanal Mix trendine
+      // gidiyordu; snapshot'a da iletilmezse KPI'lar hep 30g'de donuk kalırdı.
+      periyot,
     });
   } catch (e) {
     // Oturum düşmüşse API 401/403 döner → 404 değil, login'e yönlendir.
@@ -90,8 +100,9 @@ export default async function KomutaPage({ searchParams }: Props) {
 
   // Header açıklaması — aktif filtreleri (KPI'ları GERÇEKTEN daraltan bölge /
   // grup kırılımı / ürün grubu) gerçek facet etiketleriyle yansıtır. Hiç filtre
-  // yoksa "Tüm Distribütörler". Periyot yalnız Kanal Mix trendini sürdüğü için
-  // 30g KPI başlığına katılmaz (yanıltmasın).
+  // yoksa "Tüm Distribütörler". md1 — periyot artık KPI şeridini de sürüyor
+  // (bkz. `getKomutaSnapshot({ periyot })` yukarıda), bu yüzden başlıktaki
+  // sabit "Son 30 Gün" metni seçili periyoda göre değişir (yanıltmasın).
   const kanalAd = kanal ? (facets.kanallar.find((k) => k.kod === kanal)?.ad ?? kanal) : null;
   const urunAd = urunGrup ? (facets.urunGruplari.find((u) => u.kod === urunGrup)?.ad ?? urunGrup) : null;
   const activeFilters = [
@@ -110,7 +121,14 @@ export default async function KomutaPage({ searchParams }: Props) {
           sayfada gizleniyor (components/ui/navbar.tsx). */}
       <style dangerouslySetInnerHTML={{ __html: KOMUTA_CSS }} />
       <div className="komuta-root">
-        <Header generatedAt={snap.generatedAt} reelTL={snap.reelTL} demo={!!snap.demoDate} scopeLabel={scopeLabel} locale={locale} />
+        <Header
+          generatedAt={snap.generatedAt}
+          reelTL={snap.reelTL}
+          demo={!!snap.demoDate}
+          scopeLabel={scopeLabel}
+          periyot={periyot}
+          locale={locale}
+        />
         <FilterBar reelTL={snap.reelTL} facets={facets} bolge={bolge} kanal={kanal} urunGrup={urunGrup} periyot={periyot} locale={locale} />
         {snap.reelTL && <ReelTlBanner locale={locale} />}
         {/* Yöneticinin ilk gördüğü içerik: AI yorumu en üste alındı. KPI
@@ -134,7 +152,7 @@ export default async function KomutaPage({ searchParams }: Props) {
             </div>
           </div>
         )}
-        <KpiStrip kpis={snap.kpis} locale={locale} />
+        <KpiStrip kpis={snap.kpis} periyot={periyot} locale={locale} />
         {snap.upcomingEvent && <CalendarBanner event={snap.upcomingEvent} locale={locale} />}
 
         <div className="main-grid">
@@ -145,6 +163,7 @@ export default async function KomutaPage({ searchParams }: Props) {
             <ChannelMixChart
               rows={snap.channelMonthly}
               unit={snap.unit}
+              volumeShort={volShort}
               title={panelTitle("panel.cockpit.channelmonthly", translate(locale, "panel.cockpit.channelmonthly", "Kanal Mix"))}
               periodMonths={periodMonths}
               enablePieView
@@ -154,7 +173,7 @@ export default async function KomutaPage({ searchParams }: Props) {
         </div>
 
         {!panelHidden("panel.cockpit.calendar") && (
-          <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} locale={locale} />
+          <CalendarChart monthly={snap.monthlyTrend} unit={snap.unit} volumeShort={volShort} locale={locale} />
         )}
 
         <div className="battle-grid">
@@ -167,6 +186,7 @@ export default async function KomutaPage({ searchParams }: Props) {
             <ChannelMixChart
               rows={snap.channelByType}
               unit={snap.unit}
+              volumeShort={volShort}
               title={panelTitle(
                 "panel.cockpit.channeltype",
                 translate(locale, "panel.cockpit.channeltype", "Müşteri Grup Kırılımı · Son 12 Ay"),
@@ -197,6 +217,8 @@ export default async function KomutaPage({ searchParams }: Props) {
               "panel.cockpit.customertypebrand",
               translate(locale, "panel.cockpit.customertypebrand", "Müşteri Grup Kırılımı × Marka"),
             )}
+            unit={unit}
+            volumeShort={volShort}
             locale={locale}
           />
         )}
@@ -223,12 +245,14 @@ function Header({
   reelTL,
   demo,
   scopeLabel,
+  periyot,
   locale,
 }: {
   generatedAt: string;
   reelTL: boolean;
   demo?: boolean;
   scopeLabel: string;
+  periyot: string;
   locale: Locale;
 }) {
   const rel = formatRelative(generatedAt, locale);
@@ -247,7 +271,7 @@ function Header({
         </h1>
         <p className="komuta-page-desc">
           {translate(locale, "komuta.header.desc", "Univera Distribütör Operasyonu · CEO / Satış Direktörü görünümü")} ·{" "}
-          <strong>{scopeLabel}</strong> · {translate(locale, "komuta.header.last30", "Son 30 Gün")} ·{" "}
+          <strong>{scopeLabel}</strong> · {periyotLabel(periyot, locale)} ·{" "}
           <span style={{ color: "#6366f1" }}>{modeLabel}</span>
         </p>
       </div>
@@ -303,34 +327,47 @@ function FilterBar({
 
 // -- KPI STRIP ---------------------------------------------------------------
 
-function KpiStrip({ kpis, locale }: { kpis: KomutaKpiCard[]; locale: Locale }) {
+function KpiStrip({ kpis, periyot, locale }: { kpis: KomutaKpiCard[]; periyot: string; locale: Locale }) {
   if (panelHidden("panel.cockpit.kpistrip")) return null;
   if (!kpis || kpis.length === 0) {
     return <div className="empty-note">{translate(locale, "komuta.kpi.no_data", "KPI verisi alınamadı.")}</div>;
   }
   // Color accent per card matches mockup palette
   const accents = ["#6366f1", "#16a34a", "#9333ea", "#6366f1", "#16a34a"];
+  // Hint metinlerindeki birim adı sabit "9L" değil, tenant'ın kendi
+  // kısaltması (Pernod "9L", Wietnauer "70cl") — bkz. tenant.volume.short.
+  const volShort = getTenantConfig().volume.short;
+  // md1 — başlık artık seçili periyodu yansıtır (admin override varsa o
+  // kazanır; yoksa "{periyot} özet" fallback'i "Son 30 gün özet" yerine geçer).
+  const stripLabelFallback = translate(locale, "komuta.kpistrip.summary", "{periyot} özet", {
+    periyot: periyotLabel(periyot, locale),
+  });
   return (
     <div className="kpi-strip-wrap">
       <div className="kpi-strip-head">
-        <span className="kpi-strip-label">{panelTitle("panel.cockpit.kpistrip", translate(locale, "panel.cockpit.kpistrip", "Son 30 gün özet"))}</span>
+        <span className="kpi-strip-label">{panelTitle("panel.cockpit.kpistrip", stripLabelFallback)}</span>
         <InfoHint
           title={translate(locale, "komuta.hint.kpi.title", "KPI hesaplaması")}
-          source={translate(locale, "komuta.hint.kpi.source", "TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA (9L için)")}
-          window={translate(locale, "komuta.hint.kpi.window", "Son 30 gün vs önceki 30 gün (delta % hesabı)")}
+          source={translate(locale, "komuta.hint.kpi.source", "TBLMSDFATURA + TBLMSDBELGEDETAY + TBLURUNEKSAHA ({unit} için)", {
+            unit: volShort,
+          })}
+          window={translate(locale, "komuta.hint.kpi.window", "{periyot} vs eşit uzunlukta önceki dönem (delta % hesabı)", {
+            periyot: periyotLabel(periyot, locale),
+          })}
           base={translate(
             locale,
             "komuta.hint.kpi.base",
-            "SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = 9L)",
+            "SUM(DBLNETTUTAR) (Ciro), COUNT (Fatura), SUM(DBLMIKTAR × ek_saha_26) (Hacim = {unit})",
+            { unit: volShort },
           )}
           notes={[
             translate(locale, "komuta.hint.kpi.note1", "Filtre: BYTTUR=0 AND BYTDURUM=0 (onaylı satış faturası)"),
-            translate(
-              locale,
-              "komuta.hint.kpi.note2",
-              "9L çarpanı: TBLURUNEKSAHA saha 26 \"9 LT Değer\" (Pernod'un resmi katsayısı; 701 ürün için dolu)",
-            ),
-            translate(locale, "komuta.hint.kpi.note3", "Fallback (ek saha boş ise): DBLLITRE / 9 klasik hesaba düşülür"),
+            // Hacim çarpanı tenant'a göre değişir (Pernod: TBLURUNEKSAHA saha
+            // 26 "9L"; Wietnauer: DBLLITRE/70cl). Sabit "Pernod" metni önceki
+            // sürümde her tenant'ta aynen görünüyordu — bunun yerine tenant'ın
+            // kendi `volume.hint` açıklaması kullanılır (tenant-nötr metin
+            // KISIT'i + doğru formül).
+            getTenantConfig().volume.hint,
             translate(locale, "komuta.hint.kpi.note4", "Demo modda GETDATE() çağrıları DEMO_DATE env değerine rewrite edilir"),
           ]}
         />
@@ -1658,11 +1695,15 @@ function formatCompact(n: number): string {
   return Math.round(n).toString();
 }
 
-/** Snapshot.unit suffix'i ile compact format — TL modunda "₺", 9L modunda "9L".
+/** Snapshot.unit suffix'i ile compact format — TL modunda "₺", hacim modunda
+ *  tenant'ın kendi kısaltması (Pernod "9L", Wietnauer "70cl", vb. — bkz.
+ *  `tenant.volume.short`). Önceden "9le" durumu sabit "9L" yazıyordu; bu,
+ *  Wietnauer gibi 9L kullanmayan tenant'larda YANLIŞ birim gösteriyordu
+ *  (MADDE 3/4 — hacim moduna geçince TL kalıntısı/yanlış birim kalmamalı).
  *  Sayı normal boy, birim küçük + silik bir span olarak yan yana — birbirine
  *  karışmasın. */
 function Val({ n, unit }: { n: number; unit: ValueUnit }) {
-  const suffix = unit === "9le" ? "9L" : "₺";
+  const suffix = unit === "9le" ? getTenantConfig().volume.short : "₺";
   return (
     <>
       {formatCompact(n)}

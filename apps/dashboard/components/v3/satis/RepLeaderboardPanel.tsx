@@ -13,15 +13,27 @@ import { panelTitle, panelHidden } from "@/lib/content";
 export function RepLeaderboardPanel({
   rows,
   rangeLabel = "Son 30g",
+  unit = "tl",
+  volumeShort,
   locale = "tr",
 }: {
   rows: SatisRepRow[];
   /** md21 — seçili tarih aralığı etiketi (ör. "Son 30g" veya "12 Ağu – 19 Ağu"). */
   rangeLabel?: string;
+  /**
+   * md21 (faz A4 ek) — birim filtresi. `"tl"` (varsayılan) → mevcut ₺
+   * davranışı aynen. Tenant hacim birimi anahtarı verilirse `ciro` yerine
+   * `hacim` (70cl eşdeğeri, `ciro`'nun backend ikizi) gösterilir. Ort. Sepet
+   * ve Δ için hacim ikizi backend'de yok — bu iki alan her zaman ₺ kalır.
+   */
+  unit?: string;
+  /** Hacim birimi kısa etiketi (ör. "70cl") — yalnızca `unit !== "tl"` iken kullanılır. */
+  volumeShort?: string;
   locale?: Locale;
 }) {
   if (panelHidden("panel.satis.rep")) return null;
   const title = panelTitle("panel.satis.rep", t(locale, "panel.satis.rep", "Satış Temsilcisi Leaderboard"));
+  const useVolume = unit !== "tl" && Boolean(volumeShort);
   if (rows.length === 0) {
     return (
       <div className="v3-panel v3-panel-empty">
@@ -42,8 +54,8 @@ export function RepLeaderboardPanel({
           <div className="v3-panel-title">{title}</div>
           <div className="v3-panel-sub">
             {locale === "en"
-              ? `${rangeLabel} net revenue · Top ${rows.length} · delta vs. previous period`
-              : `${rangeLabel} net ciro · Top ${rows.length} · vs önceki dönem delta`}
+              ? `${rangeLabel} net ${useVolume ? `volume (${volumeShort})` : "revenue"} · Top ${rows.length} · delta vs. previous period`
+              : `${rangeLabel} net ${useVolume ? `hacim (${volumeShort})` : "ciro"} · Top ${rows.length} · vs önceki dönem delta`}
           </div>
         </div>
       </div>
@@ -56,7 +68,11 @@ export function RepLeaderboardPanel({
               <th>{t(locale, "col.temsilci", "Temsilci")}</th>
               <th>{t(locale, "col.distributor", "Distribütör")}</th>
               <th>{t(locale, "col.bolge", "Bölge")}</th>
-              <th className="num">{t(locale, "col.ciro", "Ciro")}</th>
+              <th className="num">
+                {useVolume
+                  ? `${t(locale, "col.hacim", "Hacim")} (${volumeShort})`
+                  : t(locale, "col.ciro", "Ciro")}
+              </th>
               <th className="num">{t(locale, "col.musteri", "Müşteri")}</th>
               <th className="num">{t(locale, "col.ort_sepet", "Ort. Sepet")}</th>
               <th className="num">{t(locale, "col.delta", "Δ")}</th>
@@ -71,7 +87,9 @@ export function RepLeaderboardPanel({
                 </td>
                 <td className="dist">{r.distAd || "—"}</td>
                 <td className="region">{r.region || "—"}</td>
-                <td className="num strong">₺{formatCompact(r.ciro)}</td>
+                <td className="num strong">
+                  {useVolume ? `${formatCompact(r.hacim)} ${volumeShort}` : `₺${formatCompact(r.ciro)}`}
+                </td>
                 <td className="num">
                   {r.musteriSayi.toLocaleString("tr-TR")}
                 </td>

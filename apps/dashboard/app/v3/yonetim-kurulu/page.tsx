@@ -7,11 +7,13 @@ import { donemLabel } from "@/lib/donem";
 import { TopDistributorsPanel } from "@/components/v3/TopDistributorsPanel";
 import { BrandContributionPanel } from "@/components/v3/BrandContributionPanel";
 import { IskontoSegmentPanel } from "@/components/v3/iskonto/IskontoSegmentPanel";
+import { SatisUnitToggle } from "@/components/v3/satis/SatisUnitToggle";
 import { formatCompact } from "@/components/komuta/format";
-import { getLocale, t } from "@/lib/i18n";
+import { getLocale, t, localizeVolumeUnit } from "@/lib/i18n";
 
 // Sadece segment dilimine ihtiyacımız var — ticari-yatirim sayfasındaki tam
 // IskontoSnapshot tipinin alt kümesi. Endpoint aynı, ödediğin bedel cache hit.
+// Madde 8: `netHacim` eklendi (TL↔hacim toggle, IskontoSegmentPanel'e geçirilir).
 type IskontoSegmentRowSlice = {
   segment: string;
   brut: number;
@@ -20,12 +22,23 @@ type IskontoSegmentRowSlice = {
   iskontoOraniPct: number;
   musteriSayi: number;
   faturaSayisi: number;
+  netHacim: number;
 };
+// Madde 8/10: 2 panelden (segments/ekGrupSegments) 4 panele çıkarıldı —
+// Yönetim Kurulu'nun segment kırılımları artık Müşteri Segmentasyon
+// ekranıyla (md10) AYNI sırada: Müşteri Grubu → Müşteri Ek Saha →
+// Müşteri Ek Grup → Müşteri Grup Kırılımı. Eski `segments`/`ekGrupSegments`
+// alanları backend'de geriye dönük alias olarak duruyor ama burada
+// tüketilmiyor — 4 yeni alan tek kaynak.
 type IskontoSegmentsSlice = {
-  /** Müşteri Grup Kırılımı (Prestige/Premium/Standart…) */
-  segments: IskontoSegmentRowSlice[];
-  /** Müşteri Ek Grup (TEKEL/BÜFE/MARKET/BAR…) — ilk 5 + Diğer */
-  ekGrupSegments: IskontoSegmentRowSlice[];
+  /** 1) Müşteri Grubu — TBLMUSTERIGRUP. */
+  segMusteriGrup: IskontoSegmentRowSlice[];
+  /** 2) Müşteri Ek Saha — birleşik Saha1+2. */
+  segEkSaha: IskontoSegmentRowSlice[];
+  /** 3) Müşteri Ek Grup — TBLMUSTERIEKGRUP (ilk 5 + Diğer). */
+  segEkGrup: IskontoSegmentRowSlice[];
+  /** 4) Müşteri Grup Kırılımı — TBLMUSTERIGRUPKIRILIM (yeni boyut). */
+  segGrupKirilim: IskontoSegmentRowSlice[];
 };
 
 export async function generateMetadata() {
@@ -51,7 +64,7 @@ export async function generateMetadata() {
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 
 type Props = {
-  searchParams: Promise<{ donem?: string; from?: string; to?: string }>;
+  searchParams: Promise<{ donem?: string; from?: string; to?: string; unit?: string }>;
 };
 
 export default async function V3YonetimKuruluPage({ searchParams }: Props) {
@@ -61,6 +74,13 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
   const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
   const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
   const donem = dateFrom && dateTo ? null : (sp.donem ?? "").toLowerCase() || null;
+  // Madde 8 — TL↔hacim görünüm anahtarı. `SatisUnitToggle` ile AYNI desen:
+  // ekran-düzeyi anahtar, sunucuya gitmez (snapshot zaten her iki metriği de
+  // taşıyor) — yalnızca hangi alanın öne çıkarılacağını belirler.
+  const volumeKey = tenant.volume.key;
+  const unit = sp.unit === volumeKey ? volumeKey : "tl";
+  const volShort = tenant.volume?.short ? localizeVolumeUnit(tenant.volume.short, locale) : "";
+  const showVolumePrimary = unit === volumeKey && Boolean(volShort);
   let snap: Awaited<ReturnType<typeof getWietnauerYonetim>> | null = null;
   let iskonto: IskontoSegmentsSlice | null = null;
   let err: string | null = null;
@@ -76,6 +96,8 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
 
   // Türev metrikler — gerçek portföy toplamı (top-N değil)
   const toplamCiro = snap?.discount.net ?? 0;
+  // Madde 8 — hero KPI'ın hacim karşılığı (70cl eşdeğer).
+  const toplamHacim = snap?.discount.netHacim ?? 0;
   const toplamFatura = snap?.discount.faturaCount ?? 0;
   const aktifMusteri = snap?.discount.aktifMusteriCount ?? 0;
   // md22: Top 10 distribütör konsantrasyonu (payPct kapsam toplamına göre)
@@ -115,6 +137,12 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
       />
 
       <GlobalDonemFilter />
+      {/* Madde 8 — TL↔hacim görünüm anahtarı; `SatisUnitToggle` Satış
+          Performansı ekranıyla PAYLAŞILAN bileşen (tenant.volume tabanlı,
+          sunucuya ek sorgu gitmez), burada da olduğu gibi reuse edilir. */}
+      <div className="v3-controls-row">
+        <SatisUnitToggle />
+      </div>
 
       {err && (
         <div className="v3-error">
@@ -129,13 +157,24 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
         <>
           {/* Üst şerit: 4 KPI özet kartı — gerçek portföy toplamları */}
           <div className="v3-kpi-grid">
-            {!panelHidden("kpi.yonetim.ciro") && (
-            <KpiTile
-              label={cs("kpi.yonetim.ciro", t(locale, "kpi.yonetim.ciro", "Toplam Net Ciro"))}
-              value={`₺${formatCompact(toplamCiro)}`}
-              sub={periodLabel}
-            />
-          )}
+            {!panelHidden("kpi.yonetim.ciro") &&
+              (showVolumePrimary ? (
+                <KpiTile
+                  label={`${cs("kpi.yonetim.hacim", t(locale, "kpi.yonetim.hacim", "Toplam Hacim"))} (${volShort})`}
+                  value={`${formatCompact(toplamHacim)} ${volShort}`}
+                  sub={
+                    locale === "en"
+                      ? `${periodLabel} · ₺${formatCompact(toplamCiro)} revenue`
+                      : `${periodLabel} · ₺${formatCompact(toplamCiro)} ciro`
+                  }
+                />
+              ) : (
+                <KpiTile
+                  label={cs("kpi.yonetim.ciro", t(locale, "kpi.yonetim.ciro", "Toplam Net Ciro"))}
+                  value={`₺${formatCompact(toplamCiro)}`}
+                  sub={`${periodLabel}${volShort ? ` · ${formatCompact(toplamHacim)} ${volShort}` : ""}`}
+                />
+              ))}
             {!panelHidden("kpi.yonetim.aktif") && (
             <KpiTile
               label={cs("kpi.yonetim.aktif", t(locale, "kpi.yonetim.aktif", "Aktif Müşteri"))}
@@ -163,34 +202,73 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
 
           {/* Üst içerik: 2 sütun (Marka katkıları + Top Distribütör) */}
           <div className="v3-content-grid">
-            <BrandContributionPanel brands={snap.brands} periodLabel={periodLabel} locale={locale} />
-            <TopDistributorsPanel distributors={snap.topDistributors} periodLabel={periodLabel} locale={locale} />
+            <BrandContributionPanel
+              brands={snap.brands}
+              periodLabel={periodLabel}
+              unit={unit}
+              volumeShort={volShort}
+              locale={locale}
+            />
+            <TopDistributorsPanel
+              distributors={snap.topDistributors}
+              periodLabel={periodLabel}
+              unit={unit}
+              volumeShort={volShort}
+              locale={locale}
+            />
           </div>
 
-          {/* Alt içerik: Segment Kırılımı — İKİ boyut ayrı ayrı:
-              (1) Müşteri Grup Kırılımı (Prestige/Premium/Standart…),
-              (2) Müşteri Ek Grup (TEKEL/BÜFE/MARKET/BAR… ilk 5 + Diğer). */}
-          {iskonto &&
-            (iskonto.segments.length > 0 || iskonto.ekGrupSegments.length > 0) && (
-              <div className="v3-segment-grid">
-                {iskonto.segments.length > 0 && (
-                  <IskontoSegmentPanel
-                    segments={iskonto.segments}
-                    title={locale === "en" ? "Customer Group Breakdown" : "Müşteri Grup Kırılımı"}
-                    dimensionLabel={locale === "en" ? "Customer group breakdown" : "Müşteri grup kırılımı"}
-                    locale={locale}
-                  />
-                )}
-                {iskonto.ekGrupSegments.length > 0 && (
-                  <IskontoSegmentPanel
-                    segments={iskonto.ekGrupSegments}
-                    title={locale === "en" ? "Customer Sub-Group" : "Müşteri Ek Grup"}
-                    dimensionLabel={locale === "en" ? "Customer sub-group (top 5 + Other)" : "Müşteri ek grup (ilk 5 + Diğer)"}
-                    locale={locale}
-                  />
-                )}
-              </div>
-            )}
+          {/* Alt içerik: Segment Kırılımı — madde 8, DÖRT boyut, md10 ile
+              Müşteri Segmentasyon ekranıyla AYNI sırada:
+              (1) Müşteri Grubu, (2) Müşteri Ek Saha,
+              (3) Müşteri Ek Grup, (4) Müşteri Grup Kırılımı.
+              Başlıklar `panel.segment.*` anahtarlarını PAYLAŞIR (Müşteri
+              Segmentasyon ekranındaki aynı boyut panelleriyle) — admin bir
+              boyutu yeniden adlandırırsa iki ekranda da tutarlı kalır. */}
+          {iskonto && (
+            <div className="v3-segment-grid">
+              {iskonto.segMusteriGrup.length > 0 && (
+                <IskontoSegmentPanel
+                  segments={iskonto.segMusteriGrup}
+                  title={cs("panel.segment.musterigrubu", t(locale, "panel.segment.musterigrubu", "Müşteri Grubu"))}
+                  dimensionLabel={locale === "en" ? "Customer group" : "Müşteri grubu"}
+                  unit={unit}
+                  volumeShort={volShort}
+                  locale={locale}
+                />
+              )}
+              {iskonto.segEkSaha.length > 0 && (
+                <IskontoSegmentPanel
+                  segments={iskonto.segEkSaha}
+                  title={cs("panel.segment.eksaha", t(locale, "panel.segment.eksaha", "Müşteri Ek Saha"))}
+                  dimensionLabel={locale === "en" ? "Combined extended field" : "Birleşik ek saha"}
+                  unit={unit}
+                  volumeShort={volShort}
+                  locale={locale}
+                />
+              )}
+              {iskonto.segEkGrup.length > 0 && (
+                <IskontoSegmentPanel
+                  segments={iskonto.segEkGrup}
+                  title={cs("panel.segment.ekgrup", t(locale, "panel.segment.ekgrup", "Müşteri Ek Grubu"))}
+                  dimensionLabel={locale === "en" ? "Customer sub-group (top 5 + Other)" : "Müşteri ek grup (ilk 5 + Diğer)"}
+                  unit={unit}
+                  volumeShort={volShort}
+                  locale={locale}
+                />
+              )}
+              {iskonto.segGrupKirilim.length > 0 && (
+                <IskontoSegmentPanel
+                  segments={iskonto.segGrupKirilim}
+                  title={cs("panel.segment.grupkirilim", t(locale, "panel.segment.grupkirilim", "Müşteri Grup Kırılımı"))}
+                  dimensionLabel={locale === "en" ? "Customer group breakdown" : "Müşteri grup kırılımı"}
+                  unit={unit}
+                  volumeShort={volShort}
+                  locale={locale}
+                />
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -198,6 +276,13 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
         dangerouslySetInnerHTML={{
           __html: `
         .v3-page { padding: 4px 0 24px; }
+        .v3-controls-row {
+          display: flex;
+          align-items: flex-start;
+          gap: 12px;
+          flex-wrap: wrap;
+          margin-bottom: 4px;
+        }
         .v3-kpi-grid {
           display: grid;
           grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -219,6 +304,11 @@ export default async function V3YonetimKuruluPage({ searchParams }: Props) {
         .v3-segment-wrap {
           display: block;
         }
+        /* Madde 8/10 — 4 segment paneli (2×2 orta ekran, tek sütun dar
+           ekran). IskontoSegmentPanel satırları geniş (200px etiket + bar +
+           260px para kolonları) — 4'ü aynı anda yan yana sıkıştırmak yerine
+           2×2 tercih edildi (Müşteri Segmentasyon ekranındaki daha dar
+           TipSegmentRow panellerinden farklı). */
         .v3-segment-grid {
           display: grid;
           grid-template-columns: 1fr;

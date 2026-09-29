@@ -11,12 +11,11 @@ import { t as translate, type Locale } from "@/lib/i18n";
  * kontrol onu sürüyor. Anlık KPI şeridi "Son 30 gün" kalır (trend uzunluğundan
  * ayrı kavram). Diğer query param'ları (reel/otv/unit/bolge/kanal) korunur.
  */
-const PERIYOT_KEYS: { kod: string; key: string; trDefault: string }[] = [
-  { kod: "p3", key: "komuta.periyot.p3", trDefault: "Son 3 Ay" },
-  { kod: "p6", key: "komuta.periyot.p6", trDefault: "Son 6 Ay" },
-  { kod: "p12", key: "komuta.periyot.p12", trDefault: "Son 12 Ay" },
-  { kod: "ytd", key: "komuta.periyot.ytd", trDefault: "Bu Yıl" },
-];
+// PERIYOT_KEYS + periyotLabel server-güvenli `./periyot-options` modülüne taşındı
+// (RSC: client modülünden export edilen FONKSİYON server'dan çağrılamaz — Cockpit
+// SSR crash veriyordu). Server (page.tsx) ve client burayı DEĞİL, doğrudan
+// `./periyot-options`'ı import eder.
+import { PERIYOT_KEYS } from "./periyot-options";
 
 export function KomutaPeriyotDropdown({ periyot, locale = "tr" }: { periyot: string; locale?: Locale }) {
   const router = useRouter();

@@ -260,7 +260,13 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
               en altta trend grafiği. */}
           <div className="v3-content-stack">
             {/* md25: Distribütör leaderboard kaldırıldı (veri KPI için korunuyor). */}
-            <RepLeaderboardPanel rows={snap.repLeaderboard} rangeLabel={rangeLabel} locale={locale} />
+            <RepLeaderboardPanel
+              rows={snap.repLeaderboard}
+              rangeLabel={rangeLabel}
+              unit={unit}
+              volumeShort={volShort}
+              locale={locale}
+            />
 
             {/* md27: distLeaderboard'tan türetilen satisHizi (ciro / aktif
                 nokta) — lib/api.ts tip aynası bu görevin dosya kapsamı
@@ -276,7 +282,13 @@ export default async function V3SatisPerformansPage({ searchParams }: Props) {
             />
 
             <div className="v3-row-2col">
-              <DropSizePanel rows={snap.dropSize} rangeLabel={rangeLabel} locale={locale} />
+              <DropSizePanel
+                rows={snap.dropSize}
+                rangeLabel={rangeLabel}
+                unit={unit}
+                volumeShort={volShort}
+                locale={locale}
+              />
               <NewCustomersPanel
                 items={snap.newCustomers.items}
                 totalYeniMusteri={snap.newCustomers.totalYeniMusteri}

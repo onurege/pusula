@@ -5,8 +5,8 @@ import type { ActiveCustomers90d } from "./types";
  * Panel A — 90g Aktif Müşteri sayısı + segment kırılımı.
  *
  * KPI hero (toplam aktif + önceki döneme göre değişim) + altta segment
- * dağılımı yatay bar. Segment etiketleri müşteri grup kırılımı üzerinden
- * (TBLMUSTERI.TXTGRUPKIRILIMKOD → TBLMUSTERIGRUPKIRILIM.TXTAD — Prestige /
+ * dağılımı yatay bar. Segment etiketleri tenant-konfigüre müşteri kırılımı
+ * üzerinden (getCustomerBreakdownMeta — Wietnauer'da birleşik ek saha; eskiden
  * Premium / Premium Plus / Standart / Standart Plus / Tanımsız vb.) gelir.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
@@ -62,7 +62,7 @@ export function ActiveCustomersPanel({ data, locale = "tr" }: { data: ActiveCust
       </div>
 
       <div className="seg-list">
-        <div className="seg-title">{locale === "en" ? "Customer Group Breakdown" : "Müşteri Grup Kırılımı"}</div>
+        <div className="seg-title">{locale === "en" ? "Customer Breakdown" : "Müşteri Kırılımı"}</div>
         {segments.length === 0 && (
           <div className="seg-empty">{locale === "en" ? "No group breakdown data found." : "Grup kırılımı verisi bulunamadı."}</div>
         )}

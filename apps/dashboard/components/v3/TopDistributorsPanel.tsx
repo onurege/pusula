@@ -16,22 +16,43 @@ type Limit = 10 | 20 | 0; // 0 = Tümü
  *   - FKMS: son 30g fatura kesilen distinct müşteri
  *   - Kapsam%: FKMS / Aktif Müşteri — portföyün ne kadarına 30g'de satış yapıldı
  * Pay% = kapsamın toplam cirosuna göre konsantrasyon.
+ *
+ * Madde 8 — TL↔hacim toggle. Backend yalnızca `hacim` alanını taşır, hacim
+ * bazlı pay% BİLE İSTEMEZ döndürmez (bkz. `WietnauerTopDistributor.hacim`
+ * doc'u); FE burada tam portföy toplamına göre kendi hacim payını türetir —
+ * `SalesVelocityPanel`/`BrandContributionPanel` ile AYNI `unit`/`volumeShort`
+ * prop deseni (`unit !== "tl" && volumeShort` → hacim modu).
  */
 export function TopDistributorsPanel({
   distributors,
   periodLabel,
+  unit = "tl",
+  volumeShort,
   locale = "tr",
 }: {
   distributors: WietnauerTopDistributor[];
   /** Seçili dönemin insan-okur etiketi (örn. "son 30 gün", "bu ay"). */
   periodLabel?: string;
+  /** `"tl"` (varsayılan) → ciro. Tenant hacim birimi anahtarı verilirse hacim. */
+  unit?: string;
+  /** Hacim birimi kısa etiketi (ör. "70cl") — yalnızca `unit !== "tl"` iken kullanılır. */
+  volumeShort?: string;
   locale?: Locale;
 }) {
   const { t, isHidden } = useContent();
   const [limit, setLimit] = useState<Limit>(10);
   const period = periodLabel ?? (locale === "en" ? "last 30 days" : "son 30 gün");
-  const visible = limit === 0 ? distributors : distributors.slice(0, limit);
-  const cumulative = visible.reduce((a, d) => a + d.payPct, 0);
+  const useVolume = unit !== "tl" && Boolean(volumeShort);
+  // Portföy toplamı üzerinden hacim payı — ciro payPct'i backend'in aynı
+  // mantıkla (kapsamın toplamına göre) hesapladığı desenin JS karşılığı.
+  const toplamHacim = distributors.reduce((a, d) => a + d.hacim, 0);
+  const withDisplay = distributors.map((d) => ({
+    ...d,
+    displayVal: useVolume ? d.hacim : d.ciro,
+    displayPay: useVolume ? (toplamHacim > 0 ? (d.hacim / toplamHacim) * 100 : 0) : d.payPct,
+  }));
+  const visible = limit === 0 ? withDisplay : withDisplay.slice(0, limit);
+  const cumulative = visible.reduce((a, d) => a + d.displayPay, 0);
 
   if (isHidden("panel.yonetim.topdist")) return null;
 
@@ -45,12 +66,12 @@ export function TopDistributorsPanel({
           <div className="v3-panel-sub">
             {locale === "en" ? (
               <>
-                {period} net revenue · Top {visible.length} distributors carry
-                <strong> %{cumulative.toFixed(1)}</strong> of total revenue
+                {period} net {useVolume ? "volume" : "revenue"} · Top {visible.length} distributors carry
+                <strong> %{cumulative.toFixed(1)}</strong> of total {useVolume ? "volume" : "revenue"}
               </>
             ) : (
               <>
-                {period} net ciro · İlk {visible.length} distribütör toplam cironun
+                {period} net {useVolume ? "hacim" : "ciro"} · İlk {visible.length} distribütör toplam {useVolume ? "hacmin" : "cironun"}
                 <strong> %{cumulative.toFixed(1)}</strong>'ini taşıyor
               </>
             )}
@@ -78,7 +99,15 @@ export function TopDistributorsPanel({
               <th style={{ width: 36 }}>#</th>
               <th>{translate(locale, "col.distributor", "Distribütör")}</th>
               <th>{translate(locale, "col.bolge", "Bölge")}</th>
-              <th className="num">{locale === "en" ? "Revenue (30d)" : "Ciro (30g)"}</th>
+              <th className="num">
+                {useVolume
+                  ? locale === "en"
+                    ? "Volume (30d)"
+                    : "Hacim (30g)"
+                  : locale === "en"
+                    ? "Revenue (30d)"
+                    : "Ciro (30g)"}
+              </th>
               <th className="num">{locale === "en" ? "Active Customers" : "Aktif Müşteri"}</th>
               <th className="num">FKMS</th>
               <th className="num">{translate(locale, "col.kapsama", "Kapsam")}</th>
@@ -93,13 +122,15 @@ export function TopDistributorsPanel({
                   {d.ad.length > 50 ? d.ad.slice(0, 47) + "…" : d.ad}
                 </td>
                 <td>{d.bolge || "—"}</td>
-                <td className="num">₺{formatCompact(d.ciro)}</td>
+                <td className="num">
+                  {useVolume ? `${formatCompact(d.displayVal)} ${volumeShort}` : `₺${formatCompact(d.displayVal)}`}
+                </td>
                 <td className="num">{d.aktifMusteriSayi.toLocaleString("tr-TR")}</td>
                 <td className="num">{d.fkms.toLocaleString("tr-TR")}</td>
                 <td className="num kapsam">%{d.kapsamPct.toFixed(1)}</td>
                 <td className="num pay">
-                  <span className="pay-bar" style={{ width: `${Math.min(d.payPct * 4, 100)}%` }} />
-                  <span className="pay-val">%{d.payPct.toFixed(1)}</span>
+                  <span className="pay-bar" style={{ width: `${Math.min(d.displayPay * 4, 100)}%` }} />
+                  <span className="pay-val">%{d.displayPay.toFixed(1)}</span>
                 </td>
               </tr>
             ))}

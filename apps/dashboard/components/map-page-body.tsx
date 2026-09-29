@@ -5,6 +5,7 @@ import {
   listMapCityYoY,
   listMapCustomers,
   listMapRegions,
+  type VisitOrderRiskTier,
 } from "@/lib/api";
 import { MapFilters } from "@/components/map-filters";
 import { MapPeriodFilter } from "@/components/map-period-filter";
@@ -98,6 +99,34 @@ export async function MapPageBody({
     activityDaysParsed === 60 || activityDaysParsed === 90
       ? activityDaysParsed
       : 30;
+  // Madde 13 — "visit-order" risk modeli ekran-bazlı override'ları (yalnız
+  // `tenant.riskModel === "visit-order"` — composite tenant'larda backend
+  // bunları yok sayar, zararsız). Pencere BİLEREK burada geçirilmez —
+  // `riskWindowDays` verilmezse core `activityDays`'i kullanır, yani üstteki
+  // dönem seçicisi (30/60/90g) risk penceresini de sürükler; ayrı bir "risk
+  // penceresi" kontrolü haritada gösterilmez (tek dönem kaynağı, kafa
+  // karıştırmaz).
+  const riskPriorityRaw =
+    typeof sp.riskPriority === "string" ? sp.riskPriority : undefined;
+  const riskPriority: "visit" | "order" | undefined =
+    riskPriorityRaw === "visit" || riskPriorityRaw === "order"
+      ? riskPriorityRaw
+      : undefined;
+  const riskTiersInScopeRaw =
+    typeof sp.riskTiersInScope === "string" ? sp.riskTiersInScope : undefined;
+  const VISIT_ORDER_TIER_VALUES = ["red", "orange", "yellow", "green"] as const;
+  const riskTiersInScopeParsed = riskTiersInScopeRaw
+    ? riskTiersInScopeRaw
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s): s is VisitOrderRiskTier =>
+          (VISIT_ORDER_TIER_VALUES as readonly string[]).includes(s),
+        )
+    : undefined;
+  const riskTiersInScope =
+    riskTiersInScopeParsed && riskTiersInScopeParsed.length > 0
+      ? riskTiersInScopeParsed
+      : undefined;
 
   // Görünüm modu: customer (default), region veya city.
   //   - region: TR 7 klasik bölgesi polygon fill (YoY renkleriyle)
@@ -135,6 +164,11 @@ export async function MapPageBody({
       // 30 = varsayılan davranış; param hiç gönderilmeyip core'un eski
       // (has_sales kolonu tabanlı) yoluna düşmesi sağlanır — sıfır regresyon.
       ...(activityDays !== 30 ? { activityDays } : {}),
+      // Madde 13 — composite tenant'larda backend bu iki parametreyi yok
+      // sayar (zararsız); Wietnauer'da nokta rengini/`visitOrderRisk`'i
+      // etkiler.
+      ...(riskPriority ? { riskPriority } : {}),
+      ...(riskTiersInScope ? { riskTiersInScope } : {}),
       limit: 30000,
     }),
     listMapRegions({
@@ -191,6 +225,20 @@ export async function MapPageBody({
   const neverSynced =
     sync.lastSyncAt === null && data.customers.length === 0;
 
+  // Madde 13 (B) — "Risk sayılan tier'lar" artık HARİTAYI FİLTRELER: visit-order
+  // tenant'ta (Wietnauer) yalnız seçili tier'daki müşteriler haritada/listede
+  // görünür; işareti kaldırılan tier gizlenir. Composite tenant'larda
+  // (`visitOrderRisk` null) filtre yok — tüm noktalar aynen gösterilir.
+  const effectiveRiskTiers: VisitOrderRiskTier[] =
+    riskTiersInScope ?? (["red", "orange", "yellow", "green"] as VisitOrderRiskTier[]);
+  const isVisitOrderRisk = tenant.riskModel === "visit-order" && viewMode === "customer";
+  const visibleCustomers = isVisitOrderRisk
+    ? data.customers.filter(
+        (c) => c.visitOrderRisk != null && effectiveRiskTiers.includes(c.visitOrderRisk.tier),
+      )
+    : data.customers;
+  const visibleCount = isVisitOrderRisk ? visibleCustomers.length : data.count;
+
   return (
     <div className="fixed inset-0 top-14 flex flex-col bg-bg">
       <header className="bg-surface/80 backdrop-blur border-b border-border h-14 px-5 flex items-center justify-between shrink-0">
@@ -237,6 +285,9 @@ export async function MapPageBody({
                     params.set("minDaysSinceVisit", String(minDaysSinceVisit));
                   if (activityDays !== 30)
                     params.set("activityDays", String(activityDays));
+                  if (riskPriority) params.set("riskPriority", riskPriority);
+                  if (riskTiersInScope)
+                    params.set("riskTiersInScope", riskTiersInScope.join(","));
                   return `${basePath}?${params.toString()}`;
                 })()}
                 className="ml-0.5 text-accent/70 hover:text-accent"
@@ -294,8 +345,8 @@ export async function MapPageBody({
       <div className="flex-1 min-h-0 flex">
         <MapFilters
           facets={facets}
-          customers={data.customers}
-          count={data.count}
+          customers={visibleCustomers}
+          count={visibleCount}
           basePath={basePath}
           locale={locale}
         />
@@ -321,20 +372,20 @@ export async function MapPageBody({
                 </div>
               </div>
             </div>
-          ) : data.customers.length === 0 ? (
+          ) : visibleCustomers.length === 0 ? (
             <div className="absolute inset-0 flex items-center justify-center p-8 text-muted text-sm">
               {translate(locale, "map.no_customers_for_filters", "Bu filtrelerle koordinatlı müşteri yok.")}
             </div>
           ) : (
             <>
               <SalesMap
-                customers={data.customers}
+                customers={visibleCustomers}
                 regions={regionsData.regions}
                 cities={citiesData.cities}
                 viewMode={viewMode}
                 locale={locale}
               />
-              <MapRiskLegend locale={locale} />
+              <MapRiskLegend locale={locale} riskModel={tenant.riskModel} />
             </>
           )}
         </main>
@@ -344,11 +395,44 @@ export async function MapPageBody({
 }
 
 /**
- * Harita nokta renk açıklaması — müşteri noktaları composite "kayıp riski"
- * skoruna (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
- * packages/core/src/map.ts `tierForScore` ile birebir.
+ * Harita nokta renk açıklaması. İki paralel model (Strangler Fig):
+ *   - composite (Pernod/fmcg-demo, AYNEN korunur): "kayıp riski" skoruna
+ *     (0-100) göre renklenir; yüksek skor = yüksek risk. Eşikler
+ *     packages/core/src/map.ts `tierForScore` ile birebir.
+ *   - visit-order (Wietnauer, madde 13): ziyaret×sipariş ikilisinin 4
+ *     kombinasyonu (kırmızı → yeşil, kötüden iyiye). Guide metni burada —
+ *     legend her zaman görünür (mouse'a bağımlı değil) → erişilebilir
+ *     temel açıklama; nokta hover'ındaki popup (bkz. sales-map.tsx) bunun
+ *     üstüne per-müşteri `reason` ekler.
  */
-function MapRiskLegend({ locale }: { locale: Locale }) {
+function MapRiskLegend({
+  locale,
+  riskModel,
+}: {
+  locale: Locale;
+  riskModel?: "composite" | "visit-order";
+}) {
+  if (riskModel === "visit-order") {
+    const items = [
+      { c: "#dc2626", t: translate(locale, "map.vo.tier.red", "En riskli"), r: translate(locale, "risk.vo.guide.red", "ziyaret YOK + sipariş YOK") },
+      { c: "#ea580c", t: translate(locale, "map.vo.tier.orange", "Riskli"), r: translate(locale, "risk.vo.guide.orange", "ziyaret YOK, sipariş VAR") },
+      { c: "#eab308", t: translate(locale, "map.vo.tier.yellow", "İzlenmeli"), r: translate(locale, "risk.vo.guide.yellow", "ziyaret VAR, sipariş YOK") },
+      { c: "#16a34a", t: translate(locale, "map.vo.tier.green", "Sağlıklı"), r: translate(locale, "risk.vo.guide.green", "ziyaret VAR + sipariş VAR") },
+    ];
+    return (
+      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-[5] flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 rounded-lg border border-border bg-surface/90 backdrop-blur px-3.5 py-2 shadow-md text-[11px] max-w-[95%]">
+        <span className="font-semibold text-muted mr-1">{translate(locale, "map.vo.legend.label", "Ziyaret/sipariş riski")}:</span>
+        {items.map((i) => (
+          <span key={i.t} className="inline-flex items-center gap-1.5 whitespace-nowrap" title={i.r}>
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: i.c }} />
+            <span className="text-fg font-medium">{i.t}</span>
+            <span className="text-muted">{i.r}</span>
+          </span>
+        ))}
+      </div>
+    );
+  }
+
   const items = [
     { c: "#16a34a", t: translate(locale, "map.risk.healthy", "Sağlıklı"), r: translate(locale, "map.risk.score_0_29", "skor 0–29") },
     { c: "#d97706", t: translate(locale, "map.risk.watch", "İzlemede"), r: "30–54" },

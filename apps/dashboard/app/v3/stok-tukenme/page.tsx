@@ -10,7 +10,6 @@ import { getTenantConfig } from "@/lib/tenant";
 import { formatCompact } from "@/components/komuta/format";
 import { StokDistSelect } from "@/components/v3/stok/StokDistSelect";
 import { StokSkuTable } from "@/components/v3/stok/StokSkuTable";
-import { GlobalDonemFilter } from "@/components/v3/GlobalDonemFilter";
 import { getLocale, t, type Locale } from "@/lib/i18n";
 
 export async function generateMetadata() {
@@ -18,10 +17,8 @@ export async function generateMetadata() {
   return { title: `${t(locale, "page.stok.title", "Stok Tükenme")} · V3 · Insider` };
 }
 
-const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
-
 type Props = {
-  searchParams: Promise<{ distId?: string; from?: string; to?: string; donem?: string }>;
+  searchParams: Promise<{ distId?: string }>;
 };
 
 export default async function V3StokTukenmePage({ searchParams }: Props) {
@@ -30,21 +27,16 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
   const sp = await searchParams;
   const distIdParsed = sp.distId != null ? Number(sp.distId) : null;
   const distId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
-  // md42: talep/satış hızı penceresi — yalnız YYYY-MM-DD formatı kabul
-  // edilir; geçersizse yok sayılır (API zaten savunmasız aynı doğrulamayı
-  // yapar, burası UI için erken/temiz geri bildirim).
-  const dateFrom = sp.from && ISO_DATE_RX.test(sp.from) ? sp.from : null;
-  const dateTo = sp.to && ISO_DATE_RX.test(sp.to) ? sp.to : null;
-  const donem = (sp.donem ?? "").toLowerCase();
 
   let snap: WietnauerStockSnapshot | null = null;
   let err: string | null = null;
 
   try {
-    snap = await getWietnauerStok<WietnauerStockSnapshot>({
-      distId, dateFrom, dateTo,
-      donem: dateFrom && dateTo ? null : donem || null,
-    });
+    // MADDE 11 — stok anlık bir kavram; dönem/tarih aralığı filtresi yok.
+    // Önceden `donem`/`from`/`to` ile bir "talep penceresi" seçtirilebiliyordu,
+    // ama on-hand miktar zaten dönemden bağımsız (backend varsayılan pencereyi
+    // kendi belirler) — bu yüzden yalnızca distribütör filtresi kalır.
+    snap = await getWietnauerStok<WietnauerStockSnapshot>({ distId });
   } catch (e) {
     err = (e as Error).message;
   }
@@ -105,8 +97,6 @@ export default async function V3StokTukenmePage({ searchParams }: Props) {
             selectedDistId={snap.distFilter?.distId ?? null}
             locale={locale}
           />
-          {/* md2: global dönem filtresi (StokDateRange yerine — preset + serbest). */}
-          <GlobalDonemFilter />
           <div className="stok-kpi-grid">
             {!panelHidden("kpi.stok.kritik") && (
             <KpiTile

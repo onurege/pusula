@@ -1,4 +1,5 @@
 import type { KomutaTopDist, ValueUnit } from "@/lib/api";
+import { getTenantConfig } from "@/lib/tenant";
 import { InfoHint } from "../InfoHint";
 import { Val } from "../format";
 
@@ -9,6 +10,9 @@ export function DistLeaderboard({
   dists: KomutaTopDist[];
   unit?: ValueUnit;
 }) {
+  // Hacim birimi tenant'a göre değişir (Pernod "9L", Wietnauer "70cl") —
+  // sabit fallback YOK, tenant-nötr KISIT'i.
+  const volumeShort = getTenantConfig().volume.short;
   const max = Math.max(1, ...dists.map((d) => d.ciro));
   return (
     <div className="panel leaderboard">
@@ -48,7 +52,7 @@ export function DistLeaderboard({
               <div className="lb-bar">
                 <div className={`lb-bar-fill${tone}`} style={{ width: `${pct}%` }} />
               </div>
-              <div className={`lb-pct ${pctTone}`}><Val n={d.ciro} unit={unit} /></div>
+              <div className={`lb-pct ${pctTone}`}><Val n={d.ciro} unit={unit} volumeShort={volumeShort} /></div>
             </div>
           );
         })

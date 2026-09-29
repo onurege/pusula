@@ -37,10 +37,13 @@ const ETIKET_META_EN: Record<
  * En çok iskonto verilen 20 müşteri (iskonto DESC). Düşük iskonto oranı +
  * yüksek ciro = premium. Yüksek oran = iskonto bağımlı.
  *
- * Eşikler (backend'de fix):
+ * Eşikler (backend'de fix, satır 41-43 — `wietnauer-iskonto.ts`):
  *   <10%   → premium
  *   10-25% → sağlıklı
  *   >25%   → bağımlı
+ *
+ * Madde 17 — bu eşikler kullanıcıya görünmüyordu (etiket neye göre
+ * anlaşılmıyordu); tablonun altına legend eklendi.
  */
 import { panelTitle, panelHidden } from "@/lib/content";
 import { t, type Locale } from "@/lib/i18n";
@@ -129,6 +132,21 @@ export function IskontoCustomerPanel({
         </table>
       </div>
 
+      <div className="cust-legend">
+        <span className="legend-label">{t(locale, "cust.legend_label", "Etiket eşiği (iskonto oranı):")}</span>
+        <span style={{ color: "#16a34a" }}>
+          ● {etiketMeta.premium.label} &lt;10%
+        </span>
+        <span className="sep">·</span>
+        <span style={{ color: "#d97706" }}>
+          ● {etiketMeta.saglikli.label} 10–25%
+        </span>
+        <span className="sep">·</span>
+        <span style={{ color: "#dc2626" }}>
+          ● {etiketMeta.bagimli.label} &gt;25%
+        </span>
+      </div>
+
       <style
         dangerouslySetInnerHTML={{
           __html: `
@@ -159,6 +177,9 @@ export function IskontoCustomerPanel({
         .cust-table td.iskonto { color: var(--color-fg-2); font-weight: 500; }
         .cust-table td.oran { font-weight: 600; }
         .pill { display: inline-block; padding: 2px 8px; font-size: 10.5px; font-weight: 600; border: 1px solid; border-radius: 999px; text-transform: lowercase; letter-spacing: 0.02em; }
+        .cust-legend { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--color-border); font-size: 11px; color: var(--color-muted-2); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .cust-legend .legend-label { color: var(--color-muted); font-weight: 600; }
+        .cust-legend .sep { opacity: 0.4; }
       `,
         }}
       />
