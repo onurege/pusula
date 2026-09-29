@@ -24,6 +24,7 @@ import {
   getCustomerSales,
   getKomutaSnapshot,
   getKomutaFacets,
+  periyotToPeriodDays,
   getMapFacets,
   getCustomerReorder,
   resolveDemoReorderCustomer,
@@ -31,6 +32,7 @@ import {
   getWietnauerMarkaSnapshot,
   getWietnauerAktivasyonSnapshot,
   getWietnauerIskontoSnapshot,
+  getIskontoUrunEkGrupFacets,
   getWietnauerSegmentSnapshot,
   getWietnauerSahaSnapshot,
   getWietnauerSatisSnapshot,
@@ -876,6 +878,38 @@ function parseTier(raw: string | undefined): TierV2 | undefined {
     : undefined;
 }
 
+// md13 — "visit-order" risk modeli (Wietnauer) ekran-bazlı config override
+// query paramları. Sunucu-otoriter whitelist: geçersiz/eksik değer core'un
+// tenant `riskConfig` varsayılanına düşer (core zaten kendi guard'larıyla
+// aynı whitelist'i tekrarlar — burada REDDEDİLEN bir değer core'a hiç
+// ulaşmaz, `undefined` geçer).
+const RISK_PRIORITY_VALUES = ["visit", "order"] as const;
+type RiskPriorityParam = (typeof RISK_PRIORITY_VALUES)[number];
+function parseRiskPriority(raw: string | undefined): RiskPriorityParam | undefined {
+  return raw != null && (RISK_PRIORITY_VALUES as readonly string[]).includes(raw)
+    ? (raw as RiskPriorityParam)
+    : undefined;
+}
+
+const RISK_TIER_SCOPE_VALUES = ["red", "orange", "yellow", "green"] as const;
+type RiskTierScopeParam = (typeof RISK_TIER_SCOPE_VALUES)[number];
+/** `riskTiersInScope=red,orange` → geçerli tier'ların dizisi; hiçbiri
+ *  geçerli değilse (veya param yoksa) `undefined` → core varsayılanı. */
+function parseRiskTiersInScope(raw: string | undefined): RiskTierScopeParam[] | undefined {
+  if (!raw) return undefined;
+  const valid = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((p): p is RiskTierScopeParam => (RISK_TIER_SCOPE_VALUES as readonly string[]).includes(p));
+  return valid.length > 0 ? valid : undefined;
+}
+
+const RISK_WINDOW_DAYS_VALUES = [30, 60, 90] as const;
+function parseRiskWindowDays(raw: string | undefined): 30 | 60 | 90 | undefined {
+  const n = raw ? parseInt(raw, 10) : NaN;
+  return (RISK_WINDOW_DAYS_VALUES as readonly number[]).includes(n) ? (n as 30 | 60 | 90) : undefined;
+}
+
 // Harita endpoint'leri — GÜVENLİK: her biri auth ister (401 if no session).
 // Dist kullanıcı yalnızca kendi izinli dist'lerinin müşteri/bölge verisini
 // görür; `allowedDistKods` scope'tan zorlanır (sunucu-otoriter), mevcut
@@ -921,6 +955,11 @@ app.get("/api/map/customers", async (c) => {
 
     const bolge = c.req.query("bolge") ?? undefined;
     const region = c.req.query("region") ?? undefined;
+    // md13 — "visit-order" risk modeli ekran-bazlı override'lar (composite
+    // tenant'larda core tarafından yok sayılır, zararsız).
+    const riskPriority = parseRiskPriority(c.req.query("riskPriority"));
+    const riskTiersInScope = parseRiskTiersInScope(c.req.query("riskTiersInScope"));
+    const riskWindowDays = parseRiskWindowDays(c.req.query("riskWindowDays"));
     const customers = await listMapCustomers(REPO_ROOT, {
       sehir,
       distKod,
@@ -934,6 +973,9 @@ app.get("/api/map/customers", async (c) => {
       limit,
       allowedDistKods: scope.distKods,
       allowedCities: scope.cities,
+      riskPriority,
+      riskTiersInScope,
+      riskWindowDays,
     });
     return c.json({ count: customers.length, customers });
   } catch (err) {
@@ -1199,6 +1241,11 @@ app.get("/api/komuta", async (c) => {
     const kanal = c.req.query("kanal")?.trim() || null;
     const urunGrup = c.req.query("urunGrup")?.trim() || null;
     const locale = localeFromRequest(c);
+    // md1 — Cockpit global periyot dropdown ("30g"/"p3"/"p6"/"p12"/"ytd") →
+    // KPI şeridi + Kanal Mix trend penceresi. `periyotToPeriodDays` bilinmeyen/
+    // eksik kodu 30'a düşürür (mevcut sabit "-30 gün" davranışı korunur).
+    const periyot = c.req.query("periyot")?.trim() || null;
+    const periodDays = periyotToPeriodDays(periyot);
     const snap = await getKomutaSnapshot({
       forceRefresh,
       reelTL,
@@ -1210,6 +1257,7 @@ app.get("/api/komuta", async (c) => {
       kanal,
       urunGrup,
       locale,
+      periodDays,
     });
     return c.json(maskDemoSnapshot(snap));
   } catch (err) {
@@ -1907,8 +1955,63 @@ function makeV3Handler(
 app.get("/api/wietnauer/marka", makeV3Handler("marka", getWietnauerMarkaSnapshot));
 // @ts-expect-error
 app.get("/api/wietnauer/aktivasyon", makeV3Handler("aktivasyon", getWietnauerAktivasyonSnapshot));
-// @ts-expect-error
-app.get("/api/wietnauer/iskonto", makeV3Handler("iskonto", getWietnauerIskontoSnapshot));
+
+// İskonto — madde 14: standart V3 opts'a ek olarak `urunEkGrup` (Kategori,
+// TBLURUNEKGRUP.TXTKOD) query param'ı taşır; `makeV3Handler`'ın jenerik
+// V3SnapshotOpts'unu diğer 5 V3 ekranı için genişletmemek amacıyla ayrı bir
+// handler (aynı auth/scope/dateRange deseni, makeV3Handler ile birebir aynı).
+app.get("/api/wietnauer/iskonto", async (c) => {
+  let scope: TenantScope;
+  try {
+    const distIdRaw = c.req.query("distId");
+    const distIdParsed = distIdRaw != null && distIdRaw !== "" ? Number(distIdRaw) : null;
+    const requestedDistId = distIdParsed != null && Number.isFinite(distIdParsed) ? distIdParsed : null;
+    scope = await scopeFromRequest(c, requestedDistId);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  try {
+    const forceRefresh = !DEMO_DATA && c.req.query("refresh") === "1";
+    const tenant = getTenantConfig();
+    const { dateFrom, dateTo } = parseDateRange(c);
+    const urunEkGrup = c.req.query("urunEkGrup")?.trim() || null;
+    const snap = await getWietnauerIskontoSnapshot({
+      forceRefresh,
+      strategicBrands: tenant.strategicBrands ?? [],
+      allowedDistKods: scope.distKods,
+      distId: scopeSingleDistId(scope),
+      allowedCities: scope.cities,
+      dateFrom,
+      dateTo,
+      urunEkGrup,
+    });
+    return c.json(maskDemoSnapshot(snap));
+  } catch (err) {
+    console.error("[/api/wietnauer/iskonto] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
+// Madde 14 — Ürün Ek Grup (Kategori) facet dropdown'ı. Auth ister (401 if no
+// session), dist-scope gerekmez (facet listesi tüm tenant için tektir —
+// `/api/komuta/facets` deseniyle aynı: yalnızca oturum doğrulanır).
+app.get("/api/wietnauer/iskonto/facets/urun-ek-grup", async (c) => {
+  try {
+    await scopeFromRequest(c);
+  } catch (err) {
+    if ((err as Error).message === "UNAUTHENTICATED") return c.json({ error: "Oturum gerekli" }, 401);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+  try {
+    const facets = await getIskontoUrunEkGrupFacets();
+    return c.json({ facets });
+  } catch (err) {
+    console.error("[/api/wietnauer/iskonto/facets/urun-ek-grup] failed:", err);
+    return c.json({ error: (err as Error).message }, 500);
+  }
+});
+
 // @ts-expect-error
 app.get("/api/wietnauer/segment", makeV3Handler("segment", getWietnauerSegmentSnapshot));
 // @ts-expect-error
