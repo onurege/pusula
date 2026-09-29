@@ -16,6 +16,7 @@
     "mcp:start": "tsx apps/mcp/src/server.ts",
     "api:start": "tsx apps/api/src/server.ts",
     "dashboard:dev": "npm run dev -w @enroute/dashboard",
+    "build": "npm run build -w @enroute/dashboard",
     "test": "vitest run",
 
     "//tenant": "Tenant-aware shortcut'lar — TENANT env var hem API hem dashboard tarafından okunur. Pernod default; fmcg-demo karma FMCG demo verisi (Faz 2'de seed edilir).",
@@ -24,7 +25,8 @@
     "api:start:wietnauer":  "TENANT=wietnauer  tsx apps/api/src/server.ts",
     "dashboard:dev:pernod":    "TENANT=pernod    npm run dev -w @enroute/dashboard",
     "dashboard:dev:fmcg":      "TENANT=fmcg-demo npm run dev -w @enroute/dashboard",
-    "dashboard:dev:wietnauer": "TENANT=wietnauer npm run dev -w @enroute/dashboard"
+    "dashboard:dev:wietnauer": "TENANT=wietnauer npm run dev -w @enroute/dashboard",
+    "build:wietnauer": "TENANT=wietnauer npm run build -w @enroute/dashboard"
   },
   "dependencies": {
     "@enroute/core": "*",
