@@ -8,6 +8,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { endSession } from "@/lib/telemetry";
 
 export type UserRole = "merkez" | "dist";
 
@@ -87,6 +88,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // Cookie silinmeden ÖNCE: son ekranın dwell'ini yetkili beacon'la flush et
+    // ve oturum id'sini sıfırla (sonraki kullanıcı session paylaşmasın).
+    endSession();
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
     // Tam sayfa yenileme → server component'ler token'sız yeniden çalışır,

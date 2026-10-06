@@ -16,6 +16,7 @@ import { t as translate, type Locale } from "@/lib/i18n";
 // SSR crash veriyordu). Server (page.tsx) ve client burayı DEĞİL, doğrudan
 // `./periyot-options`'ı import eder.
 import { PERIYOT_KEYS } from "./periyot-options";
+import { trackInteraction } from "@/lib/telemetry";
 
 export function KomutaPeriyotDropdown({ periyot, locale = "tr" }: { periyot: string; locale?: Locale }) {
   const router = useRouter();
@@ -24,6 +25,7 @@ export function KomutaPeriyotDropdown({ periyot, locale = "tr" }: { periyot: str
   const [isPending, startTransition] = useTransition();
 
   function setParam(val: string) {
+    trackInteraction("period", `periyot=${val || "p12"}`);
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     // p12 = varsayılan → param'ı temiz tut (URL sade kalsın)
     if (!val || val === "p12") params.delete("periyot");

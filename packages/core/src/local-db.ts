@@ -103,6 +103,26 @@ export function getLocalDb(repoRoot: string): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_cache_entries_domain
       ON cache_entries(domain);
+
+    -- Pasif kullanım analitiği (usage-telemetry.ts). Yalnız yerel SQLite;
+    -- MSSQL'e ASLA yazılmaz. ts = sunucu epoch ms (authoritative).
+    CREATE TABLE IF NOT EXISTS usage_events (
+      id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts                 INTEGER NOT NULL,
+      client_ts          INTEGER,
+      user_id            INTEGER,
+      username           TEXT,
+      session_id         TEXT,
+      event_type         TEXT NOT NULL,
+      screen             TEXT,
+      dwell_ms           INTEGER,
+      interaction_kind   TEXT,
+      interaction_detail TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_ts     ON usage_events(ts);
+    CREATE INDEX IF NOT EXISTS idx_usage_user   ON usage_events(user_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_type   ON usage_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_usage_screen ON usage_events(screen);
   `);
 
   // Idempotent column migrations. SQLite's CREATE TABLE IF NOT EXISTS won't

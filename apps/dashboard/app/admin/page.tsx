@@ -41,6 +41,10 @@ export default function AdminPage() {
         <Link href="/admin/konfigurator" style={{ fontSize: 13, fontWeight: 600, color: "var(--color-accent)" }}>
           → Insider Konfigüratörü (müşteri kırılımı + DB bağlantısı)
         </Link>
+        <br />
+        <Link href="/admin/kullanim" style={{ fontSize: 13, fontWeight: 600, color: "var(--color-accent)" }}>
+          → Kullanım Analitiği (giriş, ekran süresi, etkileşim logu)
+        </Link>
       </header>
 
       {/* Veri Yönetimi — ağır tam-yenileme yalnızca burada (navbar'dan kaldırıldı).

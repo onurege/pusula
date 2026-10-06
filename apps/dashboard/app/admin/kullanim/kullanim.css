@@ -1,0 +1,84 @@
+/* Admin · Kullanım — Univera kurumsal tema token'ları (globals.css) üzerinden. */
+.ku-page { padding: 4px 0 24px; }
+
+.ku-header { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border); }
+.ku-eyebrow { font-size: 10.5px; font-weight: 600; color: var(--color-accent); letter-spacing: 0.06em; text-transform: uppercase; }
+.ku-title { font-size: 28px; font-weight: 600; color: var(--color-fg); letter-spacing: -0.025em; margin: 4px 0 6px; }
+.ku-lead { font-size: 13.5px; color: var(--color-muted); margin: 0 0 8px; max-width: 720px; }
+.ku-back { font-size: 12.5px; font-weight: 600; color: var(--color-accent); }
+
+/* Filtre çubuğu */
+.ku-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; padding: 12px 14px; margin-bottom: 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 10px; }
+.ku-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500; color: var(--color-fg-2); }
+.ku-field input, .ku-field select { padding: 7px 10px; font-size: 13px; font-family: inherit; color: var(--color-fg); background: var(--color-bg); border: 1px solid var(--color-border); border-radius: 7px; min-width: 130px; }
+.ku-field input:focus-visible, .ku-field select:focus-visible, .ku-apply:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.ku-apply { padding: 8px 18px; font-size: 13px; font-weight: 600; font-family: inherit; color: var(--color-accent-fg); background: var(--color-accent); border: 1px solid var(--color-accent); border-radius: 8px; cursor: pointer; }
+.ku-apply:hover:not(:disabled) { background: var(--color-accent-hover); }
+.ku-apply:disabled { opacity: 0.55; cursor: not-allowed; }
+.ku-err { font-size: 12px; color: var(--color-bad); align-self: center; }
+.ku-error { padding: 10px 14px; margin: 0 0 16px; font-size: 13px; color: var(--color-bad); background: var(--color-surface); border: 1px solid var(--color-bad); border-radius: 8px; }
+
+/* KPI şeridi */
+.ku-body { transition: opacity 0.15s; }
+.ku-body.busy { opacity: 0.6; }
+.ku-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.ku-kpi { padding: 14px 16px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; }
+.ku-kpi-label { font-size: 11px; font-weight: 600; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.ku-kpi-value { margin-top: 4px; font-size: 28px; font-weight: 600; color: var(--color-fg); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+
+/* Kart ızgarası */
+.ku-grid { display: grid; grid-template-columns: 1fr; gap: 16px; }
+@media (min-width: 1000px) {
+  .ku-grid { grid-template-columns: 1fr 1fr; }
+  .ku-wide { grid-column: 1 / -1; }
+}
+.ku-card { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: 12px; padding: 16px 18px; min-width: 0; }
+.ku-h2 { font-size: 14px; font-weight: 600; color: var(--color-fg); margin: 0 0 12px; display: flex; align-items: baseline; gap: 10px; }
+.ku-count { font-size: 11.5px; font-weight: 500; color: var(--color-muted); }
+.ku-empty { margin: 0; padding: 8px 0; font-size: 12.5px; color: var(--color-muted); }
+
+/* Tablolar */
+.ku-scroll { overflow-x: auto; }
+.ku-log { max-height: 520px; overflow-y: auto; }
+.ku-table { width: 100%; border-collapse: collapse; font-size: 12.5px; color: var(--color-fg); }
+.ku-table th, .ku-table td { padding: 8px 10px; text-align: left; vertical-align: middle; border-bottom: 1px solid var(--color-border); }
+.ku-table thead th { position: sticky; top: 0; z-index: 1; background: var(--color-surface); font-size: 11px; font-weight: 600; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.ku-table .r { text-align: right; }
+.ku-name { font-weight: 600; }
+.ku-sub { display: block; font-size: 11px; font-weight: 400; color: var(--color-muted); }
+.ku-num { font-variant-numeric: tabular-nums; }
+.ku-nowrap { white-space: nowrap; }
+.ku-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Bar */
+.ku-cell-bar { display: flex; align-items: center; gap: 10px; }
+.ku-cell-bar .ku-num { min-width: 64px; }
+.ku-bar { flex: 1 1 80px; max-width: 220px; height: 8px; background: var(--color-surface-2); border-radius: 999px; overflow: hidden; }
+.ku-bar-fill { display: block; height: 100%; border-radius: 999px; }
+.ku-bar-fill.accent { background: var(--color-accent); }
+.ku-bar-fill.muted { background: var(--color-fg-2); }
+
+/* Etkileşim listesi */
+.ku-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ku-list-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--color-fg); }
+.ku-list-label { flex: 0 0 120px; font-weight: 500; }
+.ku-list-row .ku-bar { max-width: none; }
+
+/* Timeline */
+.ku-legend { display: flex; gap: 14px; margin-bottom: 8px; font-size: 11.5px; color: var(--color-muted); }
+.ku-dot { display: inline-block; width: 9px; height: 9px; margin-right: 4px; border-radius: 2px; }
+.ku-dot.views, .ku-col.views { background: var(--color-accent); }
+.ku-dot.logins, .ku-col.logins { background: var(--color-fg-2); }
+.ku-timeline { list-style: none; margin: 0; padding: 0; display: flex; align-items: stretch; gap: 6px; min-width: min-content; height: 150px; }
+.ku-day { flex: 1 0 28px; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
+.ku-day-bars { flex: 1; display: flex; align-items: flex-end; gap: 2px; }
+.ku-col { flex: 1; min-height: 2px; border-radius: 3px 3px 0 0; }
+.ku-day-label { font-size: 10px; text-align: center; color: var(--color-muted); white-space: nowrap; }
+
+/* Olay etiketleri */
+.ku-tag { display: inline-block; padding: 2px 8px; font-size: 11px; font-weight: 600; color: var(--color-fg-2); background: var(--color-surface-2); border-radius: 999px; white-space: nowrap; }
+.ku-tag.login { color: var(--color-accent-fg); background: var(--color-accent); }
+.ku-tag.logout { color: var(--color-fg); background: var(--color-surface-2); border: 1px solid var(--color-border); }
+.ku-tag.interaction { color: var(--color-accent); background: var(--color-accent-soft); }
+
+@media (prefers-reduced-motion: reduce) { .ku-body { transition: none; } }

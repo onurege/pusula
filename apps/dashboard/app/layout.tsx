@@ -8,6 +8,7 @@ import { WeeklyActionsDrawer } from "@/components/weekly-actions/WeeklyActionsDr
 import { TenantProvider } from "@/components/tenant-provider";
 import { AuthProvider } from "@/components/auth/auth-context";
 import { ScreenGuard } from "@/components/auth/ScreenGuard";
+import { TelemetryProvider } from "@/components/TelemetryProvider";
 import { ContentProvider } from "@/components/content-provider";
 import { LocaleProvider } from "@/components/locale/LocaleProvider";
 import { getTenantConfig, isTenantFullyMissing } from "@/lib/tenant";
@@ -116,6 +117,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <ContentProvider map={contentMap}>
               <AuthProvider>
                 <ScreenGuard />
+                <TelemetryProvider />
                 <div className="min-h-dvh">
                   <Navbar />
                   <main className="mx-auto max-w-[1600px] px-5 py-5">{children}</main>

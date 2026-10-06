@@ -5,6 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { cn } from "@/components/ui/cn";
 import { useTenant } from "@/components/tenant-provider";
 import { t as translate, type Locale } from "@/lib/i18n";
+import { trackInteraction } from "@/lib/telemetry";
 
 /**
  * Komuta birim toggle'ı: TL ↔ <hacim birimi>.
@@ -77,6 +78,9 @@ export function UnitToggle({ locale = "tr" }: { locale?: Locale } = {}) {
             key={opt.id}
             href={buildHref(opt.id)}
             role="tab"
+            onClick={() => {
+              if (!isActive) trackInteraction("unit", `unit=${opt.id}`);
+            }}
             aria-selected={isActive}
             title={opt.hint}
             className={cn(

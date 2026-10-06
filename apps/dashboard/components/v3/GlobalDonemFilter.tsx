@@ -4,6 +4,7 @@ import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { useState, useTransition } from "react";
 import { useLocale } from "@/components/locale/LocaleProvider";
 import { t } from "@/lib/i18n";
+import { trackInteraction } from "@/lib/telemetry";
 
 /**
  * md2 — Global Dönem Filtresi (ortak, tüm V3 ekranlarında aynı).
@@ -59,6 +60,7 @@ export function GlobalDonemFilter() {
   }
 
   function selectPreset(key: string) {
+    trackInteraction("period", `donem=${key}`);
     setSerbestOpen(false);
     pushParams((p) => {
       p.delete("from");
@@ -70,6 +72,7 @@ export function GlobalDonemFilter() {
 
   function applySerbest() {
     if (!canApply) return;
+    trackInteraction("period", "donem=serbest");
     pushParams((p) => {
       p.delete("donem");
       p.set("from", from);

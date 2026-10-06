@@ -17,6 +17,11 @@ import { createAdminGate } from "./admin-gate.js";
 import { createSetupGate } from "./setup-gate.js";
 import { createReorderCustomerHandler } from "./reorder-route.js";
 import {
+  MAX_BODY_CHARS,
+  buildStampedEvents,
+  parseEpochParam,
+} from "./telemetry-ingest.js";
+import {
   analyzeRegionAnomaly,
   closePool,
   formatRetrievalForPrompt,
@@ -69,6 +74,9 @@ import {
   signSession,
   verifySession,
   runWithDbId,
+  recordUsageEvents,
+  recordServerEvent,
+  getUsageOverview,
   listSelectableDatabases,
   resolveTenantScope,
   listAllowedDistributors,
@@ -459,6 +467,16 @@ app.post("/api/auth/login", async (c) => {
       );
     }
     const token = await signSession(user);
+    // Kullanım analitiği: login SUNUCUDA yazılır. Yerel SQLite dosyası aktif
+    // dbId'ye göre seçildiği için seçili DB bağlamında çağrılır (fail-silent).
+    runWithDbId(effectiveDbId, () =>
+      recordServerEvent({
+        eventType: "login",
+        userId: user.userId,
+        username: user.username,
+        sessionId: null,
+      }),
+    );
     return c.json({
       token,
       user: {
@@ -528,9 +546,27 @@ app.get("/api/auth/databases", (c) => {
   }
 });
 
-// POST /api/auth/logout — stateless JWT; dashboard cookie'yi siler. Burada
-// yalnızca 200 döner (simetri için).
-app.post("/api/auth/logout", (c) => c.json({ ok: true }));
+// POST /api/auth/logout — stateless JWT; dashboard cookie'yi siler. Geçerli
+// oturum varsa kullanım analitiğine `logout` olayı yazılır; token yok/bozuksa
+// sessizce atlanır (logout ASLA hata dönmez).
+app.post("/api/auth/logout", async (c) => {
+  try {
+    const session = await verifySession(tokenFromRequest(c));
+    if (session) {
+      runWithDbId(session.dbId, () =>
+        recordServerEvent({
+          eventType: "logout",
+          userId: session.userId,
+          username: session.username,
+          sessionId: null,
+        }),
+      );
+    }
+  } catch {
+    // fail-silent: telemetri logout'u bozmaz
+  }
+  return c.json({ ok: true });
+});
 
 // ---------------------------------------------------------------------------
 // GLOBAL AUTH GUARD — GUV-03
@@ -590,6 +626,41 @@ app.use("/api/*", async (c, next) => {
 // tanımlandığından emin ol.
 // ---------------------------------------------------------------------------
 app.use("/api/admin/*", createAdminGate(tokenFromRequest));
+
+// ---------------------------------------------------------------------------
+// Kullanım analitiği — POST /api/telemetry
+//
+// Global session guard'ın ALTINDA: oturum yoksa 401'i guard verir ve
+// `runWithDbId(session.dbId)` zaten aktif → olaylar doğru DB'nin yerel
+// SQLite dosyasına yazılır. Kimlik/ts sunucudan damgalanır (client'tan DEĞİL).
+// Fail-safe: bozuk gövde/yazım hatası → 400 JSON, asla 500/crash.
+// ---------------------------------------------------------------------------
+const TELEMETRY_RATE_LIMIT = 120; // kullanıcı başına dakikada ~120 batch
+app.post("/api/telemetry", async (c) => {
+  try {
+    const session = await verifySession(tokenFromRequest(c));
+    if (!session) return c.json({ error: "Oturum gerekli" }, 401);
+    if (!checkRateLimit("telemetry", session.username, TELEMETRY_RATE_LIMIT, RATE_LIMIT_WINDOW_MS)) {
+      return c.json({ error: "Çok fazla istek" }, 429);
+    }
+    const declaredLength = Number(c.req.header("content-length") ?? 0);
+    if (declaredLength > MAX_BODY_CHARS) return c.json({ error: "Gövde çok büyük" }, 400);
+    // sendBeacon content-type'ı değişebilir (text/plain | application/json)
+    // → gövde metin olarak okunup elle parse edilir.
+    const raw = await c.req.text();
+    if (raw.length > MAX_BODY_CHARS) return c.json({ error: "Gövde çok büyük" }, 400);
+
+    const events = buildStampedEvents(
+      JSON.parse(raw),
+      { userId: session.userId, username: session.username },
+      Date.now(),
+    );
+    if (events === null) return c.json({ error: "Geçersiz gövde" }, 400);
+    return c.json({ ok: true, accepted: recordUsageEvents(events) });
+  } catch {
+    return c.json({ error: "Geçersiz istek" }, 400);
+  }
+});
 
 const RetrieveBody = z.object({
   query: z.string().min(1),
@@ -1801,6 +1872,28 @@ app.get("/api/admin/users", async (c) => {
     return c.json({ users });
   } catch (err) {
     return c.json({ error: (err as Error).message, users: [] }, 200);
+  }
+});
+
+// Kullanım analitiği özeti + detaylı son-olaylar logu. Yetki: yukarıdaki
+// merkezi `createAdminGate` (`/api/admin/*`) — 401/403 orada kapanır, burada
+// tekrarlanmaz. Dashboard `/api/admin/[...path]` proxy'si bu yola ulaşır.
+const USAGE_DEFAULT_RANGE_MS = 30 * 24 * 3600 * 1000;
+const USAGE_MAX_LIMIT = 1000;
+app.get("/api/admin/usage", (c) => {
+  try {
+    const now = Date.now();
+    const toTs = parseEpochParam(c.req.query("to"), now);
+    const fromTs = parseEpochParam(c.req.query("from"), toTs - USAGE_DEFAULT_RANGE_MS);
+    const username = c.req.query("username")?.trim().slice(0, 128) || undefined;
+    const limit = Math.min(
+      Math.max(Math.floor(Number(c.req.query("limit"))) || 200, 1),
+      USAGE_MAX_LIMIT,
+    );
+    return c.json(getUsageOverview({ fromTs, toTs, username, limit }));
+  } catch (err) {
+    console.error("[/api/admin/usage] failed:", err);
+    return c.json({ error: "Kullanım verisi okunamadı" }, 500);
   }
 });
 

@@ -15,6 +15,7 @@ import type {
 } from "@/lib/api";
 import { trendColor } from "@/components/komuta/trend-colors";
 import { CustomerModal } from "./customer-modal";
+import { trackInteraction } from "@/lib/telemetry";
 import { t as translate, type Locale } from "@/lib/i18n";
 import { useTenant } from "@/components/tenant-provider";
 
@@ -725,14 +726,18 @@ export default function SalesMap({
       const { router: rt, pathname: pn, sp: sParams } = navRef.current;
       const params = new URLSearchParams(sParams.toString());
       // Mevcut seviyeye göre bir alt seviyeye in
+      let drillLevel: "map-city" | "map-dist";
       if (!sParams.get("sehir") && sehirStr) {
         params.set("sehir", sehirStr);
+        drillLevel = "map-city";
       } else if (!sParams.get("distKod") && distKodNum > 0) {
         params.set("distKod", String(distKodNum));
+        drillLevel = "map-dist";
       } else {
         // Zaten en altta — modal aç (default click davranışı)
         return;
       }
+      trackInteraction("drilldown", `drilldown:${drillLevel}`);
       rt.push(`${pn}?${params.toString()}`);
     });
 

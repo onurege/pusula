@@ -20,6 +20,7 @@ export * from "./finance-agent.js";
 export * from "./now.js";
 export * from "./tenant/index.js";
 export * from "./local-db.js";
+export * from "./usage-telemetry.js";
 export * from "./wietnauer-metrics.js";
 export * from "./wietnauer-marka.js";
 export * from "./wietnauer-aktivasyon.js";

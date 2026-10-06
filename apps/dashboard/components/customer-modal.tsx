@@ -37,6 +37,7 @@ import { Card, CardHeader } from "@/components/ui/card";
 import { InfoHint } from "@/components/komuta/InfoHint";
 import { addAction as addWeeklyAction } from "@/components/weekly-actions/store";
 import { t as translate, type Locale } from "@/lib/i18n";
+import { trackInteraction } from "@/lib/telemetry";
 
 type SalesState =
   | { kind: "idle" }
@@ -339,6 +340,8 @@ export function CustomerModal({ customer, onClose, locale = "tr" }: Props) {
     setExplain({ kind: "idle" });
     setForesight({ kind: "idle" });
     setActiveTab("ozet");
+    // Müşteri detayına iniş (harita tıklaması / arama fly-to dahil hepsi bu modalı açar).
+    trackInteraction("drilldown", "drilldown:customer");
     getCustomerSales(customer.id, customer.distKod)
       .then((data) => !cancelled && setSales({ kind: "ok", data }))
       .catch((err) => !cancelled && setSales({ kind: "err", message: (err as Error).message }));
